@@ -118,11 +118,30 @@ GOOGLE_MODELS = {
     name: ModelInfo(name=f"models/{name}", provider="google") for name in _GOOGLE_MODELS
 }
 
+# xAI models (using tiktoken for estimation)
+# xAI uses OpenAI-compatible API, use o200k_base as approximation
+_XAI_MODELS = [
+    "grok-2-1212",
+    "grok-2-vision-1212",
+    "grok-3",
+    "grok-3-mini",
+    "grok-4-0709",
+    "grok-4-fast-non-reasoning",
+    "grok-4-fast-reasoning",
+    "grok-code-fast-1",
+]
+
+XAI_MODELS = {
+    name: ModelInfo(name=name, provider="xai", encoding="o200k_base")
+    for name in _XAI_MODELS
+}
+
 # All supported models
 MODELS = {
     **OPENAI_MODELS,
     **ANTHROPIC_MODELS,
     **GOOGLE_MODELS,
+    **XAI_MODELS,
 }
 
 

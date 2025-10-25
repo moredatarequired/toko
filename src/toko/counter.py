@@ -24,7 +24,8 @@ def count_tokens(text: str, model: str) -> int:
     """
     model_info = get_model(model)
 
-    if model_info.provider == "openai" and model_info.encoding:
+    # OpenAI and xAI use tiktoken
+    if model_info.provider in ("openai", "xai") and model_info.encoding:
         encoding = tiktoken.get_encoding(model_info.encoding)
         return len(encoding.encode(text))
 

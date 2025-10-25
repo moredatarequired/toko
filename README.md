@@ -78,7 +78,7 @@ default_format = "text"
 [toko.exclude]
 patterns = ["*.log", "*.tmp", "node_modules/*"]
 
-[toko.api_keys]  # optional
+[toko.api_keys] # optional
 anthropic = "sk-..."
 openai = "sk-..."
 ```

@@ -2,15 +2,6 @@ output:
   - summary
   - failure
 
-# Build commit messages
-prepare-commit-msg:
-  commands:
-    commitizen:
-      interactive: true
-      run: uv run --group dev cz commit
-      env:
-        LEFTHOOK: 0
-
 # Validate commit messages
 commit-msg:
   commands:

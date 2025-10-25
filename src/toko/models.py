@@ -13,19 +13,69 @@ class ModelInfo:
     api_endpoint: str | None = None  # For API-based counting
 
 
-# OpenAI models using tiktoken
+# OpenAI models using tiktoken - o200k_base encoding
+_O200K_MODELS = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4o-2024-05-13",
+    "gpt-4o-2024-08-06",
+    "gpt-5",
+    "gpt-5-turbo",
+    "gpt-5-mini",
+    "o1",
+    "o1-mini",
+    "o1-preview",
+    "o1-2024-12-17",
+    "o3",
+    "o3-mini",
+]
+
+# OpenAI models using tiktoken - cl100k_base encoding
+_CL100K_MODELS = [
+    "gpt-4",
+    "gpt-4-0314",
+    "gpt-4-0613",
+    "gpt-4-32k",
+    "gpt-4-turbo",
+    "gpt-4-turbo-preview",
+    "gpt-4-turbo-2024-04-09",
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-0301",
+    "gpt-3.5-turbo-16k",
+]
+
+# Legacy OpenAI models - p50k_base encoding
+_P50K_MODELS = [
+    "text-davinci-003",
+    "text-davinci-002",
+    "code-davinci-002",
+]
+
+# Legacy OpenAI models - r50k_base encoding
+_R50K_MODELS = [
+    "davinci",
+    "curie",
+    "babbage",
+    "ada",
+]
+
 OPENAI_MODELS = {
-    "gpt-4o": ModelInfo(name="gpt-4o", provider="openai", encoding="o200k_base"),
-    "gpt-4o-mini": ModelInfo(
-        name="gpt-4o-mini", provider="openai", encoding="o200k_base"
-    ),
-    "gpt-4-turbo": ModelInfo(
-        name="gpt-4-turbo", provider="openai", encoding="cl100k_base"
-    ),
-    "gpt-4": ModelInfo(name="gpt-4", provider="openai", encoding="cl100k_base"),
-    "gpt-3.5-turbo": ModelInfo(
-        name="gpt-3.5-turbo", provider="openai", encoding="cl100k_base"
-    ),
+    **{
+        name: ModelInfo(name=name, provider="openai", encoding="o200k_base")
+        for name in _O200K_MODELS
+    },
+    **{
+        name: ModelInfo(name=name, provider="openai", encoding="cl100k_base")
+        for name in _CL100K_MODELS
+    },
+    **{
+        name: ModelInfo(name=name, provider="openai", encoding="p50k_base")
+        for name in _P50K_MODELS
+    },
+    **{
+        name: ModelInfo(name=name, provider="openai", encoding="r50k_base")
+        for name in _R50K_MODELS
+    },
 }
 
 # All supported models

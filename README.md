@@ -6,20 +6,16 @@ A CLI-first token counting tool for LLMs that actually meets your needs.
 
 ### ✅ Implemented
 
-- **52 models across 3 providers**: 30 OpenAI (tiktoken), 8 Anthropic, 14 Google models
-- **Text and stdin input**: Count tokens from strings or piped input
-- **Model comparison**: Compare token counts across multiple models simultaneously
-- **Multiple output formats**: text, JSON, CSV, TSV
-- **Environment-based API keys**: Load from `.env` file or environment variables
-
-### 🚧 Roadmap
-
-- **File/directory support**: Count tokens in files and directories (recursive by default)
-- **Smart defaults**: Respect .gitignore files (like ripgrep)
+- **60 models across 4 providers**: 30 OpenAI (tiktoken), 8 Anthropic, 14 Google, 8 xAI models
+- **Multiple input methods**: Text strings, stdin, files, directories (recursive), URLs
+- **Smart defaults**: Respects .gitignore files (like ripgrep)
 - **Exclude patterns**: Filter files with glob patterns
-- **URL support**: Count tokens from remote URLs
+- **Model comparison**: Compare token counts across multiple models simultaneously
+- **Multiple output formats**: text (with rich tables), JSON, CSV, TSV
 - **Cost estimation**: Built-in cost estimates via genai-prices
 - **Config file support**: `~/.config/toko/config.toml` for defaults
+- **Price updates**: Manual price data updates via `toko update-prices`
+- **Environment-based API keys**: Load from `.env` file, environment variables, or config file
 
 ## Installation
 
@@ -38,7 +34,7 @@ just setup
 
 ## Usage
 
-### Currently Working
+### Basic Usage
 
 ```sh
 # Count tokens from a text string
@@ -47,14 +43,65 @@ toko count --text "hello world"
 # Count tokens from stdin
 echo "hello world" | toko count
 
-# Compare across multiple models
-toko count --model gpt-4o --model claude-3-5-haiku-20241022 --text "hello"
+# Count tokens from a file
+toko count myfile.txt
 
-# Machine-readable output
-toko count --format json --text "hello world"
+# Count tokens from a directory (recursive, respects .gitignore)
+toko count src/
+
+# Count tokens from a URL
+toko count https://raw.githubusercontent.com/user/repo/main/README.md
 
 # List all supported models
 toko count --list-models
+```
+
+### Model Comparison
+
+```sh
+# Compare across multiple models
+toko count --model gpt-4o --model claude-3-5-haiku-20241022 --text "hello"
+
+# Output (with beautiful rich tables):
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Model                     ┃ Tokens ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ gpt-4o                    │      1 │
+│ claude-3-5-haiku-20241022 │      8 │
+└───────────────────────────┴────────┘
+```
+
+### Cost Estimation
+
+```sh
+# Show cost estimates
+toko count --model gpt-4o --model claude-3-5-haiku-20241022 --text "hello" --cost
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓
+┃ Model                     ┃ Tokens ┃      Cost ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩
+│ gpt-4o                    │      1 │ $0.000002 │
+│ claude-3-5-haiku-20241022 │      8 │ $0.000007 │
+└───────────────────────────┴────────┴───────────┘
+
+# Update pricing data
+toko update-prices
+```
+
+### File Operations
+
+```sh
+# Exclude patterns
+toko count --exclude "*.test.js" --exclude "*.md" src/
+
+# Don't respect .gitignore
+toko count --no-ignore src/
+
+# Don't recurse into subdirectories
+toko count --no-recursive src/
+
+# Machine-readable output
+toko count --format json src/
 ```
 
 ### With API Keys (Anthropic, Google)
@@ -76,22 +123,7 @@ uv run --env-file .env toko count \
   --text "The quick brown fox"
 ```
 
-### Coming Soon
-
-```sh
-# Count tokens in files and directories
-toko count myfile.txt
-toko count src/
-
-# Exclude patterns
-toko count --exclude "*.test.js" --exclude "*.md" src/
-
-# Count tokens from a URL
-toko count https://example.com/file.txt
-
-# Show cost estimates
-toko count --cost src/
-```
+Or add API keys to your config file (see Configuration below).
 
 ## Configuration
 

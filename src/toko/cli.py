@@ -1,5 +1,6 @@
 """CLI entry point for toko."""
 
+import contextlib
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
+from toko.price_update import update_prices_if_stale
 
 app = typer.Typer(
     name="toko",
@@ -147,6 +149,12 @@ def count(
     except ValueError as e:
         typer.echo(f"Error loading config: {e}", err=True)
         raise typer.Exit(1) from e
+
+    # Auto-update prices if enabled and stale
+    if config.auto_update_prices:
+        # Silently update prices - don't fail command if update fails
+        with contextlib.suppress(Exception):
+            update_prices_if_stale()
 
     if list_models:
         typer.echo("Supported models:")

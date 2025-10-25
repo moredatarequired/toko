@@ -15,6 +15,7 @@ class Config:
     default_format: str = "text"
     exclude_patterns: list[str] = field(default_factory=list)
     api_keys: dict[str, str] = field(default_factory=dict)
+    auto_update_prices: bool = False
 
 
 def get_config_path() -> Path:
@@ -55,6 +56,15 @@ def load_config() -> Config:
     # Extract toko section
     toko_config = data.get("toko", {})
 
+    # Check for auto_update_prices from env var or config
+    auto_update = os.environ.get("TOKO_AUTO_UPDATE_PRICES", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if not auto_update:
+        auto_update = toko_config.get("auto_update_prices", False)
+
     # Build and return config
     return Config(
         default_model=toko_config.get("default_model", "gpt-4o"),
@@ -62,6 +72,7 @@ def load_config() -> Config:
         default_format=toko_config.get("default_format", "text"),
         exclude_patterns=toko_config.get("exclude", {}).get("patterns", []),
         api_keys=toko_config.get("api_keys", {}),
+        auto_update_prices=auto_update,
     )
 
 

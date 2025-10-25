@@ -136,6 +136,7 @@ Example config:
 default_model = "gpt-4o"
 respect_gitignore = true
 default_format = "text"
+auto_update_prices = false # Set to true to auto-update pricing data (if > 1 day old)
 
 [toko.exclude]
 patterns = ["*.log", "*.tmp", "node_modules/*"]
@@ -144,6 +145,25 @@ patterns = ["*.log", "*.tmp", "node_modules/*"]
 anthropic = "sk-..."
 openai = "sk-..."
 ```
+
+### Auto-Update Prices
+
+By default, toko does NOT automatically update pricing data to avoid unnecessary network calls. However, you can enable automatic updates:
+
+**Via config file:**
+
+```toml
+[toko]
+auto_update_prices = true
+```
+
+**Via environment variable:**
+
+```bash
+export TOKO_AUTO_UPDATE_PRICES=true
+```
+
+When enabled, toko will automatically fetch fresh pricing data from genai-prices if the local data is more than 1 day old. This happens transparently in the background and won't fail your commands if the update fails.
 
 ## Development
 

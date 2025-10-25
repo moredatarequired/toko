@@ -1,0 +1,55 @@
+output:
+  - summary
+  - failure
+
+# Build commit messages
+prepare-commit-msg:
+  commands:
+    commitizen:
+      interactive: true
+      run: uv run --group dev cz commit
+      env:
+        LEFTHOOK: 0
+
+# Validate commit messages
+commit-msg:
+  commands:
+    lint-commit-message:
+      run: uv run --group dev cz check --allow-abort --commit-msg-file {1}
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: lint
+      run: just lint {all_files}
+      glob: "*.{py,ipynb}"
+      stage_fixed: true
+
+    - name: typecheck
+      run: just typecheck {all_files}
+      glob: "*.{py,ipynb}"
+      stage_fixed: true
+
+    - name: check for conflict markers and whitespace issues
+      run: git --no-pager diff --check
+
+    # If tests take >1 second, move this (or just the long-running tests) to pre-push.
+    - name: run tests
+      run: just test
+
+    - name: sort pyproject.toml dependencies
+      run: uv run --group dev uv-sort {all_files}
+      glob: "pyproject.toml"
+      stage_fixed: true
+
+    - name: spell check
+      run: uv run --group dev codespell {all_files}
+      glob: "*.{py,ipynb,md}"
+
+    - name: format markdown
+      run: uv run --group dev mdformat {all_files}
+      glob: "*.md"
+      stage_fixed: true
+
+    - name: scan for secrets
+      run: uv run --group dev detect-secrets-hook --baseline .secrets.baseline

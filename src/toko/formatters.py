@@ -7,12 +7,17 @@ from io import StringIO
 from rich.console import Console
 from rich.table import Table
 
+from toko.cost import format_cost
 
-def format_table(results: dict[str, int]) -> str:
+
+def format_table(
+    results: dict[str, int], *, costs: dict[str, float | None] | None = None
+) -> str:
     """Format results as a table using rich.
 
     Args:
         results: Dictionary mapping model names to token counts
+        costs: Optional dictionary mapping model names to costs
 
     Returns:
         Table-formatted output
@@ -21,8 +26,15 @@ def format_table(results: dict[str, int]) -> str:
     table.add_column("Model", style="cyan")
     table.add_column("Tokens", justify="right", style="green")
 
+    if costs:
+        table.add_column("Cost", justify="right", style="yellow")
+
     for model, count in results.items():
-        table.add_row(model, f"{count:,}")
+        if costs and model in costs:
+            cost_str = format_cost(costs[model])
+            table.add_row(model, f"{count:,}", cost_str)
+        else:
+            table.add_row(model, f"{count:,}")
 
     # Render to string
     output = StringIO()
@@ -31,25 +43,31 @@ def format_table(results: dict[str, int]) -> str:
     return output.getvalue().rstrip()
 
 
-def format_text(results: dict[str, int], total_only: bool = False) -> str:
+def format_text(
+    results: dict[str, int],
+    total_only: bool = False,
+    *,
+    costs: dict[str, float | None] | None = None,
+) -> str:
     """Format results as human-readable text.
 
     Args:
         results: Dictionary mapping model names to token counts
         total_only: If True, only show total count
+        costs: Optional dictionary mapping model names to costs
 
     Returns:
         Formatted text output
     """
-    if len(results) == 1:
-        # Single model - just show the count
+    if len(results) == 1 and not costs:
+        # Single model without costs - just show the count
         count = next(iter(results.values()))
         if total_only:
             return str(count)
         return f"{count:,} tokens"
 
-    # Multiple models - use table format
-    return format_table(results)
+    # Multiple models or costs requested - use table format
+    return format_table(results, costs=costs)
 
 
 def format_json(results: dict[str, int]) -> str:
@@ -98,6 +116,8 @@ def format_output(
     results: dict[str, int],
     output_format: str = "text",
     total_only: bool = False,
+    *,
+    costs: dict[str, float | None] | None = None,
 ) -> str:
     """Format token count results according to specified format.
 
@@ -105,6 +125,7 @@ def format_output(
         results: Dictionary mapping model names to token counts
         output_format: Output format (text, json, csv, tsv)
         total_only: If True, only show total count (text format only)
+        costs: Optional dictionary mapping model names to costs
 
     Returns:
         Formatted output string
@@ -113,7 +134,7 @@ def format_output(
         ValueError: If format is not supported
     """
     if output_format == "text":
-        return format_text(results, total_only)
+        return format_text(results, total_only, costs=costs)
     if output_format == "json":
         return format_json(results)
     if output_format == "csv":

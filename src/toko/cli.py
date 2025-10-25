@@ -8,6 +8,7 @@ import httpx
 import typer
 
 from toko import __version__
+from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_output, is_stdin_empty
@@ -104,7 +105,7 @@ def count(
             help="Output format: text, json, csv, tsv",
         ),
     ] = "text",
-    cost: Annotated[  # noqa: ARG001
+    cost: Annotated[
         bool,
         typer.Option(
             "--cost",
@@ -218,9 +219,16 @@ def count(
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(1) from e
 
+        # Calculate costs if requested
+        costs = None
+        if cost:
+            costs = {}
+            for model_name, token_count in results.items():
+                costs[model_name] = estimate_cost(token_count, model_name)
+
         # Format and output results
         output = format_output(
-            results, output_format=output_format, total_only=total_only
+            results, output_format=output_format, total_only=total_only, costs=costs
         )
         typer.echo(output)
     else:
@@ -237,9 +245,16 @@ def count(
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(1) from e
 
+        # Calculate costs if requested
+        costs = None
+        if cost:
+            costs = {}
+            for model_name, token_count in results.items():
+                costs[model_name] = estimate_cost(token_count, model_name)
+
         # Format and output results
         output = format_output(
-            results, output_format=output_format, total_only=total_only
+            results, output_format=output_format, total_only=total_only, costs=costs
         )
         typer.echo(output)
 

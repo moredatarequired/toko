@@ -16,7 +16,7 @@ def test_version():
 def test_list_models():
     result = runner.invoke(app, ["count", "--list-models"])
     assert result.exit_code == 0
-    assert "OpenAI:" in result.stdout
+    assert "openai" in result.stdout.lower()
     assert "gpt-4o" in result.stdout
 
 

@@ -165,6 +165,20 @@ export TOKO_AUTO_UPDATE_PRICES=true
 
 When enabled, toko will automatically fetch fresh pricing data from genai-prices if the local data is more than 1 day old. This happens transparently in the background and won't fail your commands if the update fails.
 
+### Token Count Caching
+
+Toko automatically caches token counts in a local SQLite database to avoid redundant API calls and speed up repeated queries. The cache is keyed by message hash, so identical text will return cached results instantly.
+
+**Cache location:** `/tmp/toko/token_cache.db`
+
+**Clear the cache:**
+
+```bash
+toko clear-cache
+```
+
+The cache stores a JSON object mapping model names to token counts for each unique message, allowing efficient multi-model comparisons on the same text.
+
 ## Development
 
 This project uses modern Python tooling:

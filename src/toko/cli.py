@@ -10,6 +10,7 @@ import typer
 from genai_prices import UpdatePrices
 
 from toko import __version__
+from toko.cache import clear_cache as do_clear_cache
 from toko.config import apply_api_keys, load_config
 from toko.cost import estimate_cost
 from toko.counter import count_tokens
@@ -62,6 +63,13 @@ def update_prices() -> None:
     else:
         typer.echo("✗ Failed to fetch pricing data", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def clear_cache() -> None:
+    """Clear the token count cache."""
+    do_clear_cache()
+    typer.echo("✓ Cache cleared")
 
 
 @app.command()

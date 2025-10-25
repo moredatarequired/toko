@@ -4,6 +4,36 @@ import json
 import sys
 
 
+def format_table(results: dict[str, int]) -> str:
+    """Format results as a table.
+
+    Args:
+        results: Dictionary mapping model names to token counts
+
+    Returns:
+        Table-formatted output
+    """
+    # Find the longest model name for column width
+    max_model_len = max(len(model) for model in results)
+    max_token_len = max(len(f"{count:,}") for count in results.values())
+
+    # Ensure minimum widths
+    model_width = max(max_model_len, len("Model"))
+    token_width = max(max_token_len, len("Tokens"))
+
+    lines = []
+
+    # Header
+    lines.append(f"{'Model':<{model_width}} | {'Tokens':>{token_width}}")
+    lines.append(f"{'-' * model_width}-+-{'-' * token_width}")
+
+    # Data rows
+    for model, count in results.items():
+        lines.append(f"{model:<{model_width}} | {count:>{token_width},}")
+
+    return "\n".join(lines)
+
+
 def format_text(results: dict[str, int], total_only: bool = False) -> str:
     """Format results as human-readable text.
 
@@ -14,21 +44,15 @@ def format_text(results: dict[str, int], total_only: bool = False) -> str:
     Returns:
         Formatted text output
     """
-    lines = []
-
     if len(results) == 1:
         # Single model - just show the count
         count = next(iter(results.values()))
         if total_only:
-            lines.append(str(count))
-        else:
-            lines.append(f"{count:,} tokens")
-    else:
-        # Multiple models - show per-model breakdown
-        for model, count in results.items():
-            lines.append(f"{model}: {count:,} tokens")
+            return str(count)
+        return f"{count:,} tokens"
 
-    return "\n".join(lines)
+    # Multiple models - use table format
+    return format_table(results)
 
 
 def format_json(results: dict[str, int]) -> str:

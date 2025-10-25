@@ -78,9 +78,45 @@ OPENAI_MODELS = {
     },
 }
 
+# Anthropic models (API-based counting)
+_ANTHROPIC_MODELS = [
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-20241022",
+    "claude-3-5-haiku-latest",
+    "claude-3-opus-20240229",
+    "claude-3-opus-latest",
+    "claude-3-sonnet-20240229",
+    "claude-3-haiku-20240307",
+]
+
+ANTHROPIC_MODELS = {
+    name: ModelInfo(name=name, provider="anthropic") for name in _ANTHROPIC_MODELS
+}
+
+# Google models (API-based counting)
+_GOOGLE_MODELS = [
+    "gemini-2.0-flash-exp",
+    "gemini-exp-1206",
+    "gemini-2.0-flash-thinking-exp-1219",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-8b",
+]
+
+GOOGLE_MODELS = {
+    name: ModelInfo(name=name, provider="google") for name in _GOOGLE_MODELS
+}
+
 # All supported models
 MODELS = {
     **OPENAI_MODELS,
+    **ANTHROPIC_MODELS,
+    **GOOGLE_MODELS,
 }
 
 

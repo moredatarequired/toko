@@ -38,7 +38,7 @@ def test_anthropic_different_models():
 )
 def test_google_count_tokens():
     """Test counting tokens with Google API."""
-    result = count_tokens("hello world", model="gemini-1.5-flash")
+    result = count_tokens("hello world", model="gemini-2.5-flash")
     assert result > 0
     assert 1 <= result <= 10
 
@@ -65,7 +65,7 @@ def test_missing_google_key():
 
     try:
         with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
-            count_tokens("hello", model="gemini-1.5-flash")
+            count_tokens("hello", model="gemini-2.5-flash")
     finally:
         if original_key:
             os.environ["GOOGLE_API_KEY"] = original_key

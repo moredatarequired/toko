@@ -1,0 +1,33 @@
+name: Code Quality Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync dependencies (all groups)
+        run: uv sync --all-groups
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      - name: Run Commit Checks
+        run: uv run --group dev lefthook run pre-commit --all-files --no-tty
+        env:
+          UV_NO_SYNC: "1"
+          LEFTHOOK_OUTPUT: "summary,success,failure,execution,execution_out"

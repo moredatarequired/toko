@@ -1,12 +1,14 @@
 """CLI entry point for toko."""
 
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from toko import __version__
 from toko.counter import count_tokens
+from toko.file_reader import find_files, read_file
 from toko.formatters import format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
 
@@ -64,7 +66,7 @@ def count(
             help="Text string to count tokens for (alternative to files/stdin)",
         ),
     ] = None,
-    exclude: Annotated[  # noqa: ARG001
+    exclude: Annotated[
         list[str] | None,
         typer.Option(
             "--exclude",
@@ -72,14 +74,14 @@ def count(
             help="Glob patterns to exclude (can be specified multiple times)",
         ),
     ] = None,
-    no_ignore: Annotated[  # noqa: ARG001
+    no_ignore: Annotated[
         bool,
         typer.Option(
             "--no-ignore",
             help="Don't respect .gitignore files",
         ),
     ] = False,
-    no_recursive: Annotated[  # noqa: ARG001
+    no_recursive: Annotated[
         bool,
         typer.Option(
             "--no-recursive",
@@ -129,12 +131,58 @@ def count(
 
     # Determine input source
     input_text = None
+    input_files: list[tuple[str, str]] = []  # (display_name, content) pairs
+
     if text:
         input_text = text
     elif paths:
-        # TODO: Implement file/directory/URL handling
-        typer.echo("Error: File/directory/URL support not yet implemented", err=True)
-        raise typer.Exit(1)
+        # Handle files and directories
+        for path_str in paths:
+            # TODO: Check if URL and handle accordingly
+            if path_str.startswith(("http://", "https://")):
+                typer.echo(
+                    f"Error: URL support not yet implemented: {path_str}", err=True
+                )
+                raise typer.Exit(1)
+
+            try:
+                path = Path(path_str)
+                files = find_files(
+                    path,
+                    recursive=not no_recursive,
+                    respect_gitignore=not no_ignore,
+                    exclude_patterns=exclude,
+                )
+
+                for file_path in files:
+                    try:
+                        content = read_file(file_path)
+                        # Use relative path if possible, otherwise absolute
+                        try:
+                            display_name = str(file_path.relative_to(Path.cwd()))
+                        except ValueError:
+                            display_name = str(file_path)
+                        input_files.append((display_name, content))
+                    except UnicodeDecodeError:
+                        typer.echo(
+                            f"Warning: Skipping binary file {file_path}",
+                            err=True,
+                        )
+                    except Exception as e:
+                        typer.echo(
+                            f"Error reading {file_path}: {e}",
+                            err=True,
+                        )
+                        raise typer.Exit(1) from e
+
+            except (FileNotFoundError, ValueError) as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(1) from e
+
+        if not input_files:
+            typer.echo("Error: No files found matching criteria", err=True)
+            raise typer.Exit(1)
+
     elif not is_stdin_empty():
         # Read from stdin
         input_text = sys.stdin.read()
@@ -146,18 +194,41 @@ def count(
         raise typer.Exit(1)
 
     # Count tokens for each model
-    results = {}
-    for model_name in models:
-        try:
-            token_count = count_tokens(input_text, model=model_name)
-            results[model_name] = token_count
-        except ValueError as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(1) from e
+    if input_text is not None:
+        # Single text input (--text or stdin)
+        results = {}
+        for model_name in models:
+            try:
+                token_count = count_tokens(input_text, model=model_name)
+                results[model_name] = token_count
+            except ValueError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(1) from e
 
-    # Format and output results
-    output = format_output(results, output_format=output_format, total_only=total_only)
-    typer.echo(output)
+        # Format and output results
+        output = format_output(
+            results, output_format=output_format, total_only=total_only
+        )
+        typer.echo(output)
+    else:
+        # Multiple files - count tokens for each file
+        # For now, just combine all files and count total
+        # TODO: Add per-file breakdown
+        combined_text = "\n".join(content for _, content in input_files)
+        results = {}
+        for model_name in models:
+            try:
+                token_count = count_tokens(combined_text, model=model_name)
+                results[model_name] = token_count
+            except ValueError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(1) from e
+
+        # Format and output results
+        output = format_output(
+            results, output_format=output_format, total_only=total_only
+        )
+        typer.echo(output)
 
 
 if __name__ == "__main__":

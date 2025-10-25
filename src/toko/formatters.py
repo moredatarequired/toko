@@ -2,10 +2,14 @@
 
 import json
 import sys
+from io import StringIO
+
+from rich.console import Console
+from rich.table import Table
 
 
 def format_table(results: dict[str, int]) -> str:
-    """Format results as a table.
+    """Format results as a table using rich.
 
     Args:
         results: Dictionary mapping model names to token counts
@@ -13,25 +17,18 @@ def format_table(results: dict[str, int]) -> str:
     Returns:
         Table-formatted output
     """
-    # Find the longest model name for column width
-    max_model_len = max(len(model) for model in results)
-    max_token_len = max(len(f"{count:,}") for count in results.values())
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Model", style="cyan")
+    table.add_column("Tokens", justify="right", style="green")
 
-    # Ensure minimum widths
-    model_width = max(max_model_len, len("Model"))
-    token_width = max(max_token_len, len("Tokens"))
-
-    lines = []
-
-    # Header
-    lines.append(f"{'Model':<{model_width}} | {'Tokens':>{token_width}}")
-    lines.append(f"{'-' * model_width}-+-{'-' * token_width}")
-
-    # Data rows
     for model, count in results.items():
-        lines.append(f"{model:<{model_width}} | {count:>{token_width},}")
+        table.add_row(model, f"{count:,}")
 
-    return "\n".join(lines)
+    # Render to string
+    output = StringIO()
+    console = Console(file=output, force_terminal=True)
+    console.print(table)
+    return output.getvalue().rstrip()
 
 
 def format_text(results: dict[str, int], total_only: bool = False) -> str:

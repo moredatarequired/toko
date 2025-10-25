@@ -8,6 +8,7 @@ import httpx
 import typer
 
 from toko import __version__
+from toko.config import apply_api_keys, load_config
 from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
@@ -121,6 +122,15 @@ def count(
     ] = False,
 ) -> None:
     """Count tokens in files, text, or stdin."""
+    # Load config
+    try:
+        config = load_config()
+        # Apply API keys from config if not already set in environment
+        apply_api_keys(config)
+    except ValueError as e:
+        typer.echo(f"Error loading config: {e}", err=True)
+        raise typer.Exit(1) from e
+
     if list_models:
         typer.echo("Supported models:")
         models_by_provider = get_model_list()
@@ -128,8 +138,17 @@ def count(
             typer.echo(f"  {provider.capitalize()}: {', '.join(provider_models)}")
         raise typer.Exit
 
-    # Default model
-    models = model or ["gpt-4o"]
+    # Use model from CLI or config default
+    models = model or [config.default_model]
+
+    # Use format from CLI or config default
+    actual_format = output_format if output_format != "text" else config.default_format
+
+    # Merge exclude patterns from CLI and config
+    merged_exclude = list(config.exclude_patterns)
+    if exclude:
+        merged_exclude.extend(exclude)
+    final_exclude = merged_exclude if merged_exclude else None
 
     # Determine input source
     input_text = None
@@ -161,11 +180,15 @@ def count(
                 # File or directory
                 try:
                     path = Path(path_str)
+                    # Use CLI flags if set, otherwise use config defaults
+                    should_respect_gitignore = (
+                        config.respect_gitignore if not no_ignore else not no_ignore
+                    )
                     files = find_files(
                         path,
                         recursive=not no_recursive,
-                        respect_gitignore=not no_ignore,
-                        exclude_patterns=exclude,
+                        respect_gitignore=should_respect_gitignore,
+                        exclude_patterns=final_exclude,
                     )
 
                     for file_path in files:
@@ -228,7 +251,7 @@ def count(
 
         # Format and output results
         output = format_output(
-            results, output_format=output_format, total_only=total_only, costs=costs
+            results, output_format=actual_format, total_only=total_only, costs=costs
         )
         typer.echo(output)
     else:
@@ -254,7 +277,7 @@ def count(
 
         # Format and output results
         output = format_output(
-            results, output_format=output_format, total_only=total_only, costs=costs
+            results, output_format=actual_format, total_only=total_only, costs=costs
         )
         typer.echo(output)
 

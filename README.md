@@ -4,12 +4,22 @@ A CLI-first token counting tool for LLMs that actually meets your needs.
 
 ## Features
 
-- **Multi-model support**: Count tokens for OpenAI (via tiktoken), Anthropic, Google, and xAI models
-- **Flexible input**: stdin, text strings, files, directories, or URLs
-- **Smart defaults**: Recursive directory scanning with .gitignore respect (like ripgrep)
+### ✅ Implemented
+
+- **52 models across 3 providers**: 30 OpenAI (tiktoken), 8 Anthropic, 14 Google models
+- **Text and stdin input**: Count tokens from strings or piped input
 - **Model comparison**: Compare token counts across multiple models simultaneously
+- **Multiple output formats**: text, JSON, CSV, TSV
+- **Environment-based API keys**: Load from `.env` file or environment variables
+
+### 🚧 Roadmap
+
+- **File/directory support**: Count tokens in files and directories (recursive by default)
+- **Smart defaults**: Respect .gitignore files (like ripgrep)
+- **Exclude patterns**: Filter files with glob patterns
+- **URL support**: Count tokens from remote URLs
 - **Cost estimation**: Built-in cost estimates via genai-prices
-- **Multiple output formats**: Human-friendly or machine-parseable (text, JSON, CSV, TSV)
+- **Config file support**: `~/.config/toko/config.toml` for defaults
 
 ## Installation
 
@@ -28,39 +38,59 @@ just setup
 
 ## Usage
 
+### Currently Working
+
 ```sh
-# Count tokens from stdin
-echo "hello world" | toko
-
-# Count tokens in a file
-toko myfile.txt
-
-# Count tokens in a directory (recursive by default, respects .gitignore)
-toko src/
-
 # Count tokens from a text string
-toko --text "hello world"
+toko count --text "hello world"
+
+# Count tokens from stdin
+echo "hello world" | toko count
 
 # Compare across multiple models
-toko --model gpt-4o --model claude-sonnet-4 src/
-
-# Show cost estimates
-toko --cost src/
-
-# Get just the total
-toko --total-only src/
+toko count --model gpt-4o --model claude-3-5-haiku-20241022 --text "hello"
 
 # Machine-readable output
-toko --format json src/
-
-# Exclude patterns
-toko --exclude "*.test.js" --exclude "*.md" src/
-
-# Count tokens from a URL
-toko https://example.com/file.txt
+toko count --format json --text "hello world"
 
 # List all supported models
-toko --list-models
+toko count --list-models
+```
+
+### With API Keys (Anthropic, Google)
+
+Set up your `.env` file:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+```
+
+Then use with `uv run --env-file .env`:
+
+```sh
+uv run --env-file .env toko count \
+  --model gpt-4o \
+  --model claude-3-5-haiku-20241022 \
+  --model gemini-2.5-flash \
+  --text "The quick brown fox"
+```
+
+### Coming Soon
+
+```sh
+# Count tokens in files and directories
+toko count myfile.txt
+toko count src/
+
+# Exclude patterns
+toko count --exclude "*.test.js" --exclude "*.md" src/
+
+# Count tokens from a URL
+toko count https://example.com/file.txt
+
+# Show cost estimates
+toko count --cost src/
 ```
 
 ## Configuration

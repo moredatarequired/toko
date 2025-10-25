@@ -3,9 +3,11 @@
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
-from toko.file_reader import find_files, read_file, read_gitignore
+from toko.file_reader import fetch_url, find_files, read_file, read_gitignore
 
 
 def test_read_file():
@@ -155,3 +157,43 @@ def test_find_files_not_found():
     """Test error when path doesn't exist."""
     with pytest.raises(FileNotFoundError):
         find_files(Path("/nonexistent/path"))
+
+
+@respx.mock
+def test_fetch_url():
+    """Test fetching content from a URL."""
+    url = "https://example.com/test.txt"
+    content = "Hello from URL!"
+
+    respx.get(url).mock(return_value=httpx.Response(200, text=content))
+
+    result = fetch_url(url)
+    assert result == content
+
+
+@respx.mock
+def test_fetch_url_404():
+    """Test error when URL returns 404."""
+    url = "https://example.com/notfound.txt"
+
+    respx.get(url).mock(return_value=httpx.Response(404))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_url(url)
+
+
+@respx.mock
+def test_fetch_url_redirects():
+    """Test following redirects."""
+    url = "https://example.com/redirect"
+    final_url = "https://example.com/final"
+    content = "Final content"
+
+    # Mock redirect
+    respx.get(url).mock(
+        return_value=httpx.Response(302, headers={"Location": final_url})
+    )
+    respx.get(final_url).mock(return_value=httpx.Response(200, text=content))
+
+    result = fetch_url(url)
+    assert result == content

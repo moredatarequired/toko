@@ -4,11 +4,12 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 
 from toko import __version__
 from toko.counter import count_tokens
-from toko.file_reader import find_files, read_file
+from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
 
@@ -136,48 +137,60 @@ def count(
     if text:
         input_text = text
     elif paths:
-        # Handle files and directories
+        # Handle files, directories, and URLs
         for path_str in paths:
-            # TODO: Check if URL and handle accordingly
+            # Check if URL
             if path_str.startswith(("http://", "https://")):
-                typer.echo(
-                    f"Error: URL support not yet implemented: {path_str}", err=True
-                )
-                raise typer.Exit(1)
+                try:
+                    content = fetch_url(path_str)
+                    input_files.append((path_str, content))
+                except httpx.HTTPError as e:
+                    typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
+                    raise typer.Exit(1) from e
+                except UnicodeDecodeError as e:
+                    typer.echo(
+                        f"Error: URL content is not valid UTF-8: {path_str}",
+                        err=True,
+                    )
+                    raise typer.Exit(1) from e
+                except Exception as e:
+                    typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
+                    raise typer.Exit(1) from e
+            else:
+                # File or directory
+                try:
+                    path = Path(path_str)
+                    files = find_files(
+                        path,
+                        recursive=not no_recursive,
+                        respect_gitignore=not no_ignore,
+                        exclude_patterns=exclude,
+                    )
 
-            try:
-                path = Path(path_str)
-                files = find_files(
-                    path,
-                    recursive=not no_recursive,
-                    respect_gitignore=not no_ignore,
-                    exclude_patterns=exclude,
-                )
-
-                for file_path in files:
-                    try:
-                        content = read_file(file_path)
-                        # Use relative path if possible, otherwise absolute
+                    for file_path in files:
                         try:
-                            display_name = str(file_path.relative_to(Path.cwd()))
-                        except ValueError:
-                            display_name = str(file_path)
-                        input_files.append((display_name, content))
-                    except UnicodeDecodeError:
-                        typer.echo(
-                            f"Warning: Skipping binary file {file_path}",
-                            err=True,
-                        )
-                    except Exception as e:
-                        typer.echo(
-                            f"Error reading {file_path}: {e}",
-                            err=True,
-                        )
-                        raise typer.Exit(1) from e
+                            content = read_file(file_path)
+                            # Use relative path if possible, otherwise absolute
+                            try:
+                                display_name = str(file_path.relative_to(Path.cwd()))
+                            except ValueError:
+                                display_name = str(file_path)
+                            input_files.append((display_name, content))
+                        except UnicodeDecodeError:
+                            typer.echo(
+                                f"Warning: Skipping binary file {file_path}",
+                                err=True,
+                            )
+                        except Exception as e:
+                            typer.echo(
+                                f"Error reading {file_path}: {e}",
+                                err=True,
+                            )
+                            raise typer.Exit(1) from e
 
-            except (FileNotFoundError, ValueError) as e:
-                typer.echo(f"Error: {e}", err=True)
-                raise typer.Exit(1) from e
+                except (FileNotFoundError, ValueError) as e:
+                    typer.echo(f"Error: {e}", err=True)
+                    raise typer.Exit(1) from e
 
         if not input_files:
             typer.echo("Error: No files found matching criteria", err=True)

@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+import httpx
 import pathspec
 
 
@@ -142,3 +143,22 @@ def read_file(path: Path) -> str:
         UnicodeDecodeError: If file is not valid UTF-8
     """
     return path.read_text()
+
+
+def fetch_url(url: str, *, timeout: float = 30.0) -> str:
+    """Fetch content from a URL.
+
+    Args:
+        url: URL to fetch
+        timeout: Request timeout in seconds
+
+    Returns:
+        Content as string
+
+    Raises:
+        httpx.HTTPError: If request fails
+        UnicodeDecodeError: If response is not valid UTF-8
+    """
+    response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    response.raise_for_status()
+    return response.text

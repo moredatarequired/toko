@@ -6,6 +6,7 @@ from typing import Annotated
 
 import httpx
 import typer
+from genai_prices import UpdatePrices
 
 from toko import __version__
 from toko.config import apply_api_keys, load_config
@@ -43,6 +44,22 @@ def main(
     ] = None,
 ) -> None:
     """Toko - Token counter for LLMs."""
+
+
+@app.command()
+def update_prices() -> None:
+    """Update pricing data from genai-prices."""
+    typer.echo("Fetching latest pricing data from genai-prices...")
+
+    updater = UpdatePrices()
+    result = updater.fetch()
+    if result:
+        typer.echo(
+            f"✓ Successfully updated pricing data ({len(result.providers)} providers)"
+        )
+    else:
+        typer.echo("✗ Failed to fetch pricing data", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()

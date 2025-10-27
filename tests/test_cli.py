@@ -6,6 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from toko.cli import app
+from toko.counter import count_tokens
 
 runner = CliRunner()
 
@@ -26,41 +27,36 @@ def test_version():
 
 def test_list_models(monkeypatch):
     monkeypatch.setattr(
-        "toko.cli.list_optional_model_groups",
-        lambda: [
-            {
-                "extra": "mistral",
-                "models": ["mistral-small-latest"],
-                "providers": ["mistral"],
-                "installed": True,
-            },
-            {
-                "extra": "transformers",
-                "models": ["meta-llama/Llama-3.2-1B"],
-                "providers": ["llama", "deepseek", "qwen"],
-                "installed": False,
-            },
-        ],
+        "toko.cli.get_model_list",
+        lambda: {
+            "openai": ["gpt-4.1", "gpt-5"],
+            "google": ["models/gemini-flash-latest"],
+            "huggingface": ["meta-llama/Llama-3.2-1B"],
+        },
     )
 
     result = runner.invoke(app, ["--list-models"])
     assert result.exit_code == 0
-    assert "openai" in result.stdout.lower()
-    assert "gpt-5" in result.stdout
-    assert (
-        "Supported with extra [mistral] (installed): mistral-small-latest"
-        in result.stdout
-    )
-    assert (
-        "Supported with extra [transformers] (not installed): meta-llama/Llama-3.2-1B"
-        in result.stdout
-    )
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert lines == [
+        "google/gemini-flash-latest",
+        "meta-llama/Llama-3.2-1B",
+        "openai/gpt-4.1",
+        "openai/gpt-5",
+    ]
 
 
 def test_count_with_text():
     result = _invoke_cli(["--header", "--format", "tsv", "--text", "hello world"])
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
+
+
+def test_count_with_text_default_output():
+    result = _invoke_cli(["--text", "hello world"])
+    assert result.exit_code == 0
+    expected = count_tokens("hello world", model="gpt-5")
+    assert result.stdout.strip() == str(expected)
 
 
 def test_count_from_stdin():
@@ -85,6 +81,26 @@ def test_count_with_multiple_models():
     )
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t1\ngpt-5-mini\t1"
+
+
+def test_cost_column_in_tsv():
+    result = _invoke_cli(
+        [
+            "--header",
+            "--format",
+            "tsv",
+            "--model",
+            "gpt-5",
+            "--model",
+            "gpt-4.1",
+            "--text",
+            "hello",
+            "--cost",
+        ]
+    )
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert lines[0] == "model\ttokens\tcost"
+    assert lines[1].startswith("gpt-5\t")
 
 
 def test_default_no_header_when_not_tty(monkeypatch):
@@ -147,7 +163,8 @@ def test_partial_success_missing_anthropic_key(monkeypatch):
         ["--model", "gpt-5", "--model", "claude-sonnet-4-5", "--text", text]
     )
     assert result.exit_code == 0
-    assert "gpt-5" in result.stdout
+    expected = count_tokens(text, model="gpt-5")
+    assert result.stdout.strip() == str(expected)
     assert "claude-sonnet-4-5" not in result.stdout
     assert "Failed to count tokens for claude-sonnet-4-5" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
@@ -172,7 +189,8 @@ def test_partial_success_missing_google_key(monkeypatch):
         ["--model", "gpt-5", "--model", "models/gemini-2.5-flash", "--text", text]
     )
     assert result.exit_code == 0
-    assert "gpt-5" in result.stdout
+    expected = count_tokens(text, model="gpt-5")
+    assert result.stdout.strip() == str(expected)
     assert "gemini-2.5-flash" not in result.stdout
     assert "GOOGLE_API_KEY" in result.stderr
 
@@ -186,7 +204,8 @@ def test_partial_success_missing_hf_token(monkeypatch):
         ["--model", "gpt-5", "--model", "meta-llama/Llama-3.2-1B", "--text", text]
     )
     assert result.exit_code == 0
-    assert "gpt-5" in result.stdout
+    expected = count_tokens(text, model="gpt-5")
+    assert result.stdout.strip() == str(expected)
     assert "meta-llama/Llama-3.2-1B" not in result.stdout
     assert "Failed to count tokens for meta-llama/Llama-3.2-1B" in result.stderr
     assert "HF_TOKEN" in result.stderr

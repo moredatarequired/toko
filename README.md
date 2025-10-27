@@ -1,14 +1,14 @@
 # Toko
 
-Toko is a CLI-first token counting tool for modern LLMs. It is built for shell workflows, editor integrations, and CI pipelines where you need reliable counts without wiring up extra scripts.
+Toko is a token counting tool. It is built for use as a CLI, and available as a Python package.
 
 ## Highlights
 
-- Accurate token counting for OpenAI and xAI models out of the box, with optional support for Anthropic, Google Gemini/Gemma, Mistral, Llama, DeepSeek, and Qwen families.
-- Reads inline text, stdin, files, directories (respects `.gitignore` automatically), and HTTP URLs.
+- Accurate token counting for OpenAI models out of the box, with optional support for Anthropic, Google, xAI, Mistral, Llama, DeepSeek, and Qwen families.
+- Reads inline text, stdin, files, directories (respects `.gitignore` automatically), and URLs.
 - Compare multiple models in one run and add cost estimates powered by bundled `genai-prices` data.
 - Emits `text`, `json`, `csv`, or `tsv` output. When stdout is piped, Toko automatically switches to TSV so you can chain tools like `cut` or `awk`.
-- Caches counts in SQLite so repeated runs avoid redundant API calls.
+- Caches counts in SQLite under your platform cache folder (e.g. `~/.cache/toko`) so repeated runs avoid redundant API calls.
 
 ## Install
 
@@ -42,9 +42,8 @@ If you are adding Toko to a project environment instead of the global toolchain,
 ### Source checkout (contributors)
 
 ```sh
-git clone https://github.com/hughwimberly/toko
+git clone https://github.com/moredatarequired/toko
 cd toko
-uv sync --all-groups
 just setup  # installs lefthook git hooks
 ```
 
@@ -59,7 +58,7 @@ toko --model gpt-5 --text "hello world"
 ```
 
 ```txt
-2 tokens
+2
 ```
 
 If you omit `--model`, Toko falls back to your configured default. Fresh installs ship with `gpt-5`; override this in `config.toml` if your workflow needs a different model.
@@ -67,15 +66,12 @@ If you omit `--model`, Toko falls back to your configured default. Fresh install
 ### Read a file
 
 ```sh
-toko --model gpt-5 LICENSE
+toko --header --format tsv --model gpt-5 LICENSE
 ```
 
 ```txt
-┏━━━━━━━━━┳━━━━━━━┓
-┃ File    ┃ gpt-5 ┃
-┡━━━━━━━━━╇━━━━━━━┩
-│ LICENSE │   223 │
-└─────────┴───────┘
+file	gpt-5
+LICENSE	223
 ```
 
 Token counts will change if the file contents change.
@@ -87,25 +83,21 @@ printf 'hello world' | toko --model gpt-5
 ```
 
 ```txt
-model	tokens
-gpt-5	2
+2
 ```
 
-When stdout is not a TTY (for example, when piping into another command) Toko emits TSV automatically.
+When stdout is not a TTY (for example, when piping into another command) Toko emits TSV automatically and drops the header unless you pass `--header`.
 
 ### Compare models and estimate cost
 
 ```sh
-toko --model gpt-5 --model gpt-5-mini --text "The quick brown fox" --cost
+toko --header --format tsv --model gpt-5 --model gpt-4.1-mini --text "The quick brown fox" --cost
 ```
 
 ```txt
-┏━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓
-┃ Model      ┃ Tokens ┃      Cost ┃
-┡━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩
-│ gpt-5      │      4 │ $0.000005 │
-│ gpt-5-mini │      4 │ $0.000001 │
-└────────────┴────────┴───────────┘
+model	tokens	cost
+gpt-5	4	$0.000005
+gpt-4.1-mini	4	$0.000008
 ```
 
 Costs come from the bundled `genai-prices` feed. Models without pricing information display `N/A`.
@@ -113,30 +105,27 @@ Costs come from the bundled `genai-prices` feed. Models without pricing informat
 ### Work with directories, URLs, and filters
 
 ```sh
-toko --model gpt-5 --exclude '**/__pycache__/*' src/
+toko --header --format tsv --model gpt-5 --exclude '**/__pycache__/*' src/
 ```
 
 ```txt
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
-┃ File                     ┃  gpt-5 ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-│ src/toko/__init__.py     │     26 │
-│ src/toko/cache.py        │    701 │
-│ src/toko/cli.py          │  2,736 │
-│ src/toko/config.py       │    641 │
-│ src/toko/cost.py         │  1,454 │
-│ src/toko/counter.py      │  1,791 │
-│ src/toko/file_reader.py  │    947 │
-│ src/toko/formatters.py   │  1,800 │
-│ src/toko/models.py       │  2,620 │
-│ src/toko/price_update.py │    403 │
-│ TOTAL                    │ 13,119 │
-└──────────────────────────┴────────┘
+file	gpt-5
+src/toko/__init__.py	11
+src/toko/cache.py	758
+src/toko/cli.py	3372
+src/toko/config.py	584
+src/toko/cost.py	1325
+src/toko/counter.py	3352
+src/toko/data/__init__.py	8
+src/toko/data/openrouter_models.json	359
+src/toko/file_reader.py	1120
+src/toko/formatters.py	2226
+src/toko/models.py	4211
+src/toko/price_update.py	403
 ```
 
 - Directories are processed recursively by default and honor `.gitignore`.
 - Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
-- URLs are fetched with `httpx`; invalid or non-UTF-8 responses fail with a clear error message.
 
 ## Machine-readable output
 
@@ -155,7 +144,7 @@ toko --model gpt-5 --format json LICENSE
 ```
 
 ```sh
-toko --model gpt-5 --format csv --text "hello world"
+toko --header --model gpt-5 --format csv --text "hello world"
 ```
 
 ```csv
@@ -168,25 +157,28 @@ Use `--format tsv` to force TSV even when running interactively.
 ## Know which models are available
 
 ```sh
-toko --list-models
+toko --list-models | head -n 5
 ```
 
 ```txt
-Supported models:
-  Openai: ada, babbage, babbage-002, gpt-4, gpt-4.1, gpt-4o, gpt-5, o1, o3, ...
-  Anthropic: claude-sonnet-4-5, claude-haiku-4-5, claude-3-7-sonnet-latest, ...
-  Google: models/gemini-2.5-pro, models/gemini-2.5-flash, models/gemma-3-12b-it, ...
-  Xai: grok-3, grok-3-mini, grok-4-fast-reasoning, ...
+anthropic/claude-3-5-haiku-20241022
+anthropic/claude-3-5-sonnet-20240620
+anthropic/claude-3-5-sonnet-20241022
+anthropic/claude-3-7-sonnet-20250219
+anthropic/claude-3-haiku-20240307
 ```
 
-The full list includes every model shipped with the release plus pattern-based detection. Pass `--model <name>` to use any entry in the list (or a detectable future variant).
+The full list is newline-delimited so you can pipe it into tools like `head`, `grep`, or `fzf`. Pass `--model <name>` to use any entry in the list (or a detectable future variant).
 
 ## API keys and optional providers
 
-Some providers require API credentials:
+Some providers require API credentials to access token counting endpoints:
 
 - **Anthropic** – set `ANTHROPIC_API_KEY`
 - **Google Gemini/Gemma** – set `GOOGLE_API_KEY`
+
+Some providers use tokenizers available on Hugging Face; these may need authentication to download the appropriate tokenizer.
+
 - **HuggingFace-hosted models (Llama, DeepSeek, Qwen)** – install `toko[transformers]` and ensure `huggingface-cli login` (or set `HF_TOKEN`) if the model needs authentication.
 - **Mistral** – install `toko[mistral]`; no API key is required for offline tokenization.
 
@@ -221,7 +213,7 @@ Config values act as defaults; command-line flags always win.
 
 ## Caching and pricing data
 
-- Counts are cached in `/tmp/toko/token_cache.db`. Delete the file to clear the cache.
+- Counts are cached in `$XDG_CACHE_HOME/toko/token_cache.db`.
 - Pricing data from `genai-prices` is stored alongside the package. When `auto_update_prices` is `true`, Toko silently refreshes the cache if data is older than a day. Fetch failures never abort your command.
 
 ## Development tasks
@@ -229,8 +221,8 @@ Config values act as defaults; command-line flags always win.
 ```sh
 just lint          # Ruff check & format
 just typecheck     # ty type checking
-just test          # pytest
-just check-all     # run the full pre-commit hook chain
+just test          # run "fast" tests
+just check-all     # run the full set of checks
 ```
 
 ## License

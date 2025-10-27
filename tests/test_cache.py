@@ -1,24 +1,6 @@
 """Tests for cache module."""
 
-import pytest
-
-from toko.cache import (
-    cache_count,
-    clear_cache,
-    get_cache_db_path,
-    get_cached_count,
-    set_cache_dir,
-)
-
-
-@pytest.fixture
-def cache_dir(tmp_path):
-    cache_root = tmp_path / "cache"
-    set_cache_dir(cache_root)
-    try:
-        yield cache_root
-    finally:
-        set_cache_dir(None)
+from toko.cache import cache_count, clear_cache, get_cache_db_path, get_cached_count
 
 
 def test_cache_and_retrieve(cache_dir):

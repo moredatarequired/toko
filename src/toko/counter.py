@@ -7,10 +7,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 # We only need tokenizers, not the full ML frameworks
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 
-import google.generativeai as genai
 import httpx
 import tiktoken
-from anthropic import Anthropic
 
 from toko.cache import cache_count, get_cached_count
 from toko.models import ModelInfo, get_model
@@ -40,6 +38,10 @@ except ImportError:
 
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
+
+ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
+ANTHROPIC_API_VERSION = "2023-06-01"
+GOOGLE_COUNT_URL_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 class TokenizerProtocol(Protocol):
@@ -161,17 +163,19 @@ def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
 
 def _extract_token_count(payload: object) -> int | None:
     if isinstance(payload, dict):
+        data = cast("dict[str, object]", payload)
         for key in ("token_count", "count"):
-            value = payload.get(key)
+            value = data.get(key)
             if isinstance(value, int):
                 return value
-        usage = payload.get("usage")
+        usage = data.get("usage")
         if isinstance(usage, dict):
+            usage_dict = cast("dict[str, object]", usage)
             for key in ("input_tokens", "prompt_tokens", "total_tokens"):
-                value = usage.get(key)
+                value = usage_dict.get(key)
                 if isinstance(value, int):
                     return value
-        data_field = payload.get("data")
+        data_field = data.get("data")
         if isinstance(data_field, dict):
             return _extract_token_count(data_field)
         if isinstance(data_field, list):
@@ -208,18 +212,31 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> int:
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or add to ~/.config/toko/config.toml"
         )
-    client = Anthropic(api_key=api_key)
+    headers = {
+        "x-api-key": api_key,
+        "content-type": "application/json",
+        "anthropic-version": ANTHROPIC_API_VERSION,
+    }
+    payload = {
+        "model": model_info.name,
+        "messages": [{"role": "user", "content": text}],
+    }
     try:
-        result = client.messages.count_tokens(
-            model=model_info.name, messages=[{"role": "user", "content": text}]
+        response = httpx.post(
+            ANTHROPIC_COUNT_URL, headers=headers, json=payload, timeout=10.0
         )
-    except Exception as e:
+        response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Anthropic model {model_info.name}: {e}. "
+            f"Failed to count tokens for Anthropic model {model_info.name}: {exc}. "
             "The model may not exist or may not be available with your API key."
-        ) from e
+        ) from exc
 
-    return result.input_tokens
+    input_tokens = data.get("input_tokens")
+    if not isinstance(input_tokens, int):
+        raise TypeError(f"Unexpected response from Anthropic token API: {data!r}")
+    return input_tokens
 
 
 def _count_google(text: str, model_info: ModelInfo) -> int:
@@ -229,17 +246,22 @@ def _count_google(text: str, model_info: ModelInfo) -> int:
             "GOOGLE_API_KEY environment variable not set. "
             "Set it or add to ~/.config/toko/config.toml"
         )
-    genai.configure(api_key=api_key)
+    url = f"{GOOGLE_COUNT_URL_BASE}/{model_info.name}:countTokens"
+    payload = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
     try:
-        google_model = genai.GenerativeModel(model_info.name)
-        result = google_model.count_tokens(text)
-    except Exception as e:
+        response = httpx.post(url, params={"key": api_key}, json=payload, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Google model {model_info.name}: {e}. "
+            f"Failed to count tokens for Google model {model_info.name}: {exc}. "
             "The model may not exist or may not support token counting."
-        ) from e
+        ) from exc
 
-    return result.total_tokens
+    total_tokens = data.get("totalTokens")
+    if not isinstance(total_tokens, int):
+        raise TypeError(f"Unexpected response from Google token API: {data!r}")
+    return total_tokens
 
 
 def _count_mistral(text: str, model_info: ModelInfo) -> int:
@@ -331,6 +353,8 @@ _PROVIDER_HANDLERS: dict[str, object] = {
 
 for provider in ("llama", "deepseek", "qwen"):
     _PROVIDER_HANDLERS[provider] = _count_transformers
+
+_PROVIDER_HANDLERS["huggingface"] = _count_transformers
 
 
 def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:

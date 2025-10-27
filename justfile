@@ -4,7 +4,7 @@ set dotenv-load
 recipes:
     @just --choose
 
-setup:
+setup: uv-sync
     uv run --group dev lefthook install
 
 uv-sync:

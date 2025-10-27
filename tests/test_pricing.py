@@ -25,7 +25,7 @@ class TestPricingCoverage:
             "ada",
         }
         # Future models that don't exist yet
-        future_models = {"gpt-5-turbo", "gpt-5-mini"}
+        future_models: set[str] = set()
 
         failures = []
         openai_models = list_models().get("openai", [])
@@ -67,22 +67,12 @@ class TestPricingCoverage:
 
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
-        # Newer models that may not be in genai-prices yet
         expected_missing = {
             "gemini-2.5-pro",
-            "gemini-2.5-pro-preview-05-06",
-            "gemini-2.5-pro-preview-03-25",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-            "gemini-2.5-flash-lite-preview-09-2025",
-            "gemini-2.0-pro-exp",
-            "gemini-exp-1206",
-            "gemini-flash-latest",
-            "gemini-pro-latest",
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
-            "gemma-3-4b-it",
-            "gemma-3-1b-it",
+            "gemini-2.5-flash-image",
+            "gemini-2.0-flash-preview-image-generation",
         }
 
         failures = []
@@ -125,7 +115,7 @@ class TestPricingCoverage:
     def test_tokenizer_aliases_have_pricing(self):
         """Test that tokenizer aliases (shorthand names) have pricing via OpenRouter."""
         # Test common shorthand aliases
-        aliases_to_test = ["qwen3", "qwen2.5", "deepseek-v3", "llama-3.2"]
+        aliases_to_test = ["qwen2.5", "qwen2", "deepseek-v3", "llama"]
 
         failures = []
         for alias in aliases_to_test:
@@ -193,7 +183,7 @@ class TestPricingErrors:
     def test_unknown_model_returns_none(self):
         """Unknown models should return None instead of raising."""
         # Use a model that will be detected but has no pricing
-        cost = estimate_cost(100, "gpt-fake-xyz")
+        cost = estimate_cost(100, "gpt-5-fake-xyz")
         # Should not raise, just return None
         assert cost is None or isinstance(cost, float)
 

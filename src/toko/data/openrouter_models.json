@@ -1,0 +1,37 @@
+[
+  {
+    "hugging_face_id": "Qwen/Qwen2.5-72B-Instruct",
+    "openrouter_id": "qwen/qwen-2.5-72b-instruct:free",
+    "tokenizer": "Qwen"
+  },
+  {
+    "hugging_face_id": "Qwen/Qwen2.5-72B-Instruct",
+    "openrouter_id": "qwen/qwen-2.5-72b-instruct",
+    "tokenizer": "Qwen"
+  },
+  {
+    "hugging_face_id": "Qwen/Qwen2.5-7B-Instruct",
+    "openrouter_id": "qwen/qwen-2.5-7b-instruct",
+    "tokenizer": "Qwen"
+  },
+  {
+    "hugging_face_id": "deepseek-ai/DeepSeek-R1",
+    "openrouter_id": "deepseek/deepseek-r1:free",
+    "tokenizer": "DeepSeek"
+  },
+  {
+    "hugging_face_id": "deepseek-ai/DeepSeek-R1",
+    "openrouter_id": "deepseek/deepseek-r1",
+    "tokenizer": "DeepSeek"
+  },
+  {
+    "hugging_face_id": "deepseek-ai/DeepSeek-V3",
+    "openrouter_id": "deepseek/deepseek-chat",
+    "tokenizer": "DeepSeek"
+  },
+  {
+    "hugging_face_id": "microsoft/Phi-3.5-mini-instruct",
+    "openrouter_id": "microsoft/phi-3.5-mini-128k-instruct",
+    "tokenizer": "Other"
+  }
+]

@@ -8,11 +8,8 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "anthropic>=0.71.0",
     "genai-prices>=0.0.35",
-    "google-generativeai>=0.8.5",
     "httpx>=0.28.1",
-    "openai>=2.6.1",
     "pathspec>=0.12.1",
     "rich>=14.2.0",
     "tiktoken>=0.12.0",
@@ -102,6 +99,12 @@ addopts = "-ra"
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+filterwarnings = [
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+    "ignore:Calling `MistralTokenizer.from_model\\(\\.\\.\\., strict=False\\)` is deprecated:FutureWarning",
 ]
 
 [tool.coverage.run]

@@ -4,7 +4,7 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated
 
 import httpx
 import typer
@@ -18,7 +18,6 @@ from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
-from toko.models import list_optional_model_groups
 from toko.price_update import update_prices_if_stale
 
 
@@ -329,14 +328,62 @@ def _handle_text_input(
 
     costs = _calculate_costs(results, include_costs)
 
+    adjusted_format = output_format
+    if (
+        output_format == "tsv"
+        and not include_costs
+        and not include_header
+        and not total_only
+        and len(results) == 1
+    ):
+        adjusted_format = "text"
+
     output = format_output(
         results,
-        output_format=output_format,
+        output_format=adjusted_format,
         total_only=total_only,
         costs=costs,
         include_header=include_header,
     )
     typer.echo(output)
+
+
+def _collect_file_counts(
+    models: list[str], files: list[tuple[str, str]]
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, str]], dict[str, str]]:
+    file_results: dict[str, dict[str, int]] = {}
+    file_errors: dict[str, dict[str, str]] = {}
+    model_errors: dict[str, str] = {}
+
+    for display_name, content in files:
+        results = file_results.setdefault(display_name, {})
+        errors = file_errors.setdefault(display_name, {})
+
+        for model_name in models:
+            try:
+                results[model_name] = count_tokens(content, model=model_name)
+            except ValueError as exc:
+                error_msg = str(exc)
+                errors[model_name] = error_msg
+                model_errors.setdefault(model_name, error_msg)
+
+    return file_results, file_errors, model_errors
+
+
+def _emit_model_error_summary(
+    model_errors: dict[str, str], file_errors: dict[str, dict[str, str]]
+) -> None:
+    for model_name, error_msg in model_errors.items():
+        failed_files = [
+            filename for filename, errors in file_errors.items() if model_name in errors
+        ]
+        if not failed_files:
+            continue
+        typer.echo(
+            f"Warning: Failed to count tokens for {model_name} on {len(failed_files)} file(s)"
+            f" (including {failed_files[0]}): {error_msg}",
+            err=True,
+        )
 
 
 def _handle_file_inputs(
@@ -348,39 +395,10 @@ def _handle_file_inputs(
     include_costs: bool,
     include_header: bool,
 ) -> None:
-    file_results: dict[str, dict[str, int]] = {}
-    file_errors: dict[str, dict[str, str]] = {}
-    model_errors: dict[str, str] = {}
-
-    for display_name, content in files:
-        file_results[display_name] = {}
-        file_errors[display_name] = {}
-
-        for model_name in models:
-            try:
-                file_results[display_name][model_name] = count_tokens(
-                    content, model=model_name
-                )
-            except ValueError as e:
-                error_msg = str(e)
-                file_errors[display_name][model_name] = error_msg
-                model_errors.setdefault(model_name, error_msg)
+    file_results, file_errors, model_errors = _collect_file_counts(models, files)
 
     if model_errors:
-        for model_name, error_msg in model_errors.items():
-            failed_files = sum(
-                1 for errors in file_errors.values() if model_name in errors
-            )
-            example_file = next(
-                filename
-                for filename, errors in file_errors.items()
-                if model_name in errors
-            )
-            typer.echo(
-                f"Warning: Failed to count tokens for {model_name} on {failed_files} file(s)"
-                f" (including {example_file}): {error_msg}",
-                err=True,
-            )
+        _emit_model_error_summary(model_errors, file_errors)
 
     has_results = any(file_results[file] for file in file_results)
     if not has_results:
@@ -421,6 +439,30 @@ def _calculate_file_costs(
     return costs
 
 
+def _format_model_name(provider: str, model: str) -> str:
+    base = model
+    if base.startswith("models/"):
+        base = base.split("/", 1)[1]
+    if "/" in base:
+        return base
+    return f"{provider}/{base}"
+
+
+def _collect_supported_models() -> list[str]:
+    models_by_provider = get_model_list()
+    names: set[str] = set()
+    for provider, provider_models in models_by_provider.items():
+        for model in provider_models:
+            names.add(_format_model_name(provider, model))
+    return sorted(names, key=str.lower)
+
+
+def _show_model_list() -> None:
+    models = _collect_supported_models()
+    typer.echo("\n".join(models))
+    raise typer.Exit
+
+
 def _do_count(
     paths: list[str] | None,
     model: list[str] | None,
@@ -436,30 +478,12 @@ def _do_count(
 ) -> None:
     config = _load_runtime_config()
     _maybe_update_prices(config)
-
     if list_models:
-        typer.echo("Supported models:")
-        models_by_provider = get_model_list()
-        for provider, provider_models in models_by_provider.items():
-            typer.echo(f"  {provider.capitalize()}: {', '.join(provider_models)}")
-
-        optional_groups = list_optional_model_groups()
-        if optional_groups:
-            typer.echo()
-            for group in optional_groups:
-                status = "installed" if group["installed"] else "not installed"
-                models_preview = ", ".join(cast("list[str]", group["models"]))
-                typer.echo(
-                    f"  Supported with extra [{group['extra']}] ({status}): {models_preview}"
-                )
-
-        raise typer.Exit
-
+        _show_model_list()
     models = _resolve_models(config, model)
     actual_format = _resolve_output_format(config, output_format)
     merged_exclude = _merge_excludes(config, exclude)
     include_header = header if header is not None else is_stdout_tty()
-
     inputs = _collect_inputs(
         paths,
         text,
@@ -468,7 +492,6 @@ def _do_count(
         no_recursive=no_recursive,
         exclude_patterns=merged_exclude,
     )
-
     if inputs.text is not None:
         _handle_text_input(
             models,
@@ -479,7 +502,6 @@ def _do_count(
             include_header=include_header,
         )
         return
-
     _handle_file_inputs(
         models,
         inputs.files,

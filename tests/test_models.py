@@ -8,6 +8,7 @@ def test_list_models_includes_core_providers():
     assert "openai" in listed
     assert "anthropic" in listed
     assert "gpt-5" in listed["openai"]
+    assert "gpt-4.1-mini" in listed["openai"]
 
 
 def test_optional_groups_use_module_detection(monkeypatch):

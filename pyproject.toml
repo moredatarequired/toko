@@ -1,6 +1,6 @@
 [project]
 name = "toko"
-version = "0.1.0"
+version = "0.2.0"
 description = "A CLI-first token counting tool for LLMs"
 readme = "README.md"
 authors = [
@@ -116,3 +116,10 @@ exclude_also = [
     "if __name__ == .__main__.:",
 ]
 show_missing = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver2"
+version_provider = "uv"
+update_changelog_on_bump = true

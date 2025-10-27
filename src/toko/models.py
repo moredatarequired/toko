@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+from importlib import util
 
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
@@ -172,6 +173,42 @@ TOKENIZER_ALIASES = {
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
 
 
+def _has_module(module: str) -> bool:
+    return util.find_spec(module) is not None
+
+
+@dataclass(frozen=True)
+class OptionalGroupDef:
+    extra: str
+    module: str
+    providers: tuple[str, ...]
+    models: tuple[str, ...]
+
+
+OPTIONAL_GROUPS: tuple[OptionalGroupDef, ...] = (
+    OptionalGroupDef(
+        extra="mistral",
+        module="mistral_common",
+        providers=("mistral",),
+        models=(
+            "mistral-small-latest",
+            "mistral-medium-latest",
+            "mistral-large-latest",
+        ),
+    ),
+    OptionalGroupDef(
+        extra="transformers",
+        module="transformers",
+        providers=("llama", "deepseek", "qwen"),
+        models=(
+            "meta-llama/Llama-3.2-1B",
+            "deepseek-ai/DeepSeek-V3",
+            "Qwen/Qwen2.5-7B",
+        ),
+    ),
+)
+
+
 def get_model(name: str) -> ModelInfo:
     """Get model info by name.
 
@@ -252,3 +289,18 @@ def list_models() -> dict[str, list[str]]:
         providers[provider].add(model_name)
 
     return {provider: sorted(models) for provider, models in providers.items()}
+
+
+def list_optional_model_groups() -> list[dict[str, object]]:
+    groups: list[dict[str, object]] = []
+    for group in OPTIONAL_GROUPS:
+        installed = _has_module(group.module)
+        groups.append(
+            {
+                "extra": group.extra,
+                "providers": list(group.providers),
+                "models": list(group.models),
+                "installed": installed,
+            }
+        )
+    return groups

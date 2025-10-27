@@ -4,7 +4,7 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import httpx
 import typer
@@ -18,6 +18,7 @@ from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
+from toko.models import list_optional_model_groups
 from toko.price_update import update_prices_if_stale
 
 
@@ -441,6 +442,17 @@ def _do_count(
         models_by_provider = get_model_list()
         for provider, provider_models in models_by_provider.items():
             typer.echo(f"  {provider.capitalize()}: {', '.join(provider_models)}")
+
+        optional_groups = list_optional_model_groups()
+        if optional_groups:
+            typer.echo()
+            for group in optional_groups:
+                status = "installed" if group["installed"] else "not installed"
+                models_preview = ", ".join(cast("list[str]", group["models"]))
+                typer.echo(
+                    f"  Supported with extra [{group['extra']}] ({status}): {models_preview}"
+                )
+
         raise typer.Exit
 
     models = _resolve_models(config, model)

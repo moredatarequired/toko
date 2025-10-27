@@ -24,11 +24,37 @@ def test_version():
     assert result.stdout.strip().startswith("toko version ")
 
 
-def test_list_models():
+def test_list_models(monkeypatch):
+    monkeypatch.setattr(
+        "toko.cli.list_optional_model_groups",
+        lambda: [
+            {
+                "extra": "mistral",
+                "models": ["mistral-small-latest"],
+                "providers": ["mistral"],
+                "installed": True,
+            },
+            {
+                "extra": "transformers",
+                "models": ["meta-llama/Llama-3.2-1B"],
+                "providers": ["llama", "deepseek", "qwen"],
+                "installed": False,
+            },
+        ],
+    )
+
     result = runner.invoke(app, ["--list-models"])
     assert result.exit_code == 0
     assert "openai" in result.stdout.lower()
     assert "gpt-5" in result.stdout
+    assert (
+        "Supported with extra [mistral] (installed): mistral-small-latest"
+        in result.stdout
+    )
+    assert (
+        "Supported with extra [transformers] (not installed): meta-llama/Llama-3.2-1B"
+        in result.stdout
+    )
 
 
 def test_count_with_text():

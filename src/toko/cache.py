@@ -2,15 +2,47 @@
 
 import hashlib
 import json
+import os
 import sqlite3
-import tempfile
+import sys
 from pathlib import Path
+
+_CACHE_DIR_OVERRIDE: Path | None = None
+
+
+def _default_cache_root() -> Path:
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return Path(xdg_cache_home)
+
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base)
+        return Path.home() / "AppData" / "Local"
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches"
+
+    return Path.home() / ".cache"
 
 
 def get_cache_db_path() -> Path:
-    cache_dir = Path(tempfile.gettempdir()) / "toko"
-    cache_dir.mkdir(exist_ok=True)
+    if _CACHE_DIR_OVERRIDE is not None:
+        cache_dir = _CACHE_DIR_OVERRIDE
+    else:
+        cache_dir = _default_cache_root() / "toko"
+    cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "token_cache.db"
+
+
+def set_cache_dir(path: str | Path | None) -> None:
+    """Override the cache directory used for the SQLite database."""
+    if path is None:
+        globals()["_CACHE_DIR_OVERRIDE"] = None
+        return
+    cache_path = Path(path)
+    globals()["_CACHE_DIR_OVERRIDE"] = cache_path
 
 
 def _init_db(conn: sqlite3.Connection) -> None:

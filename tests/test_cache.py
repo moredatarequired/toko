@@ -1,12 +1,31 @@
 """Tests for cache module."""
 
-from toko.cache import cache_count, clear_cache, get_cache_db_path, get_cached_count
+import pytest
+
+from toko.cache import (
+    cache_count,
+    clear_cache,
+    get_cache_db_path,
+    get_cached_count,
+    set_cache_dir,
+)
 
 
-def test_cache_and_retrieve():
+@pytest.fixture
+def cache_dir(tmp_path):
+    cache_root = tmp_path / "cache"
+    set_cache_dir(cache_root)
+    try:
+        yield cache_root
+    finally:
+        set_cache_dir(None)
+
+
+def test_cache_and_retrieve(cache_dir):
     """Test caching and retrieving token counts."""
     # Clear cache first
     clear_cache()
+    assert cache_dir.exists()
 
     text = "hello world"
     model = "gpt-4.1"
@@ -22,9 +41,10 @@ def test_cache_and_retrieve():
     assert get_cached_count(text, model) == count
 
 
-def test_cache_multiple_models():
+def test_cache_multiple_models(cache_dir):
     """Test caching multiple models for same text."""
     clear_cache()
+    assert cache_dir.exists()
 
     text = "hello world"
     model1 = "gpt-4.1"
@@ -41,9 +61,10 @@ def test_cache_multiple_models():
     assert get_cached_count(text, model2) == count2
 
 
-def test_cache_different_texts():
+def test_cache_different_texts(cache_dir):
     """Test caching different texts."""
     clear_cache()
+    assert cache_dir.exists()
 
     text1 = "hello world"
     text2 = "goodbye world"
@@ -60,9 +81,10 @@ def test_cache_different_texts():
     assert get_cached_count(text2, model) == count2
 
 
-def test_clear_cache():
+def test_clear_cache(cache_dir):
     """Test clearing the cache."""
     clear_cache()
+    assert cache_dir.exists()
 
     text = "hello world"
     model = "gpt-4.1"
@@ -79,8 +101,8 @@ def test_clear_cache():
     assert get_cached_count(text, model) is None
 
 
-def test_get_cache_db_path():
+def test_get_cache_db_path(cache_dir):
     """Test getting the cache database path."""
     path = get_cache_db_path()
     assert path.name == "token_cache.db"
-    assert "toko" in str(path)
+    assert path.parent == cache_dir

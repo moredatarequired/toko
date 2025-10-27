@@ -66,12 +66,15 @@ If you omit `--model`, Toko falls back to your configured default. Fresh install
 ### Read a file
 
 ```sh
-toko --header --format tsv --model gpt-5 LICENSE
+toko --model gpt-5 LICENSE
 ```
 
 ```txt
-file	gpt-5
-LICENSE	223
+┏━━━━━━━━━┳━━━━━━━┓
+┃ File    ┃ gpt-5 ┃
+┡━━━━━━━━━╇━━━━━━━┩
+│ LICENSE │   223 │
+└─────────┴───────┘
 ```
 
 Token counts will change if the file contents change.
@@ -105,23 +108,27 @@ Costs come from the bundled `genai-prices` feed. Models without pricing informat
 ### Work with directories, URLs, and filters
 
 ```sh
-toko --header --format tsv --model gpt-5 --exclude '**/__pycache__/*' src/
+toko --exclude '**/__pycache__/*' src/
 ```
 
 ```txt
-file	gpt-5
-src/toko/__init__.py	11
-src/toko/cache.py	758
-src/toko/cli.py	3372
-src/toko/config.py	584
-src/toko/cost.py	1325
-src/toko/counter.py	3352
-src/toko/data/__init__.py	8
-src/toko/data/openrouter_models.json	359
-src/toko/file_reader.py	1120
-src/toko/formatters.py	2226
-src/toko/models.py	4211
-src/toko/price_update.py	403
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ File                                 ┃  gpt-5 ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ src/toko/__init__.py                 │     11 │
+│ src/toko/cache.py                    │    758 │
+│ src/toko/cli.py                      │  3,372 │
+│ src/toko/config.py                   │    584 │
+│ src/toko/cost.py                     │  1,325 │
+│ src/toko/counter.py                  │  3,445 │
+│ src/toko/data/__init__.py            │      8 │
+│ src/toko/data/openrouter_models.json │    359 │
+│ src/toko/file_reader.py              │  1,120 │
+│ src/toko/formatters.py               │  2,226 │
+│ src/toko/models.py                   │  4,211 │
+│ src/toko/price_update.py             │    403 │
+│ TOTAL                                │ 17,822 │
+└──────────────────────────────────────┴────────┘
 ```
 
 - Directories are processed recursively by default and honor `.gitignore`.
@@ -167,8 +174,6 @@ anthropic/claude-3-5-sonnet-20241022
 anthropic/claude-3-7-sonnet-20250219
 anthropic/claude-3-haiku-20240307
 ```
-
-The full list is newline-delimited so you can pipe it into tools like `head`, `grep`, or `fzf`. Pass `--model <name>` to use any entry in the list (or a detectable future variant).
 
 ## API keys and optional providers
 

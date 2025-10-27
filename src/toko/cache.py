@@ -8,22 +8,12 @@ from pathlib import Path
 
 
 def get_cache_db_path() -> Path:
-    """Get the path to the cache database.
-
-    Returns:
-        Path to SQLite database file
-    """
     cache_dir = Path(tempfile.gettempdir()) / "toko"
     cache_dir.mkdir(exist_ok=True)
     return cache_dir / "token_cache.db"
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
-    """Initialize the database schema.
-
-    Args:
-        conn: SQLite connection
-    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS token_counts (
             message_hash TEXT PRIMARY KEY,
@@ -35,27 +25,10 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
 
 def _hash_message(text: str) -> str:
-    """Hash a message for cache key.
-
-    Args:
-        text: Message text
-
-    Returns:
-        SHA256 hash of the message
-    """
     return hashlib.sha256(text.encode()).hexdigest()
 
 
 def get_cached_count(text: str, model: str) -> int | None:
-    """Get cached token count for a message and model.
-
-    Args:
-        text: Message text
-        model: Model name
-
-    Returns:
-        Token count if cached, None otherwise
-    """
     cache_path = get_cache_db_path()
     if not cache_path.exists():
         return None
@@ -80,13 +53,6 @@ def get_cached_count(text: str, model: str) -> int | None:
 
 
 def cache_count(text: str, model: str, count: int) -> None:
-    """Cache a token count for a message and model.
-
-    Args:
-        text: Message text
-        model: Model name
-        count: Token count to cache
-    """
     cache_path = get_cache_db_path()
     message_hash = _hash_message(text)
 
@@ -124,7 +90,6 @@ def cache_count(text: str, model: str, count: int) -> None:
 
 
 def clear_cache() -> None:
-    """Clear all cached token counts."""
     cache_path = get_cache_db_path()
     if cache_path.exists():
         cache_path.unlink()

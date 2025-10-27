@@ -61,9 +61,7 @@ def main(
     ] = None,
     paths: Annotated[
         list[str] | None,
-        typer.Argument(
-            help="Files, directories, or URLs to count tokens for",
-        ),
+        typer.Argument(help="Files, directories, or URLs to count tokens for"),
     ] = None,
     model: Annotated[
         list[str] | None,
@@ -74,63 +72,32 @@ def main(
         ),
     ] = None,
     text: Annotated[
-        str | None,
-        typer.Option(
-            "--text",
-            "-t",
-            help="Text string to count tokens for",
-        ),
+        str | None, typer.Option("--text", "-t", help="Text string to count tokens for")
     ] = None,
     exclude: Annotated[
         list[str] | None,
-        typer.Option(
-            "--exclude",
-            "-e",
-            help="Glob patterns to exclude",
-        ),
+        typer.Option("--exclude", "-e", help="Glob patterns to exclude"),
     ] = None,
     no_ignore: Annotated[
-        bool,
-        typer.Option(
-            "--no-ignore",
-            help="Don't respect .gitignore files",
-        ),
+        bool, typer.Option("--no-ignore", help="Don't respect .gitignore files")
     ] = False,
     no_recursive: Annotated[
-        bool,
-        typer.Option(
-            "--no-recursive",
-            help="Don't recurse into directories",
-        ),
+        bool, typer.Option("--no-recursive", help="Don't recurse into directories")
     ] = False,
     total_only: Annotated[
         bool,
         typer.Option(
-            "--total-only",
-            help="Only show total count, not per-file breakdown",
+            "--total-only", help="Only show total count, not per-file breakdown"
         ),
     ] = False,
     output_format: Annotated[
         str,
-        typer.Option(
-            "--format",
-            "-f",
-            help="Output format: text, json, csv, tsv",
-        ),
+        typer.Option("--format", "-f", help="Output format: text, json, csv, tsv"),
     ] = "text",
-    cost: Annotated[
-        bool,
-        typer.Option(
-            "--cost",
-            help="Show cost estimates",
-        ),
-    ] = False,
+    cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
     list_models: Annotated[
         bool,
-        typer.Option(
-            "--list-models",
-            help="List all supported models and exit",
-        ),
+        typer.Option("--list-models", help="List all supported models and exit"),
     ] = False,
 ) -> None:
     """Toko - Token counter for LLMs."""

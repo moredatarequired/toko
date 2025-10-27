@@ -19,11 +19,6 @@ class Config:
 
 
 def get_config_path() -> Path:
-    """Get the path to the config file.
-
-    Returns:
-        Path to config file (~/.config/toko/config.toml)
-    """
     config_home = os.environ.get("XDG_CONFIG_HOME")
     if config_home:
         config_dir = Path(config_home) / "toko"
@@ -77,11 +72,6 @@ def load_config() -> Config:
 
 
 def apply_api_keys(config: Config) -> None:
-    """Apply API keys from config to environment.
-
-    Args:
-        config: Config object with API keys
-    """
     # Map config key names to environment variable names
     key_map = {
         "anthropic": "ANTHROPIC_API_KEY",

@@ -8,10 +8,7 @@ from toko.models import get_model
 
 
 def estimate_cost(
-    token_count: int,
-    model: str,
-    *,
-    output_tokens: int = 0,
+    token_count: int, model: str, *, output_tokens: int = 0
 ) -> float | None:
     """Estimate cost for a given token count and model.
 

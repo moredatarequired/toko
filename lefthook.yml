@@ -24,8 +24,7 @@ pre-commit:
     - name: check for conflict markers and whitespace issues
       run: git --no-pager diff --check
 
-    # If tests take >1 second, move this (or just the long-running tests) to pre-push.
-    - name: run tests
+    - name: run fast tests
       run: just test
 
     - name: sort pyproject.toml dependencies

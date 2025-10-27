@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 
 import google.generativeai as genai
+import httpx
 import tiktoken
 from anthropic import Anthropic
 
@@ -110,18 +111,94 @@ def _count_openai(_text: str, model_info: ModelInfo) -> int:
 
 
 def _count_xai(text: str, model_info: ModelInfo) -> int:
-    encoding_name = model_info.encoding
-    encoding = (
-        _get_tiktoken_encoding_for_model(model_info.name)
-        if encoding_name is None
-        else _get_tiktoken_encoding_by_name(encoding_name)
-    )
-    if encoding is None:
-        raise ValueError(
-            f"tiktoken does not include an encoding for xAI model '{model_info.name}'. "
-            "Install the latest tiktoken or verify the model name."
+    api_key = os.environ.get("XAI_API_KEY")
+    if api_key:
+        try:
+            return _count_xai_via_api(text, model_info.name, api_key)
+        except Exception as api_error:
+            last_error = api_error
+        else:
+            last_error = None
+    else:
+        last_error = ValueError(
+            "XAI_API_KEY environment variable not set. Falling back to Hugging Face tokenizer."
         )
-    return len(encoding.encode(text))
+
+    try:
+        return _count_xai_via_transformers(text)
+    except Exception as hf_error:
+        message = (
+            f"Failed to count tokens for xAI model {model_info.name}. "
+            "Provide XAI_API_KEY for API-based counting, or install 'toko[transformers]' "
+            "and ensure HF_TOKEN grants access to Xenova/grok-1-tokenizer."
+        )
+        if api_key and last_error is not None:
+            raise ValueError(f"{message} Last API error: {last_error}") from hf_error
+        raise ValueError(message) from hf_error
+
+
+def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
+    try:
+        response = httpx.post(
+            "https://api.x.ai/v1/tokenize",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model_name, "input": text},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ValueError(f"xAI tokenization request failed: {exc}") from exc
+
+    count = _extract_token_count(data)
+    if count is None:
+        raise ValueError(f"Unexpected response from xAI token API: {data!r}")
+    return count
+
+
+def _extract_token_count(payload: object) -> int | None:
+    if isinstance(payload, dict):
+        for key in ("token_count", "count"):
+            value = payload.get(key)
+            if isinstance(value, int):
+                return value
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            for key in ("input_tokens", "prompt_tokens", "total_tokens"):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    return value
+        data_field = payload.get("data")
+        if isinstance(data_field, dict):
+            return _extract_token_count(data_field)
+        if isinstance(data_field, list):
+            for item in data_field:
+                result = _extract_token_count(item)
+                if result is not None:
+                    return result
+    return None
+
+
+def _count_xai_via_transformers(text: str) -> int:
+    if not HAS_TRANSFORMERS:
+        raise ValueError(
+            "transformers package not available. Install with: uv tool install 'toko[transformers]'"
+        )
+
+    cache_key = "transformers:xai:grok-1"
+    if cache_key not in _TOKENIZER_CACHE:
+        from transformers import AutoTokenizer  # noqa: PLC0415
+
+        _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
+            "Xenova/grok-1-tokenizer", trust_remote_code=True
+        )
+
+    tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
+    tokens = tokenizer.encode(text)
+    return len(tokens)
 
 
 def _count_anthropic(text: str, model_info: ModelInfo) -> int:
@@ -279,7 +356,7 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
     model_info = get_model(model)
 
     token_count: int | None = None
-    if model_info.provider in {"openai", "xai"}:
+    if model_info.provider == "openai":
         names_to_try = []
         if model_info.name != model:
             names_to_try.append(model_info.name)

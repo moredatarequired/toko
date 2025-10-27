@@ -255,8 +255,7 @@ def get_model(name: str) -> ModelInfo:
         # OpenAI-compatible models use tiktoken. encoding determined at runtime.
         return ModelInfo(name=name, provider="openai")
     if provider == "xai":
-        # xAI uses OpenAI-compatible tokenization; fall back to o200k_base.
-        return ModelInfo(name=name, provider="xai", encoding="o200k_base")
+        return ModelInfo(name=name, provider="xai")
     if provider == "mistral":
         # Mistral uses mistral-common library
         return ModelInfo(name=name, provider="mistral")

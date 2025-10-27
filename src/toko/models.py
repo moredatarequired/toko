@@ -1,6 +1,9 @@
 """Model registry and definitions."""
 
+from collections import defaultdict
 from dataclasses import dataclass
+
+from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
 
 @dataclass
@@ -13,77 +16,78 @@ class ModelInfo:
     api_endpoint: str | None = None  # For API-based counting
 
 
-# OpenAI models using tiktoken - o200k_base encoding
-_O200K_MODELS = [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "gpt-5",
-    "gpt-5-turbo",
-    "gpt-5-mini",
-    "o1",
-    "o1-mini",
-    "o1-preview",
-    "o1-2024-12-17",
-    "o3",
-    "o3-mini",
-]
+def detect_provider(model: str) -> str:
+    """Detect provider from model name using pattern matching.
 
-# OpenAI models using tiktoken - cl100k_base encoding
-_CL100K_MODELS = [
-    "gpt-4",
-    "gpt-4-0314",
-    "gpt-4-0613",
-    "gpt-4-32k",
-    "gpt-4-turbo",
-    "gpt-4-turbo-preview",
-    "gpt-4-turbo-2024-04-09",
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0301",
-    "gpt-3.5-turbo-16k",
-]
+    Args:
+        model: Model name
 
-# Legacy OpenAI models - p50k_base encoding
-_P50K_MODELS = [
-    "text-davinci-003",
-    "text-davinci-002",
-    "code-davinci-002",
-]
+    Returns:
+        Provider name (openai, anthropic, google, xai, mistral, llama, deepseek, qwen, unknown)
+    """
+    model_lower = model.lower()
 
-# Legacy OpenAI models - r50k_base encoding
-_R50K_MODELS = [
-    "davinci",
-    "curie",
-    "babbage",
-    "ada",
-]
+    # Anthropic Claude models
+    if "claude" in model_lower:
+        return "anthropic"
 
-OPENAI_MODELS = {
-    **{
-        name: ModelInfo(name=name, provider="openai", encoding="o200k_base")
-        for name in _O200K_MODELS
-    },
-    **{
-        name: ModelInfo(name=name, provider="openai", encoding="cl100k_base")
-        for name in _CL100K_MODELS
-    },
-    **{
-        name: ModelInfo(name=name, provider="openai", encoding="p50k_base")
-        for name in _P50K_MODELS
-    },
-    **{
-        name: ModelInfo(name=name, provider="openai", encoding="r50k_base")
-        for name in _R50K_MODELS
-    },
-}
+    # Google Gemini/Gemma models
+    if any(pattern in model_lower for pattern in ["gemini", "gemma"]):
+        return "google"
+
+    # xAI Grok models
+    if "grok" in model_lower:
+        return "xai"
+
+    # Mistral models
+    if "mistral" in model_lower or "mixtral" in model_lower:
+        return "mistral"
+
+    # Llama models (including fine-tunes)
+    if "llama" in model_lower:
+        return "llama"
+
+    # DeepSeek models
+    if "deepseek" in model_lower:
+        return "deepseek"
+
+    # Qwen models
+    if "qwen" in model_lower:
+        return "qwen"
+
+    # OpenAI models (GPT, O-series, text-davinci, etc.)
+    if any(
+        pattern in model_lower
+        for pattern in ["gpt-", "o1-", "o3-", "davinci", "curie", "babbage", "ada"]
+    ):
+        return "openai"
+
+    return "unknown"
+
 
 # Anthropic models (API-based counting)
 _ANTHROPIC_MODELS = [
+    # Claude 4.5 family
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",
+    # Claude 4.1/4.0 family
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-1",
+    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-0",
+    "claude-opus-4-20250514",
+    "claude-opus-4-0",
+    # Claude 3.7 family
+    "claude-3-7-sonnet-20250219",
+    "claude-3-7-sonnet-latest",
+    # Claude 3.5 family
     "claude-3-5-sonnet-20241022",
     "claude-3-5-sonnet-latest",
     "claude-3-5-haiku-20241022",
     "claude-3-5-haiku-latest",
+    # Claude 3 family (legacy)
     "claude-3-opus-20240229",
     "claude-3-opus-latest",
     "claude-3-sonnet-20240229",
@@ -98,16 +102,26 @@ ANTHROPIC_MODELS = {
 # Note: Google API requires "models/" prefix
 # Only models that support countTokens are included
 _GOOGLE_MODELS = [
+    # Gemini 2.5 family
     "gemini-2.5-pro",
+    "gemini-2.5-pro-preview-05-06",
+    "gemini-2.5-pro-preview-03-25",
     "gemini-2.5-flash",
+    "gemini-2.5-flash-preview-09-2025",
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite-preview-09-2025",
+    # Gemini 2.0 family
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-pro-exp",
+    # Aliases
     "gemini-exp-1206",
     "gemini-flash-latest",
     "gemini-pro-latest",
+    # Gemma models
     "gemma-3-27b-it",
     "gemma-3-12b-it",
     "gemma-3-4b-it",
@@ -137,8 +151,25 @@ XAI_MODELS = {
 }
 
 # All supported models
+# Tokenizer aliases - map common shorthand to actual HuggingFace model paths
+# These models share the same tokenizer within their family
+TOKENIZER_ALIASES = {
+    # Qwen family - all use same tokenizer
+    "qwen3": "Qwen/Qwen3-8B",
+    "qwen2.5": "Qwen/Qwen2.5-7B",
+    "qwen2": "Qwen/Qwen2-7B",
+    "qwen": "Qwen/Qwen2.5-7B",
+    # DeepSeek family
+    "deepseek-v3": "deepseek-ai/DeepSeek-V3",
+    "deepseek-r1": "deepseek-ai/DeepSeek-R1",
+    "deepseek": "deepseek-ai/DeepSeek-V3",
+    # Llama family
+    "llama-3.2": "meta-llama/Llama-3.2-1B",
+    "llama-3": "meta-llama/Meta-Llama-3-8B",
+    "llama": "meta-llama/Llama-3.2-1B",
+}
+
 MODELS = {
-    **OPENAI_MODELS,
     **ANTHROPIC_MODELS,
     **GOOGLE_MODELS,
     **XAI_MODELS,
@@ -148,20 +179,63 @@ MODELS = {
 def get_model(name: str) -> ModelInfo:
     """Get model info by name.
 
+    Tries to find model in registry first, then checks tokenizer aliases,
+    then falls back to dynamic detection.
+
     Args:
-        name: Model name
+        name: Model name (can be full path or shorthand alias)
 
     Returns:
         ModelInfo for the model
 
     Raises:
-        ValueError: If model is not supported
+        ValueError: If model provider cannot be detected
     """
-    if name not in MODELS:
+    # First try the registry
+    if name in MODELS:
+        return MODELS[name]
+
+    # Check if it's a tokenizer alias (shorthand name)
+    if name.lower() in TOKENIZER_ALIASES:
+        canonical_name = TOKENIZER_ALIASES[name.lower()]
+        provider = detect_provider(canonical_name)
+        return ModelInfo(name=canonical_name, provider=provider)
+
+    # Fall back to dynamic detection
+    provider = detect_provider(name)
+
+    if provider == "unknown":
         raise ValueError(
-            f"Unknown model: {name}. Use --list-models to see supported models."
+            f"Could not detect provider for model: {name}. "
+            "Use --list-models to see known models, or ensure the model name "
+            "contains a recognizable provider pattern (claude, gpt, gemini, etc.)"
         )
-    return MODELS[name]
+
+    # Create ModelInfo based on detected provider
+    if provider == "anthropic":
+        return ModelInfo(name=name, provider="anthropic")
+    if provider == "google":
+        # Google API requires "models/" prefix
+        model_name = name if name.startswith("models/") else f"models/{name}"
+        return ModelInfo(name=model_name, provider="google")
+    if provider == "openai":
+        # OpenAI-compatible models use tiktoken. encoding determined at runtime.
+        return ModelInfo(name=name, provider="openai")
+    if provider == "xai":
+        # xAI uses OpenAI-compatible tokenization; fall back to o200k_base.
+        return ModelInfo(name=name, provider="xai", encoding="o200k_base")
+    if provider == "mistral":
+        # Mistral uses mistral-common library
+        return ModelInfo(name=name, provider="mistral")
+    if provider in ("llama", "deepseek", "qwen"):
+        # These use HuggingFace transformers tokenizers
+        return ModelInfo(name=name, provider=provider)
+
+    raise ValueError(
+        f"Provider '{provider}' not supported. "
+        f"Supported providers: OpenAI, Anthropic, Google, xAI, Mistral, Llama, DeepSeek, Qwen. "
+        f"Model name: {name}"
+    )
 
 
 def list_models() -> dict[str, list[str]]:
@@ -170,9 +244,15 @@ def list_models() -> dict[str, list[str]]:
     Returns:
         Dictionary mapping provider name to list of model names
     """
-    providers: dict[str, list[str]] = {}
+    providers: dict[str, set[str]] = defaultdict(set)
+
     for model in MODELS.values():
-        if model.provider not in providers:
-            providers[model.provider] = []
-        providers[model.provider].append(model.name)
-    return providers
+        providers[model.provider].add(model.name)
+
+    for model_name in TIKTOKEN_MODEL_TO_ENCODING:
+        provider = detect_provider(model_name)
+        if provider == "unknown":
+            provider = "openai"
+        providers[provider].add(model_name)
+
+    return {provider: sorted(models) for provider, models in providers.items()}

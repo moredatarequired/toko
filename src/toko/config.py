@@ -10,7 +10,7 @@ from pathlib import Path
 class Config:
     """Toko configuration."""
 
-    default_model: str = "gpt-4o"
+    default_model: str = "gpt-5"
     respect_gitignore: bool = True
     default_format: str = "text"
     exclude_patterns: list[str] = field(default_factory=list)
@@ -67,7 +67,7 @@ def load_config() -> Config:
 
     # Build and return config
     return Config(
-        default_model=toko_config.get("default_model", "gpt-4o"),
+        default_model=toko_config.get("default_model", "gpt-5"),
         respect_gitignore=toko_config.get("respect_gitignore", True),
         default_format=toko_config.get("default_format", "text"),
         exclude_patterns=toko_config.get("exclude", {}).get("patterns", []),

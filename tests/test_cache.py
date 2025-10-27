@@ -9,7 +9,7 @@ def test_cache_and_retrieve():
     clear_cache()
 
     text = "hello world"
-    model = "gpt-4o"
+    model = "gpt-4.1"
     count = 42
 
     # Should not be cached initially
@@ -27,8 +27,8 @@ def test_cache_multiple_models():
     clear_cache()
 
     text = "hello world"
-    model1 = "gpt-4o"
-    model2 = "claude-3-5-haiku-20241022"
+    model1 = "gpt-4.1"
+    model2 = "claude-4-5-haiku-20241022"
     count1 = 42
     count2 = 84
 
@@ -47,7 +47,7 @@ def test_cache_different_texts():
 
     text1 = "hello world"
     text2 = "goodbye world"
-    model = "gpt-4o"
+    model = "gpt-4.1"
     count1 = 42
     count2 = 84
 
@@ -65,7 +65,7 @@ def test_clear_cache():
     clear_cache()
 
     text = "hello world"
-    model = "gpt-4o"
+    model = "gpt-4.1"
     count = 42
 
     # Cache it

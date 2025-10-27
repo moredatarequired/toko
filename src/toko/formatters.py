@@ -11,7 +11,10 @@ from toko.cost import format_cost
 
 
 def format_table(
-    results: dict[str, int], *, costs: dict[str, float | None] | None = None
+    results: dict[str, int],
+    *,
+    costs: dict[str, float | None] | None = None,
+    include_header: bool = True,
 ) -> str:
     """Format results as a table using rich.
 
@@ -22,7 +25,7 @@ def format_table(
     Returns:
         Table-formatted output
     """
-    table = Table(show_header=True, header_style="bold")
+    table = Table(show_header=include_header, header_style="bold")
     table.add_column("Model", style="cyan")
     table.add_column("Tokens", justify="right", style="green")
 
@@ -48,6 +51,7 @@ def format_text(
     total_only: bool = False,
     *,
     costs: dict[str, float | None] | None = None,
+    include_header: bool = True,
 ) -> str:
     """Format results as human-readable text.
 
@@ -67,7 +71,7 @@ def format_text(
         return f"{count:,} tokens"
 
     # Multiple models or costs requested - use table format
-    return format_table(results, costs=costs)
+    return format_table(results, costs=costs, include_header=include_header)
 
 
 def format_json(results: dict[str, int]) -> str:
@@ -82,7 +86,7 @@ def format_json(results: dict[str, int]) -> str:
     return json.dumps(results, indent=2)
 
 
-def format_csv(results: dict[str, int]) -> str:
+def format_csv(results: dict[str, int], *, include_header: bool = True) -> str:
     """Format results as CSV.
 
     Args:
@@ -91,13 +95,15 @@ def format_csv(results: dict[str, int]) -> str:
     Returns:
         CSV-formatted output
     """
-    lines = ["model,tokens"]
+    lines: list[str] = []
+    if include_header:
+        lines.append("model,tokens")
     for model, count in results.items():
         lines.append(f"{model},{count}")
     return "\n".join(lines)
 
 
-def format_tsv(results: dict[str, int]) -> str:
+def format_tsv(results: dict[str, int], *, include_header: bool = True) -> str:
     """Format results as TSV.
 
     Args:
@@ -106,7 +112,9 @@ def format_tsv(results: dict[str, int]) -> str:
     Returns:
         TSV-formatted output
     """
-    lines = ["model\ttokens"]
+    lines: list[str] = []
+    if include_header:
+        lines.append("model\ttokens")
     for model, count in results.items():
         lines.append(f"{model}\t{count}")
     return "\n".join(lines)
@@ -118,6 +126,7 @@ def format_output(
     total_only: bool = False,
     *,
     costs: dict[str, float | None] | None = None,
+    include_header: bool = True,
 ) -> str:
     """Format token count results according to specified format.
 
@@ -134,13 +143,15 @@ def format_output(
         ValueError: If format is not supported
     """
     if output_format == "text":
-        return format_text(results, total_only, costs=costs)
+        return format_text(
+            results, total_only, costs=costs, include_header=include_header
+        )
     if output_format == "json":
         return format_json(results)
     if output_format == "csv":
-        return format_csv(results)
+        return format_csv(results, include_header=include_header)
     if output_format == "tsv":
-        return format_tsv(results)
+        return format_tsv(results, include_header=include_header)
     raise ValueError(f"Unknown format: {output_format}")
 
 
@@ -150,6 +161,7 @@ def format_file_table(
     total_only: bool = False,
     *,
     costs: dict[str, dict[str, float | None]] | None = None,
+    include_header: bool = True,
 ) -> str:
     """Format per-file token counts with files as rows and models as columns.
 
@@ -182,7 +194,9 @@ def format_file_table(
         else:
             headers = ["file", *all_models]
 
-        lines = [sep.join(headers)]
+        lines: list[str] = []
+        if include_header:
+            lines.append(sep.join(headers))
 
         for filename, model_counts in file_results.items():
             row = [filename]
@@ -205,7 +219,7 @@ def format_file_table(
         {model for file_counts in file_results.values() for model in file_counts}
     )
 
-    table = Table(show_header=True, header_style="bold")
+    table = Table(show_header=include_header, header_style="bold")
     table.add_column("File", style="cyan", no_wrap=False)
 
     # Add columns for each model

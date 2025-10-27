@@ -21,7 +21,7 @@ def _invoke_cli(args: list[str], env_overrides: dict[str, str] | None = None):
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "toko version" in result.stdout
+    assert result.stdout.strip().startswith("toko version ")
 
 
 def test_list_models():
@@ -32,25 +32,84 @@ def test_list_models():
 
 
 def test_count_with_text():
-    result = runner.invoke(app, ["--text", "hello world"])
+    result = _invoke_cli(["--header", "--format", "tsv", "--text", "hello world"])
     assert result.exit_code == 0
-    assert "2" in result.stdout or "token" in result.stdout.lower()
+    assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
 
 
 def test_count_from_stdin():
-    result = runner.invoke(app, [], input="hello world")
+    result = runner.invoke(app, ["--header", "--format", "tsv"], input="hello world")
     assert result.exit_code == 0
-    assert "2" in result.stdout or "token" in result.stdout.lower()
+    assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
 
 
 def test_count_with_multiple_models():
-    result = runner.invoke(
-        app,
-        ["--model", "gpt-5", "--model", "gpt-5-mini", "--text", "hello"],
+    result = _invoke_cli(
+        [
+            "--header",
+            "--format",
+            "tsv",
+            "--model",
+            "gpt-5",
+            "--model",
+            "gpt-5-mini",
+            "--text",
+            "hello",
+        ]
     )
     assert result.exit_code == 0
-    assert "gpt-5" in result.stdout
-    assert "gpt-5-mini" in result.stdout
+    assert result.stdout.strip() == "model\ttokens\ngpt-5\t1\ngpt-5-mini\t1"
+
+
+def test_default_no_header_when_not_tty(monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: False)
+    text = "header-default-pipe"
+    result = _invoke_cli(["--model", "gpt-5", "--model", "gpt-5-mini", "--text", text])
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert lines
+    assert lines[0].startswith("gpt-5\t")
+    assert lines[1].startswith("gpt-5-mini\t")
+
+
+def test_header_flag_forces_header(monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: False)
+    text = "header-flag"
+    result = _invoke_cli(
+        ["--header", "--model", "gpt-5", "--model", "gpt-5-mini", "--text", text]
+    )
+    first_line = next((line for line in result.stdout.splitlines() if line), "")
+    assert first_line.lower().startswith("model")
+
+
+def test_tty_default_includes_header(monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    text = "tty-header"
+    result = _invoke_cli(
+        ["--format", "tsv", "--model", "gpt-5", "--model", "gpt-5-mini", "--text", text]
+    )
+    first_line = next((line for line in result.stdout.splitlines() if line), "")
+    assert first_line.lower().startswith("model")
+    assert any(line.startswith("gpt-5\t") for line in result.stdout.splitlines())
+
+
+def test_no_header_flag_respected(monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    text = "tty-no-header"
+    result = _invoke_cli(
+        [
+            "--no-header",
+            "--format",
+            "tsv",
+            "--model",
+            "gpt-5",
+            "--model",
+            "gpt-5-mini",
+            "--text",
+            text,
+        ]
+    )
+    first_line = next((line for line in result.stdout.splitlines() if line), "")
+    assert not first_line.lower().startswith("model")
 
 
 def test_partial_success_missing_anthropic_key(monkeypatch):
@@ -59,11 +118,12 @@ def test_partial_success_missing_anthropic_key(monkeypatch):
 
     text = "test-missing-anthropic-partial"
     result = _invoke_cli(
-        ["--model", "gpt-5", "--model", "claude-sonnet-4-5", "--text", text],
+        ["--model", "gpt-5", "--model", "claude-sonnet-4-5", "--text", text]
     )
     assert result.exit_code == 0
     assert "gpt-5" in result.stdout
     assert "claude-sonnet-4-5" not in result.stdout
+    assert "Failed to count tokens for claude-sonnet-4-5" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
 
 
@@ -72,9 +132,7 @@ def test_all_fail_missing_anthropic_key(monkeypatch):
     assert not os.environ.get("ANTHROPIC_API_KEY")
 
     text = "test-missing-anthropic-all"
-    result = _invoke_cli(
-        ["--model", "claude-sonnet-4-5", "--text", text],
-    )
+    result = _invoke_cli(["--model", "claude-sonnet-4-5", "--text", text])
     assert result.exit_code != 0
     assert "Error: All models failed to count tokens" in result.stderr
 
@@ -85,14 +143,7 @@ def test_partial_success_missing_google_key(monkeypatch):
 
     text = "test-missing-google-partial"
     result = _invoke_cli(
-        [
-            "--model",
-            "gpt-5",
-            "--model",
-            "models/gemini-2.5-flash",
-            "--text",
-            text,
-        ],
+        ["--model", "gpt-5", "--model", "models/gemini-2.5-flash", "--text", text]
     )
     assert result.exit_code == 0
     assert "gpt-5" in result.stdout
@@ -106,16 +157,10 @@ def test_partial_success_missing_hf_token(monkeypatch):
 
     text = "test-missing-hf-token-partial"
     result = _invoke_cli(
-        [
-            "--model",
-            "gpt-5",
-            "--model",
-            "meta-llama/Llama-3.2-1B",
-            "--text",
-            text,
-        ],
+        ["--model", "gpt-5", "--model", "meta-llama/Llama-3.2-1B", "--text", text]
     )
     assert result.exit_code == 0
     assert "gpt-5" in result.stdout
     assert "meta-llama/Llama-3.2-1B" not in result.stdout
+    assert "Failed to count tokens for meta-llama/Llama-3.2-1B" in result.stderr
     assert "HF_TOKEN" in result.stderr

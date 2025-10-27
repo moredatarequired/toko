@@ -66,9 +66,7 @@ def _get_tiktoken_encoding_for_model(model_name: str) -> TokenizerProtocol | Non
     return tokenizer
 
 
-def _get_tiktoken_encoding_by_name(
-    encoding_name: str,
-) -> TokenizerProtocol | None:
+def _get_tiktoken_encoding_by_name(encoding_name: str) -> TokenizerProtocol | None:
     """Return a tiktoken encoding by canonical encoding name."""
     cache_key = f"tiktoken:encoding:{encoding_name}"
     cached = _TOKENIZER_CACHE.get(cache_key)
@@ -136,8 +134,7 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> int:
     client = Anthropic(api_key=api_key)
     try:
         result = client.messages.count_tokens(
-            model=model_info.name,
-            messages=[{"role": "user", "content": text}],
+            model=model_info.name, messages=[{"role": "user", "content": text}]
         )
     except Exception as e:
         raise ValueError(
@@ -211,8 +208,7 @@ def _count_transformers(text: str, model_info: ModelInfo) -> int:
             from transformers import AutoTokenizer  # noqa: PLC0415
 
             _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
-                model_info.name,
-                trust_remote_code=True,
+                model_info.name, trust_remote_code=True
             )
 
         tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
@@ -280,25 +276,21 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
         if cached is not None:
             return cached
 
-    token_count = _count_with_tiktoken(text, model)
-    model_info = None
+    model_info = get_model(model)
+
+    token_count: int | None = None
+    if model_info.provider in {"openai", "xai"}:
+        names_to_try = []
+        if model_info.name != model:
+            names_to_try.append(model_info.name)
+        names_to_try.append(model)
+        for name in names_to_try:
+            token_count = _count_with_tiktoken(text, name)
+            if token_count is not None:
+                break
 
     if token_count is None:
-        model_info = get_model(model)
-        if model_info.name != model:
-            token_count = _count_with_tiktoken(text, model_info.name)
-
-    if token_count is not None:
-        if use_cache:
-            cache_count(text, model, token_count)
-            if model_info and model_info.name != model:
-                cache_count(text, model_info.name, token_count)
-        return token_count
-
-    if model_info is None:
-        model_info = get_model(model)
-
-    token_count = _count_with_provider(text, model_info)
+        token_count = _count_with_provider(text, model_info)
 
     if use_cache:
         cache_count(text, model, token_count)

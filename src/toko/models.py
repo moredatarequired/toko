@@ -169,11 +169,7 @@ TOKENIZER_ALIASES = {
     "llama": "meta-llama/Llama-3.2-1B",
 }
 
-MODELS = {
-    **ANTHROPIC_MODELS,
-    **GOOGLE_MODELS,
-    **XAI_MODELS,
-}
+MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
 
 
 def get_model(name: str) -> ModelInfo:

@@ -91,13 +91,17 @@ def main(
         ),
     ] = False,
     output_format: Annotated[
-        str,
-        typer.Option("--format", "-f", help="Output format: text, json, csv, tsv"),
+        str, typer.Option("--format", "-f", help="Output format: text, json, csv, tsv")
     ] = "text",
     cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
+    header: Annotated[
+        bool | None,
+        typer.Option(
+            "--header/--no-header", help="Include header row in tabular outputs"
+        ),
+    ] = None,
     list_models: Annotated[
-        bool,
-        typer.Option("--list-models", help="List all supported models and exit"),
+        bool, typer.Option("--list-models", help="List all supported models and exit")
     ] = False,
 ) -> None:
     """Toko - Token counter for LLMs."""
@@ -116,6 +120,7 @@ def main(
         total_only,
         output_format,
         cost,
+        header,
         list_models,
     )
 
@@ -305,6 +310,7 @@ def _handle_text_input(
     output_format: str,
     total_only: bool,
     include_costs: bool,
+    include_header: bool,
 ) -> None:
     results: dict[str, int] = {}
 
@@ -313,8 +319,7 @@ def _handle_text_input(
             results[model_name] = count_tokens(text, model=model_name)
         except ValueError as e:
             typer.echo(
-                f"Warning: Failed to count tokens for {model_name}: {e}",
-                err=True,
+                f"Warning: Failed to count tokens for {model_name}: {e}", err=True
             )
 
     if not results:
@@ -328,6 +333,7 @@ def _handle_text_input(
         output_format=output_format,
         total_only=total_only,
         costs=costs,
+        include_header=include_header,
     )
     typer.echo(output)
 
@@ -339,6 +345,7 @@ def _handle_file_inputs(
     output_format: str,
     total_only: bool,
     include_costs: bool,
+    include_header: bool,
 ) -> None:
     file_results: dict[str, dict[str, int]] = {}
     file_errors: dict[str, dict[str, str]] = {}
@@ -351,8 +358,7 @@ def _handle_file_inputs(
         for model_name in models:
             try:
                 file_results[display_name][model_name] = count_tokens(
-                    content,
-                    model=model_name,
+                    content, model=model_name
                 )
             except ValueError as e:
                 error_msg = str(e)
@@ -387,13 +393,13 @@ def _handle_file_inputs(
         output_format=output_format,
         total_only=total_only,
         costs=file_costs,
+        include_header=include_header,
     )
     typer.echo(output)
 
 
 def _calculate_costs(
-    counts: dict[str, int],
-    include_costs: bool,
+    counts: dict[str, int], include_costs: bool
 ) -> dict[str, float | None] | None:
     if not include_costs:
         return None
@@ -424,6 +430,7 @@ def _do_count(
     total_only: bool,
     output_format: str,
     cost: bool,
+    header: bool | None,
     list_models: bool,
 ) -> None:
     config = _load_runtime_config()
@@ -439,6 +446,7 @@ def _do_count(
     models = _resolve_models(config, model)
     actual_format = _resolve_output_format(config, output_format)
     merged_exclude = _merge_excludes(config, exclude)
+    include_header = header if header is not None else is_stdout_tty()
 
     inputs = _collect_inputs(
         paths,
@@ -456,6 +464,7 @@ def _do_count(
             output_format=actual_format,
             total_only=total_only,
             include_costs=cost,
+            include_header=include_header,
         )
         return
 
@@ -465,6 +474,7 @@ def _do_count(
         output_format=actual_format,
         total_only=total_only,
         include_costs=cost,
+        include_header=include_header,
     )
 
 

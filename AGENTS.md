@@ -23,7 +23,7 @@
 
 ## Running the CLI
 
-- Use `uv run toko <args>` to run the CLI during development.
+- Use `uv run toko <args>` to run the CLI during development, or `uv run --env-file .env toko <args>` to use with required environment variables.
 - Install hooks once with `just setup` (installs Lefthook git hooks).
 - Environment variables (API keys) can be loaded via `~/.config/toko/config.toml` or environment variables like `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.
 
@@ -47,15 +47,12 @@
 
 - Example (`feat(models): add gemini-2.0-flash support`) for a moderately complex change:
 
-  ```
-  feat(models): add gemini-2.0-flash support
+  **Title**: feat(models): add gemini-2.0-flash support
+  **Description**:
 
+  ```
   Add token counting for Gemini 2.0 Flash via Google API.
   - adds model registry entry for gemini-2.0-flash
   - implements count_tokens API call with caching
   - updates --list-models output
   ```
-
-- Open Pull Requests with `gh pr create --title <title> --body <description>`.
-
-- Use `gh pr list` and `gh issue list` for viewing PRs and issues.

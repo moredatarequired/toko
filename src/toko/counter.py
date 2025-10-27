@@ -1,6 +1,9 @@
 """Token counting logic."""
 
+import importlib
+import importlib.util
 import os
+from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 
 # Suppress transformers warning about missing PyTorch/TF/Flax
@@ -23,18 +26,27 @@ if TYPE_CHECKING:
 # Check for optional dependencies without importing them
 # (importing transformers triggers a warning if PyTorch/TF/Flax not installed)
 try:
-    import importlib.util
-
     HAS_MISTRAL = importlib.util.find_spec("mistral_common") is not None
 except ImportError:
     HAS_MISTRAL = False
 
 try:
-    import importlib.util
-
     HAS_TRANSFORMERS = importlib.util.find_spec("transformers") is not None
 except ImportError:
     HAS_TRANSFORMERS = False
+
+
+@lru_cache(maxsize=1)
+def _configure_transformers_logging() -> None:
+    if not HAS_TRANSFORMERS:
+        return
+    try:
+        hf_logging = importlib.import_module("transformers.utils.logging")
+    except Exception:
+        return
+    if hasattr(hf_logging, "set_verbosity_error"):
+        hf_logging.set_verbosity_error()
+
 
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
@@ -192,6 +204,8 @@ def _count_xai_via_transformers(text: str) -> int:
             "transformers package not available. Install with: uv tool install 'toko[transformers]'"
         )
 
+    _configure_transformers_logging()
+
     cache_key = "transformers:xai:grok-1"
     if cache_key not in _TOKENIZER_CACHE:
         from transformers import AutoTokenizer  # noqa: PLC0415
@@ -300,6 +314,8 @@ def _count_transformers(text: str, model_info: ModelInfo) -> int:
             f"{model_info.provider.capitalize()} models require the 'transformers' package. "
             "Install with: uv tool install 'toko[transformers]' or uv add 'toko[transformers]'"
         )
+
+    _configure_transformers_logging()
 
     try:
         cache_key = f"transformers:{model_info.name}"

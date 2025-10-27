@@ -1,10 +1,13 @@
 """Tests for optional provider support (transformers, mistral)."""
 
+import os
+
 import pytest
 
 from toko.counter import count_tokens
 
 
+@pytest.mark.slow
 def test_mistral_tokenization():
     """Test that Mistral tokenization works with mistral-common."""
     text = "Hello world, this is a test!"
@@ -20,15 +23,22 @@ def test_mistral_tokenization():
     assert 5 <= count <= 20
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(not os.environ.get("HF_TOKEN"), reason="HF_TOKEN not set")
 def test_llama_tokenization():
-    """Test that Llama tokenization works with HuggingFace transformers.
+    """Test that Llama tokenization works with HuggingFace transformers."""
+    text = "Hello world, this is a test!"
 
-    Note: This test is skipped because Llama models require HuggingFace authentication.
-    Users must accept Meta's license and set HF_TOKEN to use Llama models.
-    """
-    pytest.skip("Llama models require HuggingFace authentication - skipping")
+    model_name = "tinyllama/TinyLlama-1.1B-Chat-v1.0"
+
+    count = count_tokens(text, model_name, use_cache=False)
+
+    assert isinstance(count, int)
+    assert count > 0
+    assert 5 <= count <= 20
 
 
+@pytest.mark.slow
 def test_deepseek_tokenization():
     """Test that DeepSeek tokenization works with HuggingFace transformers."""
     text = "Hello world, this is a test!"
@@ -45,6 +55,7 @@ def test_deepseek_tokenization():
     assert 5 <= count <= 20
 
 
+@pytest.mark.slow
 def test_qwen_tokenization():
     """Test that Qwen tokenization works with HuggingFace transformers."""
     text = "Hello world, this is a test!"
@@ -61,6 +72,7 @@ def test_qwen_tokenization():
     assert 5 <= count <= 20
 
 
+@pytest.mark.slow
 def test_transformers_caching():
     """Test that transformers tokenizers are properly cached."""
     text = "Hello world!"
@@ -75,6 +87,7 @@ def test_transformers_caching():
     assert count1 == count2
 
 
+@pytest.mark.slow
 def test_multiple_providers():
     """Test that we can use multiple optional providers in the same session."""
     text = "Hello world!"

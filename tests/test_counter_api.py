@@ -7,6 +7,7 @@ import pytest
 from toko.counter import count_tokens
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
 )
@@ -18,6 +19,7 @@ def test_anthropic_count_tokens():
     assert 1 <= result <= 10
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
 )
@@ -33,6 +35,7 @@ def test_anthropic_different_models():
     assert abs(sonnet_count - haiku_count) <= 5
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not os.environ.get("GOOGLE_API_KEY"), reason="GOOGLE_API_KEY not set"
 )

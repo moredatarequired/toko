@@ -1,10 +1,10 @@
 [project]
 name = "toko"
 version = "0.2.0"
-description = "A CLI-first token counting tool for LLMs"
+description = "A token counting cli tool and package"
 readme = "README.md"
 authors = [
-    { name = "Hugh Wimberly", email = "hugh@fractional.ai" }
+    { name = "Hugh Wimberly", email = "hugh.wimberly@gmail.com" }
 ]
 requires-python = ">=3.14"
 dependencies = [
@@ -38,7 +38,6 @@ test = [
     "pytest>=8.4.2",
     "respx>=0.22.0",
 ]
-
 
 [project.scripts]
 toko = "toko.cli:app"

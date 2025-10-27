@@ -312,11 +312,10 @@ def _handle_text_input(
         try:
             results[model_name] = count_tokens(text, model=model_name)
         except ValueError as e:
-            if is_stderr_tty():
-                typer.echo(
-                    f"Warning: Failed to count tokens for {model_name}: {e}",
-                    err=True,
-                )
+            typer.echo(
+                f"Warning: Failed to count tokens for {model_name}: {e}",
+                err=True,
+            )
 
     if not results:
         typer.echo("Error: All models failed to count tokens", err=True)
@@ -360,13 +359,19 @@ def _handle_file_inputs(
                 file_errors[display_name][model_name] = error_msg
                 model_errors.setdefault(model_name, error_msg)
 
-    if model_errors and is_stderr_tty():
+    if model_errors:
         for model_name, error_msg in model_errors.items():
             failed_files = sum(
                 1 for errors in file_errors.values() if model_name in errors
             )
+            example_file = next(
+                filename
+                for filename, errors in file_errors.items()
+                if model_name in errors
+            )
             typer.echo(
-                f"Warning: Failed to count tokens for {model_name} on {failed_files} file(s): {error_msg}",
+                f"Warning: Failed to count tokens for {model_name} on {failed_files} file(s)"
+                f" (including {example_file}): {error_msg}",
                 err=True,
             )
 

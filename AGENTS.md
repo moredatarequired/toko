@@ -3,7 +3,7 @@
 ## Purpose & Scope
 
 - This is `toko`, a CLI-first token counting tool for LLMs.
-- The repository is hosted at https://github.com/hughwimberly/toko (or similar) and uses GitHub Actions for CI.
+- The repository is hosted at https://github.com/moredatarequired/toko and uses GitHub Actions for CI.
 - Core functionality: count tokens for multiple LLM providers (OpenAI via tiktoken, Anthropic/Google/xAI via their APIs), support multiple input methods (stdin, files, directories, URLs), and provide flexible output formats.
 
 ## Python Conventions
@@ -18,7 +18,7 @@
 
 - Run the linter after every significant change: `just lint` (runs `ruff check --fix` then `ruff format`).
 - Type checking: `just typecheck` (invokes `ty`).
-- Tests: `just test` (pytest).
+- Tests: `just test-all` (pytest).
 - Tests should rely on minimal (preferably no) mocking. An integration test that actually calls an external API (or uses tiktoken) is much better and more useful than unit tests that mock dependencies.
 
 ## Running the CLI

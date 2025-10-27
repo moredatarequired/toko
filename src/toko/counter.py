@@ -205,17 +205,17 @@ def _count_transformers(text: str, model_info: ModelInfo) -> int:
             "Install with: uv tool install 'toko[transformers]' or uv add 'toko[transformers]'"
         )
 
-    cache_key = f"transformers:{model_info.name}"
-    if cache_key not in _TOKENIZER_CACHE:
-        from transformers import AutoTokenizer  # noqa: PLC0415
-
-        _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
-            model_info.name,
-            trust_remote_code=True,
-        )
-
-    tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
     try:
+        cache_key = f"transformers:{model_info.name}"
+        if cache_key not in _TOKENIZER_CACHE:
+            from transformers import AutoTokenizer  # noqa: PLC0415
+
+            _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
+                model_info.name,
+                trust_remote_code=True,
+            )
+
+        tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
         tokens = tokenizer.encode(text)
     except Exception as e:
         error_str = str(e)
@@ -235,6 +235,11 @@ def _count_transformers(text: str, model_info: ModelInfo) -> int:
             raise ValueError(
                 f"Model '{model_info.name}' requires authentication. "
                 "Set HF_TOKEN environment variable or run: huggingface-cli login"
+            ) from e
+        if "gated" in error_str.lower() or "access to model" in error_str.lower():
+            raise ValueError(
+                f"Model '{model_info.name}' is gated on Hugging Face. Accept the license"
+                " and provide HF_TOKEN or run: huggingface-cli login"
             ) from e
         raise ValueError(
             f"Failed to count tokens for {model_info.provider.capitalize()} model {model_info.name}: {error_str}"

@@ -21,7 +21,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Sync dependencies (all groups)
-        run: uv sync --all-groups
+        run: uv sync --all-groups --all-extras
 
       - name: Install just
         uses: extractions/setup-just@v3

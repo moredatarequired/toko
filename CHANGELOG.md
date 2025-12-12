@@ -1,3 +1,9 @@
+## 0.2.1 (2025-12-12)
+
+### Feat
+
+- **models**: add claude-opus-4-5 and gpt-5.x model support
+
 ## 0.2.0 (2025-10-27)
 
 ### Feat

@@ -1,6 +1,6 @@
 [project]
 name = "toko"
-version = "0.2.0"
+version = "0.2.1"
 description = "A token counting cli tool and package"
 readme = "README.md"
 authors = [

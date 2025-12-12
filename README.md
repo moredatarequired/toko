@@ -94,13 +94,13 @@ When stdout is not a TTY (for example, when piping into another command) Toko em
 ### Compare models and estimate cost
 
 ```sh
-toko --header --format tsv --model gpt-5 --model gpt-4.1-mini --text "The quick brown fox" --cost
+toko --header --format tsv --model gpt-5-mini --model claude-opus-4-5 --text "The quick brown fox" --cost
 ```
 
 ```txt
 model	tokens	cost
-gpt-5	4	$0.000005
-gpt-4.1-mini	4	$0.000008
+gpt-5-mini	4	$0.000005
+claude-opus-4-5	11	$0.000055
 ```
 
 Costs come from the bundled `genai-prices` feed. Models without pricing information display `N/A`.

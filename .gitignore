@@ -14,7 +14,7 @@ wheels/
 htmlcov/
 
 # uv
-uv.lock
+# uv.lock is committed for reproducible CI builds
 
 # Pytest
 .pytest_cache/

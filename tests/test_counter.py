@@ -41,3 +41,16 @@ def test_count_tokens_unknown_model():
     """Test that unknown model raises error."""
     with pytest.raises(ValueError, match="Could not detect provider"):
         count_tokens("hello", model="unknown-model-xyz")
+
+
+def test_count_tokens_gpt5_variants():
+    """Test that gpt-5.x variants use the gpt-5 tokenizer."""
+    text = "The quick brown fox jumps over the lazy dog"
+    gpt5_count = count_tokens(text, model="gpt-5")
+    gpt51_count = count_tokens(text, model="gpt-5.1")
+    gpt52_count = count_tokens(text, model="gpt-5.2")
+
+    # All variants should return the same count (same tokenizer)
+    assert gpt5_count > 0
+    assert gpt51_count == gpt5_count
+    assert gpt52_count == gpt5_count

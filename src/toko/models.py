@@ -72,6 +72,7 @@ def detect_provider(model: str) -> str | None:
 
 # Anthropic models (API-based counting)
 _ANTHROPIC_MODELS = [
+    "claude-opus-4-5-20251101",
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
     "claude-opus-4-1-20250805",
@@ -260,6 +261,10 @@ OPENAI_MODEL_FALLBACKS = {
     "gpt-4.1-nano": "gpt-4.1",
     "gpt-5-mini": "gpt-5",
     "gpt-5-nano": "gpt-5",
+    "gpt-5.1": "gpt-5",
+    "gpt-5.1-pro": "gpt-5",
+    "gpt-5.2": "gpt-5",
+    "gpt-5.2-pro": "gpt-5",
 }
 
 POPULAR_OPENAI_MODELS = tuple(sorted(OPENAI_MODEL_FALLBACKS))

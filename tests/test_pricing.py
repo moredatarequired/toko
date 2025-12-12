@@ -148,6 +148,12 @@ class TestPricingAccuracy:
         # Should be approximately $0.003 for 1000 tokens
         assert 0.002 <= cost <= 0.004
 
+    def test_claude_opus_4_5_pricing(self):
+        """Test Claude Opus 4.5 pricing is available."""
+        cost = estimate_cost(1000, "claude-opus-4-5")
+        assert cost is not None
+        assert cost > 0
+
     def test_zero_tokens_pricing(self):
         """Test pricing with zero tokens."""
         cost = estimate_cost(0, "gpt-5")

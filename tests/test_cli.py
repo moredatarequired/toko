@@ -1,5 +1,6 @@
 """Tests for the CLI."""
 
+import json
 import os
 from pathlib import Path
 
@@ -101,6 +102,36 @@ def test_cost_column_in_tsv():
     lines = [line for line in result.stdout.splitlines() if line]
     assert lines[0] == "model\ttokens\tcost"
     assert lines[1].startswith("gpt-5\t")
+
+
+def test_json_omits_cost_without_flag():
+    result = _invoke_cli(["--format", "json", "--model", "gpt-5", "--text", "hello"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"gpt-5": 1}
+
+
+def test_json_includes_cost_with_flag():
+    result = _invoke_cli(
+        ["--format", "json", "--model", "gpt-5", "--text", "hello", "--cost"]
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert set(payload["gpt-5"]) == {"tokens", "cost"}
+    assert payload["gpt-5"]["tokens"] == 1
+
+
+def test_json_file_output_includes_cost_with_flag(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = runner.invoke(
+        app, ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    entry = next(iter(payload.values()))["gpt-5"]
+    assert set(entry) == {"tokens", "cost"}
+    assert entry["tokens"] == 2
 
 
 def test_default_no_header_when_not_tty(monkeypatch):

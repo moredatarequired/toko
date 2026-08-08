@@ -75,16 +75,27 @@ def format_text(
     return format_table(results, costs=costs, include_header=include_header)
 
 
-def format_json(results: dict[str, int]) -> str:
+def format_json(
+    results: dict[str, int], *, costs: dict[str, float | None] | None = None
+) -> str:
     """Format results as JSON.
 
     Args:
         results: Dictionary mapping model names to token counts
+        costs: Optional dictionary mapping model names to costs
 
     Returns:
         JSON-formatted output
     """
-    return json.dumps(results, indent=2)
+    if not costs:
+        return json.dumps(results, indent=2)
+    # Costs stay as raw numbers (or null) rather than the display strings the
+    # table formats use, so the output remains machine-readable.
+    payload = {
+        model: {"tokens": count, "cost": costs.get(model)}
+        for model, count in results.items()
+    }
+    return json.dumps(payload, indent=2)
 
 
 def format_csv(
@@ -170,12 +181,29 @@ def format_output(
             results, total_only, costs=costs, include_header=include_header
         )
     if output_format == "json":
-        return format_json(results)
+        return format_json(results, costs=costs)
     if output_format == "csv":
         return format_csv(results, include_header=include_header, costs=costs)
     if output_format == "tsv":
         return format_tsv(results, include_header=include_header, costs=costs)
     raise ValueError(f"Unknown format: {output_format}")
+
+
+def _format_file_json(
+    file_results: dict[str, dict[str, int]],
+    *,
+    costs: dict[str, dict[str, float | None]] | None,
+) -> str:
+    if not costs:
+        return json.dumps(file_results, indent=2)
+    payload = {
+        filename: {
+            model: {"tokens": count, "cost": costs.get(filename, {}).get(model)}
+            for model, count in model_counts.items()
+        }
+        for filename, model_counts in file_results.items()
+    }
+    return json.dumps(payload, indent=2)
 
 
 def _collect_models(file_results: dict[str, dict[str, int]]) -> list[str]:
@@ -302,7 +330,7 @@ def format_file_table(
 ) -> str:
     """Format per-file token counts with files as rows and models as columns."""
     if output_format == "json":
-        return json.dumps(file_results, indent=2)
+        return _format_file_json(file_results, costs=costs)
 
     models = _collect_models(file_results)
 

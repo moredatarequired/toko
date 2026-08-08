@@ -4,10 +4,12 @@ import json
 import os
 from pathlib import Path
 
+import httpx
+import respx
 from typer.testing import CliRunner
 
 from toko.cli import app
-from toko.counter import count_tokens
+from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 
 runner = CliRunner()
 
@@ -224,6 +226,40 @@ def test_partial_success_missing_google_key(monkeypatch):
     assert result.stdout.strip() == str(expected)
     assert "gemini-2.5-flash" not in result.stdout
     assert "GOOGLE_API_KEY" in result.stderr
+
+
+@respx.mock
+def test_anthropic_bad_response_reports_error_without_traceback():
+    respx.post(ANTHROPIC_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"unexpected": "shape"})
+    )
+
+    result = _invoke_cli(
+        ["--model", "claude-sonnet-4-5", "--text", "hello"],
+        {"ANTHROPIC_API_KEY": "test-key"},
+    )
+
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    assert "Unexpected response from Anthropic" in result.stderr
+    assert "Error: All models failed to count tokens" in result.stderr
+
+
+@respx.mock
+def test_google_bad_response_reports_error_without_traceback():
+    respx.post(url__startswith=GOOGLE_COUNT_URL_BASE).mock(
+        return_value=httpx.Response(200, json={"unexpected": "shape"})
+    )
+
+    result = _invoke_cli(
+        ["--model", "gemini-2.5-flash", "--text", "hello"],
+        {"GOOGLE_API_KEY": "test-key"},
+    )
+
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    assert "Unexpected response from Google" in result.stderr
+    assert "Error: All models failed to count tokens" in result.stderr
 
 
 def test_partial_success_missing_hf_token(monkeypatch):

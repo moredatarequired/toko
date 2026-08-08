@@ -270,7 +270,13 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> int:
 
     input_tokens = data.get("input_tokens")
     if not isinstance(input_tokens, int):
-        raise TypeError(f"Unexpected response from Anthropic token API: {data!r}")
+        # TRY004 wants TypeError, but this is a malformed API payload rather than a
+        # caller passing the wrong type, and callers (the CLI included) handle
+        # ValueError — a TypeError here escapes as a traceback.
+        raise ValueError(  # noqa: TRY004
+            f"Unexpected response from Anthropic token API for {model_info.name}: "
+            f"no integer 'input_tokens' field in {data!r}"
+        )
     return input_tokens
 
 
@@ -295,7 +301,11 @@ def _count_google(text: str, model_info: ModelInfo) -> int:
 
     total_tokens = data.get("totalTokens")
     if not isinstance(total_tokens, int):
-        raise TypeError(f"Unexpected response from Google token API: {data!r}")
+        # See _count_anthropic: ValueError is the type callers are written to catch.
+        raise ValueError(  # noqa: TRY004
+            f"Unexpected response from Google token API for {model_info.name}: "
+            f"no integer 'totalTokens' field in {data!r}"
+        )
     return total_tokens
 
 

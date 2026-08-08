@@ -2,9 +2,11 @@
 
 import os
 
+import httpx
 import pytest
+import respx
 
-from toko.counter import count_tokens
+from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 
 
 @pytest.mark.slow
@@ -72,3 +74,27 @@ def test_missing_google_key():
     finally:
         if original_key:
             os.environ["GOOGLE_API_KEY"] = original_key
+
+
+@respx.mock
+def test_anthropic_unexpected_payload_raises_value_error(monkeypatch):
+    """A malformed success response must raise the error type callers catch."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    respx.post(ANTHROPIC_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"unexpected": "shape"})
+    )
+
+    with pytest.raises(ValueError, match="Unexpected response from Anthropic"):
+        count_tokens("hello", model="claude-sonnet-4-5", use_cache=False)
+
+
+@respx.mock
+def test_google_unexpected_payload_raises_value_error(monkeypatch):
+    """A malformed success response must raise the error type callers catch."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    respx.post(url__startswith=GOOGLE_COUNT_URL_BASE).mock(
+        return_value=httpx.Response(200, json={"unexpected": "shape"})
+    )
+
+    with pytest.raises(ValueError, match="Unexpected response from Google"):
+        count_tokens("hello", model="gemini-2.5-flash", use_cache=False)

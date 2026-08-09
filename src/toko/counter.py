@@ -3,6 +3,7 @@
 import importlib
 import importlib.util
 import os
+import sys
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -50,6 +51,10 @@ def _configure_transformers_logging() -> None:
 
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
+
+# Models already warned about, so counting a directory does not repeat the same
+# approximation notice once per file.
+_APPROXIMATE_WARNED: set[str] = set()
 
 ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 ANTHROPIC_API_VERSION = "2023-06-01"
@@ -124,6 +129,18 @@ def _count_openai(_text: str, model_info: ModelInfo) -> int:
     )
 
 
+def _warn_approximate(model_name: str, reason: str) -> None:
+    """Tell the user on stderr that a count is an approximation, once per model."""
+    if model_name in _APPROXIMATE_WARNED:
+        return
+    _APPROXIMATE_WARNED.add(model_name)
+    print(
+        f"Warning: {reason}, so {model_name} was counted with the Grok-1 Hugging Face "
+        "tokenizer. This count is approximate, not exact.",
+        file=sys.stderr,
+    )
+
+
 def _count_xai(text: str, model_info: ModelInfo) -> int:
     api_key = os.environ.get("XAI_API_KEY")
     if api_key:
@@ -131,15 +148,11 @@ def _count_xai(text: str, model_info: ModelInfo) -> int:
             return _count_xai_via_api(text, model_info.name, api_key)
         except Exception as api_error:
             last_error = api_error
-        else:
-            last_error = None
     else:
-        last_error = ValueError(
-            "XAI_API_KEY environment variable not set. Falling back to Hugging Face tokenizer."
-        )
+        last_error = None
 
     try:
-        return _count_xai_via_transformers(text)
+        count = _count_xai_via_transformers(text)
     except Exception as hf_error:
         message = (
             f"Failed to count tokens for xAI model {model_info.name}. "
@@ -149,6 +162,14 @@ def _count_xai(text: str, model_info: ModelInfo) -> int:
         if api_key and last_error is not None:
             raise ValueError(f"{message} Last API error: {last_error}") from hf_error
         raise ValueError(message) from hf_error
+
+    reason = (
+        f"the xAI token API was unavailable ({last_error})"
+        if last_error is not None
+        else "XAI_API_KEY is not set"
+    )
+    _warn_approximate(model_info.name, reason)
+    return count
 
 
 def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
@@ -249,7 +270,13 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> int:
 
     input_tokens = data.get("input_tokens")
     if not isinstance(input_tokens, int):
-        raise TypeError(f"Unexpected response from Anthropic token API: {data!r}")
+        # TRY004 wants TypeError, but this is a malformed API payload rather than a
+        # caller passing the wrong type, and callers (the CLI included) handle
+        # ValueError — a TypeError here escapes as a traceback.
+        raise ValueError(  # noqa: TRY004
+            f"Unexpected response from Anthropic token API for {model_info.name}: "
+            f"no integer 'input_tokens' field in {data!r}"
+        )
     return input_tokens
 
 
@@ -274,7 +301,11 @@ def _count_google(text: str, model_info: ModelInfo) -> int:
 
     total_tokens = data.get("totalTokens")
     if not isinstance(total_tokens, int):
-        raise TypeError(f"Unexpected response from Google token API: {data!r}")
+        # See _count_anthropic: ValueError is the type callers are written to catch.
+        raise ValueError(  # noqa: TRY004
+            f"Unexpected response from Google token API for {model_info.name}: "
+            f"no integer 'totalTokens' field in {data!r}"
+        )
     return total_tokens
 
 

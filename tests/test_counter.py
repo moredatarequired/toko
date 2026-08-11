@@ -80,6 +80,18 @@ def test_exactly_resolved_openai_models_are_not_warned_about(model, capsys):
     assert capsys.readouterr().err == ""
 
 
+@pytest.mark.parametrize(
+    ("spelling", "canonical"), [("GPT-5", "gpt-5"), ("Gpt-5.2", "gpt-5.2")]
+)
+def test_openai_model_names_resolve_case_insensitively(spelling, canonical, capsys):
+    text = "The quick brown fox jumps over the lazy dog"
+    expected = count_tokens(text, model=canonical, use_cache=False)
+    capsys.readouterr()
+
+    assert count_tokens(text, model=spelling, use_cache=False) == expected
+    assert capsys.readouterr().err == ""
+
+
 def test_unknown_openai_model_warns_once(capsys):
     count_tokens("hello", model="gpt-6", use_cache=False)
     count_tokens("goodbye", model="gpt-6", use_cache=False)

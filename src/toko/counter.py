@@ -141,7 +141,9 @@ def _warn_openai_estimate(model_name: str, encoding_name: str) -> None:
 
 
 def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
-    encoding = _get_tiktoken_encoding_for_model(model_info.name)
+    # tiktoken's own table is lowercase, and so is the OPENAI_MODEL_ENCODINGS lookup
+    # in _build_openai_model; without matching here, 'GPT-5' would be called unknown.
+    encoding = _get_tiktoken_encoding_for_model(model_info.name.lower())
     if encoding is not None:
         return CountResult(len(encoding.encode(text)))
 

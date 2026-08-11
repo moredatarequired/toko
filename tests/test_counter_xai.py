@@ -23,13 +23,6 @@ class StubTokenizer:
         return list(text.encode())
 
 
-@pytest.fixture(autouse=True)
-def _reset_approximation_warnings():
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
-    yield
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
-
-
 def _install_stub_tokenizer(monkeypatch):
     monkeypatch.setattr(counter, "HAS_TRANSFORMERS", True)
     monkeypatch.setitem(
@@ -107,6 +100,39 @@ def test_xai_approximation_warning_is_not_repeated(monkeypatch, capsys):
         counter.count_tokens(text, "grok-4.5", use_cache=False)
 
     assert capsys.readouterr().err.count("approximate") == 1
+
+
+class TestRetirementWarningsThroughCountTokens:
+    """count_tokens must caveat a retired model's count however it was obtained.
+
+    grok-3 is served by grok-4.3, so its number is deliberately mislabelled --
+    the caveat is the only thing that says so.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _offline_xai(self, monkeypatch):
+        monkeypatch.delenv("XAI_API_KEY", raising=False)
+        _install_stub_tokenizer(monkeypatch)
+
+    def test_a_cached_count_still_warns_that_the_model_is_retired(self, capsys):
+        assert counter.count_tokens("hi", "grok-3") == len("hi")
+        assert "retired" in capsys.readouterr().err
+
+        # The dedup set is process-global, so clearing it is what a second
+        # `toko` invocation looks like -- except the cache is now warm.
+        counter._RETIRED_WARNED.clear()  # noqa: SLF001
+        assert counter.count_tokens("hi", "grok-3") == len("hi")
+        assert "retired" in capsys.readouterr().err
+
+    def test_the_retirement_warning_is_not_repeated_within_a_run(self, capsys):
+        for text in ("one", "two", "three"):
+            counter.count_tokens(text, "grok-3")
+
+        assert capsys.readouterr().err.count("was retired") == 1
+
+    def test_a_current_model_is_never_warned_about(self, capsys):
+        counter.count_tokens("hi", "grok-4.5")
+        assert "retired" not in capsys.readouterr().err
 
 
 def test_xai_failure_without_options(monkeypatch):

@@ -443,14 +443,16 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
     Raises:
         ValueError: If model is not supported or API key is missing
     """
-    # Check cache first
+    # Resolve before the cache lookup: a retired name's caveat describes the
+    # number, not the work of producing it, so a cached count needs it too.
+    model_info = get_model(model)
+    _warn_if_retired(model_info)
+
     if use_cache:
         cached = get_cached_count(text, model)
         if cached is not None:
             return cached
 
-    model_info = get_model(model)
-    _warn_if_retired(model_info)
     token_count = _count_with_provider(text, model_info)
 
     if use_cache:

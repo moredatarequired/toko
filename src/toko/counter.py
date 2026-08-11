@@ -1,5 +1,6 @@
 """Token counting logic."""
 
+import contextlib
 import importlib
 import importlib.util
 import os
@@ -80,11 +81,22 @@ def _redact_key(message: str, api_key: str | None) -> str:
     echo the credential it rejected. The key is replaced in its verbatim,
     percent-encoded and backslash-escaped forms -- the last because a key holding a
     control character reaches the message as the two characters of an escape sequence.
+
+    Never raises, whatever the key contains: callers are already handling a failure,
+    and an exception here would both discard their message and carry the key in its
+    own payload.
     """
     if not api_key:
         return message
     needles = {api_key, api_key.strip()}
-    needles |= {quote(needle, safe="") for needle in tuple(needles)}
+    for needle in tuple(needles):
+        # A key holding a byte that is not valid UTF-8 reaches us as a surrogate,
+        # because that is how os.environ decodes one, and quote() cannot encode a
+        # surrogate as UTF-8. surrogateescape turns it back into the original byte;
+        # a value it still refuses simply contributes no encoded form, since a
+        # redaction helper that raises would destroy the message it was sanitising.
+        with contextlib.suppress(UnicodeError):
+            needles.add(quote(needle, safe="", errors="surrogateescape"))
     needles |= {repr(needle)[1:-1] for needle in tuple(needles)}
     for needle in sorted(needles, key=len, reverse=True):
         if len(needle) >= _MIN_REDACTABLE_KEY_LENGTH:
@@ -92,20 +104,31 @@ def _redact_key(message: str, api_key: str | None) -> str:
     return message
 
 
-def _describe_request_failure(exc: Exception, url: str) -> str:
+def _describe_request_failure(
+    exc: Exception, url: str, api_key: str | None = None
+) -> str:
     """Say what a failed request did without quoting the transport's own message.
 
     httpx echoes back whatever it was handed -- the request URL for a key sent as a
     query parameter, the raw header bytes for a key it refused to send -- and no
     search-and-replace can reliably undo that, because a key holding one control
     character appears in the message as the two characters of an escape sequence.
-    Reporting only the status code and the exception type removes the whole class.
+    Reporting only the status code and the exception type removes the whole class,
+    bar the one carve-out below where the transport's message is provably an errno.
     """
     endpoint = url.split("?", 1)[0].split("#", 1)[0]
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         phrase = httpx.codes.get_reason_phrase(status) or "response"
         return f"HTTP {status} {phrase} from {endpoint}"
+    if isinstance(exc, httpx.ConnectError):
+        # The one exception to the rule above: a ConnectError is raised before any
+        # request bytes exist, and its text is the OS-level cause behind the failed
+        # socket or name lookup, so it cannot hold the key. Without it a DNS failure
+        # and a refused connection read identically. Redacted regardless.
+        cause = _redact_key(str(exc), api_key).strip()
+        if cause:
+            return f"ConnectError contacting {endpoint}: {cause}"
     return f"{type(exc).__name__} contacting {endpoint}"
 
 
@@ -276,7 +299,7 @@ def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
     except (httpx.HTTPError, ValueError) as exc:
         raise ValueError(
             f"xAI tokenization request failed: "
-            f"{_describe_request_failure(exc, XAI_TOKENIZE_URL)}"
+            f"{_describe_request_failure(exc, XAI_TOKENIZE_URL, api_key)}"
         ) from exc
 
     count = _extract_token_count(data)
@@ -357,7 +380,7 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
     except httpx.HTTPError as exc:
         raise ValueError(
             f"Failed to count tokens for Anthropic model {model_info.name}: "
-            f"{_describe_request_failure(exc, ANTHROPIC_COUNT_URL)}. "
+            f"{_describe_request_failure(exc, ANTHROPIC_COUNT_URL, api_key)}. "
             "The model may not exist or may not be available with your API key."
         ) from exc
 
@@ -394,7 +417,7 @@ def _count_google(text: str, model_info: ModelInfo) -> CountResult:
     except httpx.HTTPError as exc:
         raise ValueError(
             f"Failed to count tokens for Google model {model_info.name}: "
-            f"{_describe_request_failure(exc, url)}. "
+            f"{_describe_request_failure(exc, url, api_key)}. "
             "The model may not exist or may not support token counting."
         ) from exc
 

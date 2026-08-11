@@ -1,25 +1,44 @@
 """API keys must never reach a user-visible error message, warning or traceback."""
 
-import fcntl
 import json
 import os
-import pty
+import select
 import struct
 import subprocess
 import sys
-import termios
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import httpx
 import pytest
 import respx
 
 import toko.counter as counter
-from toko.counter import GOOGLE_COUNT_URL_BASE, _redact_key, count_tokens
+from toko.counter import (
+    GOOGLE_COUNT_URL_BASE,
+    _describe_request_failure,
+    _redact_key,
+    count_tokens,
+)
+
+try:
+    import fcntl
+    import pty
+    import termios
+
+    HAS_PTY = True
+except ImportError:  # pty, termios and fcntl are POSIX-only
+    HAS_PTY = False
 
 SENTINEL = "toko-test-sentinel-do-not-log"
+
+# os.environ hands back a byte that is not valid UTF-8 as a surrogate escape, and a
+# surrogate is exactly what UTF-8 cannot encode.
+NON_UTF8_KEY_BODY = "toko-key-with-a-raw-byte-do-not-log"
+NON_UTF8_KEY = f"{NON_UTF8_KEY_BODY}\udce9"
 
 # (environment variable, model, phrase the failure message opens with)
 PROVIDERS = [
@@ -58,6 +77,12 @@ def local_api(monkeypatch):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    # httpx honours HTTP_PROXY for http:// URLs and does not exempt loopback on its
+    # own, so without this every request here is posted to the developer's proxy.
+    # Both spellings, because whichever appears later in the environment wins.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
 
     base = f"http://127.0.0.1:{server.server_address[1]}"
     monkeypatch.setattr(counter, "GOOGLE_COUNT_URL_BASE", base)
@@ -148,6 +173,26 @@ def test_an_echoed_key_is_redacted_from_the_xai_approximation_warning(
     assert "***" in stderr
 
 
+def test_the_xai_approximation_survives_a_key_holding_a_non_utf8_byte(
+    local_api, monkeypatch, capsys
+):
+    """Redacting such a key used to raise, taking the fallback count down with it.
+
+    The user saw "All models failed to count tokens" instead of an approximate count.
+    """
+    monkeypatch.setenv("XAI_API_KEY", NON_UTF8_KEY)
+    monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 7)
+
+    assert count_tokens("hello", model="grok-4.5", use_cache=False) == 7
+
+    stderr = capsys.readouterr().err
+    assert "approximate" in stderr
+    assert NON_UTF8_KEY_BODY not in stderr
+    # httpx refuses such a header before sending, so the server never sees a request.
+    assert local_api.base in stderr
+    assert local_api.requests == []
+
+
 @pytest.mark.parametrize(("env_var", "model", "provider"), PROVIDERS)
 def test_a_json_list_body_raises_value_error_rather_than_tracebacking(
     local_api, monkeypatch, env_var, model, provider
@@ -198,8 +243,10 @@ def test_google_key_travels_in_header_not_url(monkeypatch):
     assert SENTINEL not in str(request.url)
 
 
-# Rich truncates strings in a frame-locals panel to ten characters, so a longer
-# sentinel could not be found in the rendered traceback even when it did leak.
+# Rich truncates a string in a frame-locals panel to 80 characters, so keep the
+# sentinel under 80: a longer one could not be found in the rendered traceback even
+# when it did leak. (A real Anthropic key is longer than that, and would have leaked
+# as its first 80 characters -- still a total compromise.)
 TRACEBACK_SENTINEL = "LEAKYKEY42"
 
 _TRACEBACK_DRIVER = """
@@ -219,6 +266,9 @@ app(["raise-for-test"])
 """
 
 
+_PTY_READ_TIMEOUT = 60.0
+
+
 def _run_under_pty(script: str, env: dict[str, str]) -> str:
     """Run a script attached to a terminal, since Rich renders differently without one."""
     primary, secondary = pty.openpty()
@@ -232,8 +282,18 @@ def _run_under_pty(script: str, env: dict[str, str]) -> str:
     )
     os.close(secondary)
     chunks = []
+    deadline = time.monotonic() + _PTY_READ_TIMEOUT
+    timed_out = False
     try:
         while True:
+            # A child hanging with the pty still open never reaches EIO, and an untimed
+            # read would then hang the whole suite instead of failing this one test.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            if not select.select([primary], [], [], remaining)[0]:
+                continue
             try:
                 data = os.read(primary, 65536)
             except OSError:  # the terminal reports EIO once the child is gone
@@ -243,10 +303,15 @@ def _run_under_pty(script: str, env: dict[str, str]) -> str:
             chunks.append(data)
     finally:
         os.close(primary)
-    process.wait(timeout=60)
+        if timed_out:
+            process.kill()
+        process.wait(timeout=10)
+    if timed_out:
+        pytest.fail(f"child did not exit within {_PTY_READ_TIMEOUT}s")
     return b"".join(chunks).decode(errors="replace")
 
 
+@pytest.mark.skipif(not HAS_PTY, reason="pty, termios and fcntl are POSIX-only")
 def test_a_rendered_traceback_does_not_show_frame_locals(tmp_path):
     """An unhandled error must not print the api_key held by the frame that raised."""
     script = tmp_path / "traceback_driver.py"
@@ -299,3 +364,73 @@ def test_redact_key_leaves_short_values_alone():
     assert _redact_key("https://example.test/abcdef", "abc") == (
         "https://example.test/abcdef"
     )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [NON_UTF8_KEY, "\ud800-lone-high-surrogate-key"],
+    ids=["surrogate-escaped-byte", "lone-high-surrogate"],
+)
+def test_redact_key_does_not_raise_on_a_key_utf8_cannot_encode(key):
+    """quote() used to raise UnicodeEncodeError here -- with the key in its payload."""
+    assert _redact_key(f"body echoed {key} back", key) == "body echoed *** back"
+
+
+def test_redact_key_replaces_the_percent_encoded_form_of_a_non_utf8_byte():
+    assert "%E9" not in _redact_key(
+        f"url ?key={quote(NON_UTF8_KEY, safe='', errors='surrogateescape')}",
+        NON_UTF8_KEY,
+    )
+
+
+def test_describe_request_failure_strips_a_query_string_and_fragment():
+    """No caller passes a key in the URL today; this pins the guard against that."""
+    described = _describe_request_failure(
+        httpx.ReadTimeout("slow"), f"https://example.test/v1:count?key={SENTINEL}#frag"
+    )
+
+    assert described == "ReadTimeout contacting https://example.test/v1:count"
+
+
+def test_describe_request_failure_does_not_quote_a_protocol_error():
+    """A LocalProtocolError's text is the raw header bytes httpx refused to send."""
+    described = _describe_request_failure(
+        httpx.LocalProtocolError(f"Illegal header value b'Bearer {SENTINEL}'"),
+        "https://example.test/v1",
+        SENTINEL,
+    )
+
+    assert described == "LocalProtocolError contacting https://example.test/v1"
+
+
+def test_describe_request_failure_keeps_the_errno_behind_a_connect_error():
+    """DNS failure and a refused connection otherwise read identically."""
+    described = _describe_request_failure(
+        httpx.ConnectError("[Errno -2] Name or service not known"),
+        "https://example.test/v1",
+        SENTINEL,
+    )
+
+    assert described == (
+        "ConnectError contacting https://example.test/v1: "
+        "[Errno -2] Name or service not known"
+    )
+
+
+def test_a_connect_error_is_redacted_even_though_it_cannot_hold_the_key():
+    described = _describe_request_failure(
+        httpx.ConnectError(f"[Errno 111] {SENTINEL} refused"),
+        "https://example.test/v1",
+        SENTINEL,
+    )
+
+    assert SENTINEL not in described
+    assert "[Errno 111] *** refused" in described
+
+
+def test_a_connect_error_without_a_message_still_says_what_failed():
+    described = _describe_request_failure(
+        httpx.ConnectError(""), "https://example.test/v1", SENTINEL
+    )
+
+    assert described == "ConnectError contacting https://example.test/v1"

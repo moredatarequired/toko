@@ -5,6 +5,7 @@ import warnings
 import pytest
 from genai_prices.data_snapshot import set_custom_snapshot
 
+import toko.counter as counter
 from toko.cache import clear_cache, set_cache_dir
 
 # Suppress noisy DeprecationWarnings emitted by optional tokenizer backends.
@@ -53,3 +54,10 @@ def _bundled_prices():
 @pytest.fixture
 def cache_dir(_cache_root):
     return _cache_root
+
+
+@pytest.fixture(autouse=True)
+def _reset_approximation_warnings():
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
+    yield
+    counter._WARNED_ONCE.clear()  # noqa: SLF001

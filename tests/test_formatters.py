@@ -1,5 +1,7 @@
 """Tests for output formatters."""
 
+import csv
+import io
 import json
 
 from toko.formatters import format_file_table, format_output
@@ -90,6 +92,45 @@ def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
         include_header=False,
     )
     assert output == "TOTAL,4,$0.0002,5,N/A"
+
+
+def _csv_rows(output: str) -> list[list[str]]:
+    return list(csv.reader(io.StringIO(output)))
+
+
+def test_csv_quotes_a_comma_in_a_model_name():
+    output = format_output({"gpt-5, preview": 12}, output_format="csv")
+    assert output == 'model,tokens\n"gpt-5, preview",12'
+    assert _csv_rows(output)[1] == ["gpt-5, preview", "12"]
+
+
+def test_csv_file_rows_survive_a_comma_in_the_path():
+    output = format_file_table({"a,b.txt": {"gpt-5": 4}}, output_format="csv")
+    assert _csv_rows(output) == [["file", "gpt-5"], ["a,b.txt", "4"]]
+
+
+def test_csv_file_rows_survive_a_quote_in_the_path():
+    output = format_file_table({'we"ird.txt': {"gpt-5": 4}}, output_format="csv")
+    assert _csv_rows(output) == [["file", "gpt-5"], ['we"ird.txt', "4"]]
+
+
+def test_csv_file_rows_survive_a_newline_in_the_path():
+    output = format_file_table({"two\nlines.txt": {"gpt-5": 4}}, output_format="csv")
+    assert _csv_rows(output) == [["file", "gpt-5"], ["two\nlines.txt", "4"]]
+
+
+def test_csv_keeps_ordinary_rows_unquoted():
+    output = format_file_table(
+        {"a.txt": {"gpt-5": 4}, "b.txt": {"gpt-5": 9}},
+        output_format="csv",
+        costs={"a.txt": {"gpt-5": 0.0002}, "b.txt": {"gpt-5": None}},
+    )
+    assert output == ("file,gpt-5_tokens,gpt-5_cost\na.txt,4,$0.0002\nb.txt,9,N/A")
+
+
+def test_tsv_leaves_a_comma_in_the_path_alone():
+    output = format_file_table({"a,b.txt": {"gpt-5": 4}}, output_format="tsv")
+    assert output == "file\tgpt-5\na,b.txt\t4"
 
 
 def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():

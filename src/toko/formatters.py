@@ -1,5 +1,6 @@
 """Output formatters for token counts."""
 
+import csv
 import json
 import sys
 from io import StringIO
@@ -93,6 +94,16 @@ def format_json(
     return json.dumps(payload, indent=2)
 
 
+def _render_delimited(rows: list[list[str]], separator: str) -> str:
+    # CSV goes through csv.writer so a comma, quote, or newline in a name stays
+    # inside one field. TSV has no quoting convention, so it stays a plain join.
+    if separator != ",":
+        return "\n".join(separator.join(row) for row in rows)
+    buffer = StringIO()
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    return buffer.getvalue().rstrip("\n")
+
+
 def format_csv(
     results: dict[str, int],
     *,
@@ -107,18 +118,18 @@ def format_csv(
     Returns:
         CSV-formatted output
     """
-    lines: list[str] = []
+    rows: list[list[str]] = []
     if include_header:
         header = ["model", "tokens"]
         if costs:
             header.append("cost")
-        lines.append(",".join(header))
+        rows.append(header)
     for model, count in results.items():
         fields = [model, str(count)]
         if costs:
             fields.append(format_cost(costs.get(model)))
-        lines.append(",".join(fields))
-    return "\n".join(lines)
+        rows.append(fields)
+    return _render_delimited(rows, ",")
 
 
 def format_tsv(
@@ -222,7 +233,7 @@ def _format_file_table_delimited(
     include_header: bool,
     costs: dict[str, dict[str, float | None]] | None,
 ) -> str:
-    lines: list[str] = []
+    rows: list[list[str]] = []
     if costs:
         headers = ["file"] + [
             label for model in models for label in (f"{model}_tokens", f"{model}_cost")
@@ -231,7 +242,7 @@ def _format_file_table_delimited(
         headers = ["file", *models]
 
     if include_header:
-        lines.append(separator.join(headers))
+        rows.append(headers)
 
     if total_only:
         totals, total_costs = _compute_totals(file_results, models=models, costs=costs)
@@ -240,8 +251,8 @@ def _format_file_table_delimited(
             total_row.append(str(totals[model]))
             if total_costs is not None:
                 total_row.append(format_cost(total_costs[model]))
-        lines.append(separator.join(total_row))
-        return "\n".join(lines)
+        rows.append(total_row)
+        return _render_delimited(rows, separator)
 
     for filename, model_counts in file_results.items():
         row: list[str] = [filename]
@@ -255,9 +266,9 @@ def _format_file_table_delimited(
                 row.append("N/A")
                 if costs:
                     row.append("N/A")
-        lines.append(separator.join(row))
+        rows.append(row)
 
-    return "\n".join(lines)
+    return _render_delimited(rows, separator)
 
 
 def _format_file_table_text(

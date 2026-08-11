@@ -29,6 +29,9 @@ typecheck *args:
 scan-secrets:
     uv run --group dev detect-secrets-hook --baseline .secrets.baseline
 
+update-readme:
+    uv run python scripts/update_readme_examples.py
+
 update-secrets:
     uv run --group dev detect-secrets scan --baseline .secrets.baseline
 

@@ -4,7 +4,13 @@ import pytest
 
 from toko import models
 from toko.cost import estimate_cost
-from toko.models import ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS, list_models
+from toko.models import (
+    ANTHROPIC_MODELS,
+    GOOGLE_MODELS,
+    RETIRED_OPENAI_MODELS,
+    XAI_MODELS,
+    list_models,
+)
 
 # Anthropic and xAI aliases resolve to a canonical name genai-prices already knows,
 # so trying the user's name first must stay invisible for them. Enumerated rather
@@ -69,39 +75,18 @@ class TestPricingCoverage:
 
     def test_openai_models_have_pricing(self):
         """All current OpenAI models should have pricing data."""
-        # Legacy/deprecated models that we don't expect to have pricing
-        legacy_models = {
-            "gpt-3.5-turbo-0301",
-            "gpt-3.5",
-            "gpt-2",
-            "code-davinci-002",
-            "text-davinci-003",
-            "text-davinci-002",
-            "davinci",
-            "curie",
-            "babbage",
-            "ada",
-        }
-        # Future models that don't exist yet
-        future_models: set[str] = set()
-
         failures = []
-        openai_models = list_models().get("openai", [])
+        openai_models = list_models(include_retired=True).get("openai", [])
 
         current_prefixes = ("gpt-", "o", "text-embedding-3")
 
         for model_name in openai_models:
-            if model_name in legacy_models or model_name in future_models:
-                continue  # Skip legacy and future models
+            if model_name in RETIRED_OPENAI_MODELS:
+                continue
             if not any(model_name.startswith(prefix) for prefix in current_prefixes):
                 # Skip legacy completions and embeddings we no longer track pricing for
                 continue
-            try:
-                cost = estimate_cost(100, model_name)
-            except ValueError:
-                # Legacy tokenizer names (e.g., code-cushman-001) are no longer exposed
-                # via provider APIs; skip these gracefully.
-                continue
+            cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
 

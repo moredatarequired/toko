@@ -2,7 +2,7 @@
 
 import contextlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -27,6 +27,8 @@ from toko.price_update import (
 
 if TYPE_CHECKING:
     import click
+
+    from toko.result import TokenCount
 
 _SUBCOMMAND_META_KEY = "toko.subcommand"
 
@@ -358,7 +360,7 @@ def _handle_text_input(
     include_costs: bool,
     include_header: bool,
 ) -> None:
-    results: dict[str, int] = {}
+    results: dict[str, TokenCount] = {}
 
     for model_name in models:
         try:
@@ -372,7 +374,8 @@ def _handle_text_input(
         typer.echo("Error: All models failed to count tokens", err=True)
         raise typer.Exit(1)
 
-    costs = _calculate_costs(results, include_costs)
+    if include_costs:
+        results = _attach_costs(results)
 
     adjusted_format = output_format
     if (
@@ -386,7 +389,7 @@ def _handle_text_input(
     output = format_output(
         results,
         output_format=adjusted_format,
-        costs=costs,
+        show_costs=include_costs,
         include_header=include_header,
     )
     typer.echo(output)
@@ -394,8 +397,8 @@ def _handle_text_input(
 
 def _collect_file_counts(
     models: list[str], files: list[tuple[str, str]]
-) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, str]], dict[str, str]]:
-    file_results: dict[str, dict[str, int]] = {}
+) -> tuple[dict[str, dict[str, TokenCount]], dict[str, dict[str, str]], dict[str, str]]:
+    file_results: dict[str, dict[str, TokenCount]] = {}
     file_errors: dict[str, dict[str, str]] = {}
     model_errors: dict[str, str] = {}
 
@@ -449,38 +452,35 @@ def _handle_file_inputs(
         typer.echo("Error: All models failed for all files", err=True)
         raise typer.Exit(1)
 
-    file_costs = _calculate_file_costs(file_results) if include_costs else None
+    if include_costs:
+        file_results = _attach_file_costs(file_results)
 
     output = format_file_table(
         file_results,
         output_format=output_format,
         total_only=total_only,
-        costs=file_costs,
+        show_costs=include_costs,
         include_header=include_header,
     )
     typer.echo(output)
 
 
-def _calculate_costs(
-    counts: dict[str, int], include_costs: bool
-) -> dict[str, float | None] | None:
-    if not include_costs:
-        return None
+def _attach_costs(counts: dict[str, TokenCount]) -> dict[str, TokenCount]:
+    # Priced against the name the user asked for, which estimate_cost prefers over the
+    # canonical one it resolves to.
     return {
-        model_name: estimate_cost(tokens, model_name)
-        for model_name, tokens in counts.items()
+        model_name: replace(counted, cost=estimate_cost(counted.count, model_name))
+        for model_name, counted in counts.items()
     }
 
 
-def _calculate_file_costs(
-    file_counts: dict[str, dict[str, int]],
-) -> dict[str, dict[str, float | None]]:
-    costs: dict[str, dict[str, float | None]] = {}
-    for filename, model_counts in file_counts.items():
-        costs[filename] = {}
-        for model_name, token_count in model_counts.items():
-            costs[filename][model_name] = estimate_cost(token_count, model_name)
-    return costs
+def _attach_file_costs(
+    file_counts: dict[str, dict[str, TokenCount]],
+) -> dict[str, dict[str, TokenCount]]:
+    return {
+        filename: _attach_costs(model_counts)
+        for filename, model_counts in file_counts.items()
+    }
 
 
 def _format_model_name(provider: str, model: str) -> str:

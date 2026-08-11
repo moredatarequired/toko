@@ -44,8 +44,9 @@ def test_xai_prefers_api(monkeypatch, capsys):
     # Ensure fallback is not invoked
     monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
 
-    tokens = counter.count_tokens("hello", "grok-3", use_cache=False)
-    assert tokens == 7
+    counted = counter.count_tokens("hello", "grok-3", use_cache=False)
+    assert counted.count == 7
+    assert counted.approximate is False
     # An exact API count must not be labelled approximate.
     assert capsys.readouterr().err == ""
 
@@ -59,8 +60,8 @@ def test_xai_falls_back_to_transformers(monkeypatch):
     monkeypatch.setattr(counter.httpx, "post", fake_post)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
-    assert tokens == len("hi")
+    counted = counter.count_tokens("hi", "grok-3", use_cache=False)
+    assert counted.count == len("hi")
 
 
 def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
@@ -72,10 +73,12 @@ def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
     monkeypatch.setattr(counter.httpx, "post", fake_post)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
+    counted = counter.count_tokens("hi", "grok-3", use_cache=False)
 
     stderr = capsys.readouterr().err
-    assert tokens == len("hi")
+    assert counted.count == len("hi")
+    assert counted.approximate is True
+    assert counted.caveat is not None
     assert "grok-3" in stderr
     assert "approximate" in stderr
     assert "boom" in stderr
@@ -85,10 +88,12 @@ def test_xai_without_api_key_warns_that_count_is_approximate(monkeypatch, capsys
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
+    counted = counter.count_tokens("hi", "grok-3", use_cache=False)
 
     stderr = capsys.readouterr().err
-    assert tokens == len("hi")
+    assert counted.count == len("hi")
+    assert counted.approximate is True
+    assert counted.caveat == stderr.removeprefix("Warning: ").strip()
     assert "XAI_API_KEY is not set" in stderr
     assert "approximate" in stderr
 
@@ -107,13 +112,13 @@ def test_xai_approximate_count_warns_again_on_a_repeat_run(monkeypatch, capsys):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     _install_stub_tokenizer(monkeypatch)
 
-    first = counter.count_tokens("hi", "grok-3")
+    first = counter.count_tokens("hi", "grok-3").count
     assert "approximate" in capsys.readouterr().err
 
     # A later invocation is a fresh process, which remembers no warnings.
     counter._WARNED_ONCE.clear()  # noqa: SLF001
 
-    second = counter.count_tokens("hi", "grok-3")
+    second = counter.count_tokens("hi", "grok-3").count
 
     assert second == first
     assert "approximate" in capsys.readouterr().err
@@ -131,7 +136,7 @@ def test_xai_api_count_is_cached(monkeypatch):
     # Ensure fallback is not invoked
     monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
 
-    assert counter.count_tokens("hello", "grok-3") == 7
+    assert counter.count_tokens("hello", "grok-3").count == 7
     assert get_cached_count("hello", "grok-3") == 7
 
 

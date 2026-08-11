@@ -4,7 +4,6 @@ import importlib
 import importlib.util
 import os
 import sys
-from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -17,6 +16,7 @@ import tiktoken
 
 from toko.cache import cache_count, get_cached_count
 from toko.models import ModelInfo, get_model
+from toko.result import TokenCount
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -82,10 +82,18 @@ class TokenizerProtocol(Protocol):
         ...
 
 
-@dataclass(frozen=True, slots=True)
-class CountResult:
-    count: int
-    approximate: bool = False
+def _exact(count: int, model_info: ModelInfo) -> TokenCount:
+    return TokenCount(count=count, model=model_info.name, provider=model_info.provider)
+
+
+def _approximate(count: int, model_info: ModelInfo, caveat: str) -> TokenCount:
+    return TokenCount(
+        count=count,
+        model=model_info.name,
+        provider=model_info.provider,
+        approximate=True,
+        caveat=caveat,
+    )
 
 
 def _get_tiktoken_encoding_for_model(model_name: str) -> TokenizerProtocol | None:
@@ -122,7 +130,7 @@ def _get_tiktoken_encoding_by_name(encoding_name: str) -> TokenizerProtocol | No
     return tokenizer
 
 
-def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
+def _count_with_provider(text: str, model_info: ModelInfo) -> TokenCount:
     handler = _PROVIDER_HANDLERS.get(model_info.provider)
     if handler is None:
         raise ValueError(
@@ -132,20 +140,18 @@ def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
     return handler(text, model_info)
 
 
-def _warn_openai_estimate(model_name: str, encoding_name: str) -> None:
-    _warn_once(
-        "openai-estimate",
-        model_name,
-        f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}",
-    )
+def _warn_openai_estimate(model_name: str, encoding_name: str) -> str:
+    caveat = f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}"
+    _warn_once("openai-estimate", model_name, caveat)
+    return caveat
 
 
-def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
+def _count_openai(text: str, model_info: ModelInfo) -> TokenCount:
     # tiktoken's own table is lowercase, and so is the OPENAI_MODEL_ENCODINGS lookup
     # in _build_openai_model; without matching here, 'GPT-5' would be called unknown.
     encoding = _get_tiktoken_encoding_for_model(model_info.name.lower())
     if encoding is not None:
-        return CountResult(len(encoding.encode(text)))
+        return _exact(len(encoding.encode(text)), model_info)
 
     # Every OpenAI model since gpt-4o uses o200k_base, so an unreleased name is
     # far better served by that than by refusing to count it.
@@ -157,26 +163,28 @@ def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
             f"'{model_info.name}'. Install the latest tiktoken or verify the model name."
         )
     if model_info.encoding is not None:
-        return CountResult(len(encoding.encode(text)))
+        return _exact(len(encoding.encode(text)), model_info)
 
-    _warn_openai_estimate(model_info.name, encoding_name)
-    return CountResult(len(encoding.encode(text)), approximate=True)
+    caveat = _warn_openai_estimate(model_info.name, encoding_name)
+    return _approximate(len(encoding.encode(text)), model_info, caveat)
 
 
-def _warn_approximate(model_name: str, reason: str) -> None:
-    _warn_once(
-        "xai-approximate",
-        model_name,
+def _warn_approximate(model_name: str, reason: str) -> str:
+    caveat = (
         f"{reason}, so {model_name} was counted with the Grok-1 Hugging Face "
-        "tokenizer. This count is approximate, not exact.",
+        "tokenizer. This count is approximate, not exact."
     )
+    _warn_once("xai-approximate", model_name, caveat)
+    return caveat
 
 
-def _count_xai(text: str, model_info: ModelInfo) -> CountResult:
+def _count_xai(text: str, model_info: ModelInfo) -> TokenCount:
     api_key = os.environ.get("XAI_API_KEY")
     if api_key:
         try:
-            return CountResult(_count_xai_via_api(text, model_info.name, api_key))
+            return _exact(
+                _count_xai_via_api(text, model_info.name, api_key), model_info
+            )
         except Exception as api_error:
             last_error = api_error
     else:
@@ -199,8 +207,8 @@ def _count_xai(text: str, model_info: ModelInfo) -> CountResult:
         if last_error is not None
         else "XAI_API_KEY is not set"
     )
-    _warn_approximate(model_info.name, reason)
-    return CountResult(count, approximate=True)
+    caveat = _warn_approximate(model_info.name, reason)
+    return _approximate(count, model_info, caveat)
 
 
 def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
@@ -271,7 +279,7 @@ def _count_xai_via_transformers(text: str) -> int:
     return len(tokens)
 
 
-def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
+def _count_anthropic(text: str, model_info: ModelInfo) -> TokenCount:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError(
@@ -308,10 +316,10 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
             f"Unexpected response from Anthropic token API for {model_info.name}: "
             f"no integer 'input_tokens' field in {data!r}"
         )
-    return CountResult(input_tokens)
+    return _exact(input_tokens, model_info)
 
 
-def _count_google(text: str, model_info: ModelInfo) -> CountResult:
+def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError(
@@ -337,10 +345,10 @@ def _count_google(text: str, model_info: ModelInfo) -> CountResult:
             f"Unexpected response from Google token API for {model_info.name}: "
             f"no integer 'totalTokens' field in {data!r}"
         )
-    return CountResult(total_tokens)
+    return _exact(total_tokens, model_info)
 
 
-def _count_mistral(text: str, model_info: ModelInfo) -> CountResult:
+def _count_mistral(text: str, model_info: ModelInfo) -> TokenCount:
     if not HAS_MISTRAL:
         raise ValueError(
             "Mistral models require the 'mistral-common' package. "
@@ -367,10 +375,10 @@ def _count_mistral(text: str, model_info: ModelInfo) -> CountResult:
 
     request = ChatCompletionRequest(messages=[UserMessage(content=text)])
     tokens = tokenizer.encode_chat_completion(request).tokens
-    return CountResult(len(tokens))
+    return _exact(len(tokens), model_info)
 
 
-def _count_transformers(text: str, model_info: ModelInfo) -> CountResult:
+def _count_transformers(text: str, model_info: ModelInfo) -> TokenCount:
     if not HAS_TRANSFORMERS:
         raise ValueError(
             f"{model_info.provider.capitalize()} models require the 'transformers' package. "
@@ -418,10 +426,10 @@ def _count_transformers(text: str, model_info: ModelInfo) -> CountResult:
             f"Failed to count tokens for {model_info.provider.capitalize()} model {model_info.name}: {error_str}"
         ) from e
 
-    return CountResult(len(tokens))
+    return _exact(len(tokens), model_info)
 
 
-_PROVIDER_HANDLERS: dict[str, Callable[[str, ModelInfo], CountResult]] = {
+_PROVIDER_HANDLERS: dict[str, Callable[[str, ModelInfo], TokenCount]] = {
     "openai": _count_openai,
     "xai": _count_xai,
     "anthropic": _count_anthropic,
@@ -435,7 +443,7 @@ for provider in ("llama", "deepseek", "qwen"):
 _PROVIDER_HANDLERS["huggingface"] = _count_transformers
 
 
-def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
+def count_tokens(text: str, model: str, *, use_cache: bool = True) -> TokenCount:
     """Count tokens in text for a given model.
 
     Args:
@@ -444,18 +452,19 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
         use_cache: Whether to use caching (default True)
 
     Returns:
-        Number of tokens
+        The count, the model and provider it resolved to, and whether it is exact
 
     Raises:
         ValueError: If model is not supported or API key is missing
     """
-    # Check cache first
+    model_info = get_model(model)
+
     if use_cache:
         cached = get_cached_count(text, model)
         if cached is not None:
-            return cached
+            # Only exact counts are ever stored, so a hit needs no caveat.
+            return _exact(cached, model_info)
 
-    model_info = get_model(model)
     result = _count_with_provider(text, model_info)
 
     # Approximate counts are deliberately not cached. A cache hit returns before any
@@ -466,4 +475,4 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
         if model_info.name != model:
             cache_count(text, model_info.name, result.count)
 
-    return result.count
+    return result

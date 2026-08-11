@@ -67,20 +67,8 @@ class TestPricingCoverage:
 
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
-        expected_missing = {
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash-image",
-            "gemini-2.0-flash-preview-image-generation",
-        }
-
         failures = []
         for model_name in GOOGLE_MODELS:
-            # Skip the models/ prefix for comparison
-            base_name = model_name.replace("models/", "")
-            if base_name in expected_missing:
-                continue
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -139,6 +127,16 @@ class TestPricingAccuracy:
         assert cost is not None
         # Should be approximately $0.00125 for 1000 tokens
         assert 0.001 <= cost <= 0.002
+
+    def test_gpt5_point_releases_are_priced_separately(self):
+        assert estimate_cost(1_000_000, "gpt-5.2") != estimate_cost(1_000_000, "gpt-5")
+
+    def test_gemini_pricing_uses_the_name_the_user_asked_for(self):
+        # The registry canonicalizes to "models/gemini-2.5-pro", which genai-prices
+        # has no entry for.
+        cost = estimate_cost(1000, "gemini-2.5-pro")
+        assert cost is not None
+        assert cost > 0
 
     def test_claude_sonnet_pricing(self):
         """Test Claude 3.5 Sonnet pricing calculation."""

@@ -350,17 +350,8 @@ def _resolve_anthropic_model(name: str) -> ModelInfo | None:
     return None
 
 
-def _normalize_google_model_name(name: str) -> str:
-    if name.startswith("models/"):
-        name = name.split("/", 1)[1]
-    lowered = name.lower()
-    if lowered.endswith("-latest"):
-        # Google repoints its "-latest" aliases on its own schedule, announced
-        # with two weeks' notice; gemini-flash-latest alone has moved twice.
-        # Any target pinned here goes stale silently and reports another
-        # model's count, so send the alias to countTokens and let Google
-        # resolve it.
-        return lowered
+def _google_registry_target(lowered: str) -> str | None:
+    """Return the entry this name resolves to, by exact match then alias prefix."""
     if lowered in GOOGLE_MODELS:
         return lowered
     alias = _GOOGLE_ALIAS_MAP.get(lowered)
@@ -377,12 +368,44 @@ def _normalize_google_model_name(name: str) -> str:
     ]
     if prefixes:
         return _GOOGLE_ALIAS_MAP[max(prefixes, key=len)]
-    return lowered
+    return None
+
+
+def _normalize_google_model_name(name: str) -> str:
+    if name.startswith("models/"):
+        name = name.split("/", 1)[1]
+    lowered = name.lower()
+    if lowered.endswith("-latest"):
+        # Google repoints its "-latest" aliases on its own schedule, announced
+        # with two weeks' notice; gemini-flash-latest alone has moved twice.
+        # Any target pinned here goes stale silently and reports another
+        # model's count, so send the alias to countTokens and let Google
+        # resolve it.
+        return lowered
+    return _google_registry_target(lowered) or lowered
 
 
 def _resolve_google_model(name: str) -> ModelInfo | None:
     normalized = _normalize_google_model_name(name)
-    return GOOGLE_MODELS.get(normalized)
+    known = GOOGLE_MODELS.get(normalized)
+    if known is not None:
+        return known
+    # This resolver runs before xAI's, so it must not claim grok-4-latest.
+    if not normalized.endswith("-latest") or detect_provider(name) != "google":
+        return None
+    # Resolution stays a pass-through -- Google owns where a "-latest" alias
+    # points -- but the retirement caveat is not about resolution. If the family
+    # this name would have matched is shut down, the count and its price belong
+    # to a model that no longer exists, and saying so is the whole point of the
+    # retirement notice.
+    family = _google_registry_target(normalized)
+    retired_entry = GOOGLE_MODELS[family] if family is not None else None
+    return ModelInfo(
+        name=f"models/{normalized}",
+        provider="google",
+        retired=retired_entry.retired if retired_entry else None,
+        redirects_to=retired_entry.redirects_to if retired_entry else None,
+    )
 
 
 def _resolve_xai_model(name: str) -> ModelInfo | None:

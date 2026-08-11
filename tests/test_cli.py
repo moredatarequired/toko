@@ -106,6 +106,45 @@ def test_clear_cache_removes_the_price_cache():
     assert not get_price_cache_path().exists()
 
 
+# Each subcommand echoes its marker before doing any work, so the marker proves the
+# name was dispatched even when the work behind it fails (update-prices needs network).
+@pytest.mark.parametrize(
+    ("args", "marker"),
+    [
+        (["--total-only", "clear-cache"], "Cache cleared"),
+        (["-m", "gpt-5", "update-prices"], "Fetching latest pricing data"),
+        (["--format", "csv", "clear-cache"], "Cache cleared"),
+        (["--format=csv", "clear-cache"], "Cache cleared"),
+        (["-mgpt-5", "clear-cache"], "Cache cleared"),
+    ],
+)
+def test_global_option_before_a_subcommand_still_dispatches(args, marker):
+    """A leading global option must not hide the subcommand name behind PATHS."""
+    result = _invoke_cli(args)
+
+    output = _strip_ansi(result.stdout)
+    assert "Path not found" not in output + _strip_ansi(result.stderr)
+    assert marker in output
+
+
+def test_subcommand_name_as_an_option_value_is_not_dispatched(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(["-m", "clear-cache", str(sample)])
+
+    assert "Cache cleared" not in _strip_ansi(result.stdout)
+    assert "clear-cache" in _strip_ansi(result.stderr)
+
+
+def test_subcommand_name_after_a_double_dash_is_a_path():
+    result = _invoke_cli(["--", "clear-cache"])
+
+    assert result.exit_code == 1
+    assert "Cache cleared" not in _strip_ansi(result.stdout)
+    assert "Path not found: clear-cache" in _strip_ansi(result.stderr)
+
+
 @pytest.mark.parametrize("subcommand", ["update-prices", "clear-cache"])
 def test_subcommand_help_describes_the_subcommand(subcommand):
     """`toko <sub> --help` must not fall through to the top-level help."""

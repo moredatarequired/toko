@@ -4,8 +4,9 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
+import click
 import typer
 from typer.core import TyperGroup
 
@@ -24,9 +25,6 @@ from toko.price_update import (
     refresh_prices,
     update_prices_if_stale,
 )
-
-if TYPE_CHECKING:
-    import click
 
 _SUBCOMMAND_META_KEY = "toko.subcommand"
 
@@ -48,8 +46,47 @@ class TokoGroup(TyperGroup):
     would otherwise swallow names like ``update-prices`` and treat them as files.
     """
 
+    def _value_taking_option_names(self, ctx: click.Context) -> set[str]:
+        names: set[str] = set()
+        for param in super().get_params(ctx):
+            if (
+                isinstance(param, click.Option)
+                and not param.is_flag
+                and not param.count
+            ):
+                names.update(param.opts)
+                names.update(param.secondary_opts)
+        return names
+
+    def _first_positional(self, ctx: click.Context, args: list[str]) -> str | None:
+        """Find the first non-option token, skipping over option values.
+
+        A global option before the subcommand name (``toko --total-only clear-cache``)
+        must not hide it, so the scan has to know which options consume the next token.
+        """
+        value_taking = self._value_taking_option_names(ctx)
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--":
+                return None
+            if not arg.startswith("-") or arg == "-":
+                return arg
+            if arg.startswith("--"):
+                consumes_next = "=" not in arg and arg in value_taking
+            else:
+                # Short flags cluster (-abc); only a trailing value-taking one reads
+                # the next arg, and anything after it is that option's inline value.
+                consumes_next = False
+                for position, letter in enumerate(arg[1:], start=1):
+                    if f"-{letter}" in value_taking:
+                        consumes_next = position == len(arg) - 1
+                        break
+            index += 2 if consumes_next else 1
+        return None
+
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        is_subcommand = bool(args) and args[0] in self.commands
+        is_subcommand = self._first_positional(ctx, args) in self.commands
         ctx.meta[_SUBCOMMAND_META_KEY] = is_subcommand
         # click.Group defaults allow_interspersed_args to False so that options after
         # a subcommand name reach the subcommand. The default command needs the

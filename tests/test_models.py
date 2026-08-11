@@ -40,10 +40,15 @@ def test_dotted_openai_model_keeps_its_own_name_and_encoding():
 
 
 def test_every_priced_verified_encoding_is_advertised():
-    advertised = set(models.POPULAR_OPENAI_MODELS)
+    """Only a deliberate `listed = false` may keep a verified model off the list."""
+    advertised = set(models.list_models()["openai"])
     verified = set(models.OPENAI_MODEL_ENCODINGS)
-    assert verified - advertised == models._UNPRICED_OPENAI_MODELS  # noqa: SLF001
-    assert advertised >= set(models._OPENAI_PREFIX_VARIANTS)  # noqa: SLF001
+    unlisted = {name for name, info in models.OPENAI_MODELS.items() if not info.listed}
+
+    assert verified - advertised == unlisted
+    # gpt-5.1-pro counts exactly but genai-prices cannot cost it.
+    assert unlisted == {"gpt-5.1-pro"}
+    assert advertised >= {"gpt-4.1-mini", "gpt-4.1-nano", "gpt-5-mini", "gpt-5-nano"}
 
 
 def test_list_models_includes_core_providers():

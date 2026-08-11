@@ -83,6 +83,10 @@ def run_command(command: str, scratch: Path) -> CommandResult:
         try:
             process = subprocess.Popen(  # noqa: S603
                 [SHELL, "-lc", f"{env_prefix} {command}"],
+                # The examples say `toko`, which becomes `uv run toko`, and uv resolves
+                # the project from the working directory. Without this the script only
+                # works when invoked from the repository root.
+                cwd=REPO_ROOT,
                 stdin=follower,
                 stdout=follower,
                 stderr=follower,

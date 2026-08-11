@@ -134,6 +134,18 @@ def test_corrupt_cached_prices_are_reported(capsys):
     assert get_snapshot().from_auto_update is False
 
 
+def test_corrupt_cached_prices_are_discarded(capsys):
+    """The warning must not repeat forever; a poisoned payload deletes itself."""
+    get_price_data_path().write_bytes(b'[{"id": "openai", "name": "Ope')
+
+    assert apply_cached_prices() is False
+    assert "unusable cached price data" in capsys.readouterr().err
+    assert not get_price_data_path().exists()
+
+    assert apply_cached_prices() is False
+    assert capsys.readouterr().err == ""
+
+
 @respx.mock
 def test_failed_download_leaves_prices_stale():
     """A failed fetch must not mark prices fresh for the next day."""

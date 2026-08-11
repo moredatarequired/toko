@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
-from toko.price_update import PRICE_DATA_URL
+from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
 runner = CliRunner()
 
@@ -75,6 +75,18 @@ def test_clear_cache_subcommand_is_reached():
     result = runner.invoke(app, ["clear-cache"])
     assert result.exit_code == 0
     assert "Cache cleared" in result.stdout
+
+
+def test_clear_cache_removes_the_price_cache():
+    """Clearing the cache must reach the pricing payload, not just the token database."""
+    get_price_data_path().write_bytes(b"not json")
+    get_price_cache_path().write_text("0")
+
+    result = runner.invoke(app, ["clear-cache"])
+
+    assert result.exit_code == 0
+    assert not get_price_data_path().exists()
+    assert not get_price_cache_path().exists()
 
 
 def _strip_ansi(text: str) -> str:

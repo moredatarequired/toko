@@ -1,5 +1,6 @@
 """Automatic price update handling."""
 
+import contextlib
 import json
 import os
 import sys
@@ -88,22 +89,35 @@ def apply_cached_prices() -> bool:
         True if cached prices were applied, False otherwise
     """
     data_path = get_price_data_path()
-    if not data_path.exists():
+    try:
+        payload = data_path.read_bytes()
+    except FileNotFoundError:
         return False
 
     try:
-        snapshot = _build_snapshot(data_path.read_bytes())
+        snapshot = _build_snapshot(payload)
     except Exception as e:
         print(
-            f"Warning: ignoring unusable cached price data at {data_path}"
+            f"Warning: discarding unusable cached price data at {data_path}"
             f" ({type(e).__name__}: {e}). Falling back to bundled prices;"
             " run 'toko update-prices' to refetch.",
             file=sys.stderr,
         )
+        # Without this the warning repeats on every run forever: a refetch only
+        # overwrites the file when the new payload validates, so a cache poisoned by
+        # the remote itself would never be replaced.
+        with contextlib.suppress(OSError):
+            data_path.unlink(missing_ok=True)
         return False
 
     data_snapshot.set_custom_snapshot(snapshot)
     return True
+
+
+def clear_price_cache() -> None:
+    for path in (get_price_data_path(), get_price_cache_path()):
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
 
 
 def refresh_prices() -> int:

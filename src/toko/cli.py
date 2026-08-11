@@ -20,6 +20,7 @@ from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
 from toko.price_update import (
     apply_cached_prices,
+    clear_price_cache,
     refresh_prices,
     update_prices_if_stale,
 )
@@ -169,8 +170,9 @@ def update_prices() -> None:
 
 @app.command()
 def clear_cache() -> None:
-    """Clear the token count cache."""
+    """Clear the token count cache and the cached pricing data."""
     do_clear_cache()
+    clear_price_cache()
     typer.echo("✓ Cache cleared")
 
 

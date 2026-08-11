@@ -304,6 +304,7 @@ just lint          # Ruff check & format
 just typecheck     # ty type checking
 just test          # run "fast" tests
 just check-all     # run the full set of checks
+just update-readme # re-run the examples above and paste back what they print
 ```
 
 ## License

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
@@ -51,6 +52,7 @@ def test_list_models(monkeypatch):
     ]
 
 
+@pytest.mark.slow
 def test_update_prices_subcommand_is_reached():
     result = runner.invoke(app, ["update-prices"])
     assert result.exit_code == 0

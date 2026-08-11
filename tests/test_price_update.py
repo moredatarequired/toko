@@ -66,6 +66,7 @@ def test_should_update_prices_fresh():
     timestamp_file.unlink()
 
 
+@pytest.mark.slow
 def test_update_prices_if_stale():
     """Test updating prices if stale."""
     timestamp_file = get_price_cache_path()
@@ -85,6 +86,7 @@ def test_update_prices_if_stale():
         timestamp_file.unlink()
 
 
+@pytest.mark.slow
 def test_refresh_prices_applies_fetched_snapshot():
     """Fetched prices must actually replace the bundled ones."""
     assert get_snapshot().from_auto_update is False
@@ -96,6 +98,7 @@ def test_refresh_prices_applies_fetched_snapshot():
     assert len(get_snapshot().providers) == provider_count
 
 
+@pytest.mark.slow
 def test_cached_prices_survive_into_a_fresh_process():
     """A later run should reuse the cached payload instead of fetching again."""
     refresh_prices()

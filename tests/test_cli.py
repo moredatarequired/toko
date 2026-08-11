@@ -253,7 +253,7 @@ def test_count_with_text_default_output():
     result = _invoke_cli(["--text", "hello world"])
     assert result.exit_code == 0
     expected = count_tokens("hello world", model="gpt-5")
-    assert result.stdout.strip() == str(expected)
+    assert result.stdout.strip() == str(expected.count)
 
 
 def test_count_from_stdin():
@@ -330,13 +330,102 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
     assert entry["tokens"] == 2
 
 
-def test_unknown_openai_model_keeps_tsv_output_clean():
+def test_json_reports_an_approximate_count_and_the_reason_for_it():
+    result = _invoke_cli(["--format", "json", "-m", "gpt-6", "--text", "hello world"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "gpt-6": {
+            "tokens": 2,
+            "approximate": True,
+            "caveat": "unknown OpenAI model 'gpt-6'; estimating with o200k_base",
+        }
+    }
+
+
+def test_json_keeps_the_bare_count_shape_when_every_count_is_exact():
+    result = _invoke_cli(["--format", "json", "-m", "gpt-5", "--text", "hello world"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"gpt-5": 2}
+
+
+def test_json_labels_every_entry_once_any_count_is_approximate():
+    """One document must not mix the bare and object shapes."""
+    result = _invoke_cli(
+        ["--format", "json", "-m", "gpt-5", "-m", "gpt-6", "--text", "hello world"]
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["gpt-5"] == {"tokens": 2, "approximate": False}
+    assert payload["gpt-6"]["approximate"] is True
+
+
+def test_json_gains_the_approximate_field_only_when_a_count_is_approximate():
+    """Costs alone must not add the field: --cost stays byte-identical to before."""
+    exact = _invoke_cli(
+        ["--format", "json", "--cost", "-m", "gpt-5", "--text", "hello world"]
+    )
+    approximate = _invoke_cli(
+        [
+            "--format",
+            "json",
+            "--cost",
+            "-m",
+            "gpt-5",
+            "-m",
+            "gpt-6",
+            "--text",
+            "hello world",
+        ]
+    )
+
+    assert set(json.loads(exact.stdout)["gpt-5"]) == {"tokens", "cost"}
+    labelled = json.loads(approximate.stdout)
+    assert set(labelled["gpt-5"]) == {"tokens", "cost", "approximate"}
+    assert labelled["gpt-5"]["approximate"] is False
+    assert labelled["gpt-6"]["approximate"] is True
+
+
+def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():
+    exact = _invoke_cli(
+        ["--header", "--format", "csv", "-m", "gpt-5", "--text", "hello world"]
+    )
+    approximate = _invoke_cli(
+        [
+            "--header",
+            "--format",
+            "csv",
+            "-m",
+            "gpt-5",
+            "-m",
+            "gpt-6",
+            "--text",
+            "hello world",
+        ]
+    )
+
+    assert exact.stdout.strip() == "model,tokens\ngpt-5,2"
+    assert approximate.stdout.strip() == (
+        "model,tokens,approximate\ngpt-5,2,false\ngpt-6,2,true"
+    )
+
+
+def test_piped_single_model_tsv_keeps_approximate_marker():
+    # Without a header there is nowhere else for the marker to go, and stderr is
+    # not where a consumer on the other end of the pipe is looking.
     result = _invoke_cli(
         ["--format", "tsv", "--model", "gpt-6", "--text", "hello world"]
     )
     assert result.exit_code == 0
-    assert result.stdout.strip() == "2"
+    assert result.stdout.strip() == "gpt-6\t2\ttrue"
     assert "unknown OpenAI model 'gpt-6'" in result.stderr
+
+
+def test_piped_single_model_tsv_stays_bare_when_exact():
+    result = _invoke_cli(
+        ["--format", "tsv", "--model", "gpt-5", "--text", "hello world"]
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "2"
 
 
 def test_default_no_header_when_not_tty(monkeypatch):
@@ -400,7 +489,7 @@ def test_partial_success_missing_anthropic_key(monkeypatch):
     )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected)
+    assert result.stdout.strip() == str(expected.count)
     assert "claude-sonnet-4-5" not in result.stdout
     assert "Failed to count tokens for claude-sonnet-4-5" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
@@ -426,7 +515,7 @@ def test_partial_success_missing_google_key(monkeypatch):
     )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected)
+    assert result.stdout.strip() == str(expected.count)
     assert "gemini-2.5-flash" not in result.stdout
     assert "GOOGLE_API_KEY" in result.stderr
 
@@ -589,6 +678,18 @@ def test_total_only_csv_with_header(tmp_path):
     assert result.stdout.strip() == "file,gpt-5\nTOTAL,6"
 
 
+def test_file_csv_marks_each_approximate_model_column(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--header", "--format", "csv", "-m", "gpt-6", *args])
+    assert result.exit_code == 0
+    lines = result.stdout.strip().splitlines()
+    assert lines[0] == "file,gpt-6_tokens,gpt-6_approximate"
+    assert [line.split(",")[-2:] for line in lines[1:]] == [
+        ["2", "true"],
+        ["4", "true"],
+    ]
+
+
 def test_total_only_tsv(tmp_path):
     args = _two_file_args(tmp_path)
     result = _invoke_cli(["--total-only", "--format", "tsv", *args])
@@ -700,7 +801,7 @@ def test_partial_success_missing_hf_token(monkeypatch):
         )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected)
+    assert result.stdout.strip() == str(expected.count)
     assert "meta-llama/Llama-3.2-1B" not in result.stdout
     assert "Failed to count tokens for meta-llama/Llama-3.2-1B" in result.stderr
     assert "HF_TOKEN" in result.stderr

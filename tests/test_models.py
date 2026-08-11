@@ -7,6 +7,7 @@ import pytest
 from toko import counter, models
 from toko.cache import get_cached_count
 from toko.counter import count_tokens
+from toko.result import TokenCount
 
 
 @pytest.mark.parametrize(
@@ -297,17 +298,21 @@ class TestAnthropicTokenizerBoundary:
         monkeypatch.setitem(
             counter._PROVIDER_HANDLERS,  # noqa: SLF001
             "anthropic",
-            lambda _text, model_info: counter.CountResult(counts[model_info.tokenizer]),
+            lambda _text, model_info: TokenCount(
+                count=counts[model_info.tokenizer],
+                model=model_info.name,
+                provider=model_info.provider,
+            ),
         )
 
         text = "the boundary must hold"
-        assert count_tokens(text, "claude-opus-4-6") == 100
-        assert count_tokens(text, "claude-opus-4-6-latest") == 100
-        assert count_tokens(text, "claude-opus-4-7") == 130
-        assert count_tokens(text, "claude-opus-5") == 130
+        assert count_tokens(text, "claude-opus-4-6").count == 100
+        assert count_tokens(text, "claude-opus-4-6-latest").count == 100
+        assert count_tokens(text, "claude-opus-4-7").count == 130
+        assert count_tokens(text, "claude-opus-5").count == 130
 
         # The 4.7 counts must not have landed on a 4.6 key on the way through.
-        assert count_tokens(text, "claude-opus-4-6") == 100
+        assert count_tokens(text, "claude-opus-4-6").count == 100
         assert get_cached_count(text, "claude-opus-4-6-latest") == 100
 
     def test_a_shorthand_spanning_the_boundary_is_left_unresolvable(self, monkeypatch):

@@ -9,7 +9,7 @@ from toko.models import list_models
 
 assert toko.__version__ is not None
 assert toko.__version__ != "0.0.0"
-assert count_tokens("The most basic of smoke tests.", model="gpt-5") == 7
+assert count_tokens("The most basic of smoke tests.", model="gpt-5").count == 7
 
 models_by_provider = list_models()
 assert len(models_by_provider) > 4

@@ -163,6 +163,70 @@ gpt-5,2
 
 Use `--format tsv` to force TSV even when running interactively.
 
+### What a piped run emits without `--format`
+
+Since a non-TTY stdout already defaults to headerless TSV, a piped or captured run needs
+no `--format` at all. A single-model `--text` or stdin run collapses one step further,
+to a bare number, which is what makes the usual scripting shape work:
+
+```sh
+n=$(toko -m gpt-5 --text "hello world")   # 2
+```
+
+Two exceptions are worth knowing before you parse the output:
+
+- The collapse to a bare number is for `--text` and stdin only. Give `toko` a path and
+  you get a `file<TAB>tokens` row per file, because the filename has to go somewhere.
+- An **approximate** count never collapses. It keeps its full row so the marker travels
+  with the number, rather than being stranded on stderr where the process on the other
+  end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
+  `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
+  read `tokens`, if a run of yours can hit an unrecognized model or a missing API key.
+
+## Library usage
+
+`count_tokens` is the whole public API, and it returns a `TokenCount` describing how the
+number was reached:
+
+```python
+from toko import count_tokens
+
+result = count_tokens("hello world", model="gpt-5")
+print(result.count)  # 2
+```
+
+| Field         | Type            | Meaning                                                                               |
+| ------------- | --------------- | ------------------------------------------------------------------------------------- |
+| `count`       | `int`           | The token count.                                                                      |
+| `model`       | `str`           | The canonical model the request resolved to, which need not be the string you passed. |
+| `provider`    | `str`           | The provider that produced the count.                                                 |
+| `approximate` | `bool`          | True when the count came from a stand-in tokenizer rather than the model's own.       |
+| `caveat`      | `str \| None`   | Why the count is approximate, when it is.                                             |
+| `cost`        | `float \| None` | Estimated cost in USD, when pricing data covers the model.                            |
+
+Counts fall back to a stand-in tokenizer when the model's own is unreachable — an
+unrecognized model name, or a provider whose API key is missing — so check
+`approximate` before treating a count as exact:
+
+```python
+result = count_tokens("hello world", model="grok-4")
+if result.approximate:
+    print(f"estimate only: {result.caveat}")
+```
+
+`caveat` is a human-readable explanation to show a person and is explicitly **not**
+machine-parseable — its wording, and for an aggregate its internal punctuation, may change
+at any time, so branch on the `approximate` boolean rather than parsing `caveat`.
+
+`TokenCount` is deliberately not int-like: it does not implement `__int__`/`__index__`
+or arithmetic, and it compares equal only to another `TokenCount` with the same fields,
+so use `result.count` wherever you need the number. Most misuses fail loudly — `+`,
+`int()`, `sum()`, `json.dumps`, and `%d` all raise — but three are quiet:
+
+- `result == 2` is `False` rather than an error.
+- `bool(result)` is always `True`, so a zero-token count is truthy.
+- `f"{result}"` renders the dataclass repr; use `f"{result.count}"`.
+
 ## Know which models are available
 
 ```sh

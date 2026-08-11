@@ -119,13 +119,12 @@ def _count_with_tiktoken(text: str, model_name: str) -> int | None:
 
 
 def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
-    handler_obj = _PROVIDER_HANDLERS.get(model_info.provider)
-    if handler_obj is None:
+    handler = _PROVIDER_HANDLERS.get(model_info.provider)
+    if handler is None:
         raise ValueError(
             f"Token counting not supported for provider: {model_info.provider}. "
             "Supported providers: OpenAI, Anthropic, Google, xAI, Mistral, Llama, DeepSeek, Qwen"
         )
-    handler = cast("Callable[[str, ModelInfo], CountResult]", handler_obj)
     return handler(text, model_info)
 
 
@@ -397,7 +396,7 @@ def _count_transformers(text: str, model_info: ModelInfo) -> CountResult:
     return CountResult(len(tokens))
 
 
-_PROVIDER_HANDLERS: dict[str, object] = {
+_PROVIDER_HANDLERS: dict[str, Callable[[str, ModelInfo], CountResult]] = {
     "openai": _count_openai,
     "xai": _count_xai,
     "anthropic": _count_anthropic,

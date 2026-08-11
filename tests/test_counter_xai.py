@@ -135,6 +135,9 @@ def test_xai_api_count_is_cached(monkeypatch):
 
     monkeypatch.setattr(counter.httpx, "post", fake_post)
 
+    # Ensure fallback is not invoked
+    monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
+
     assert counter.count_tokens("hello", "grok-3") == 7
     assert get_cached_count("hello", "grok-3") == 7
 

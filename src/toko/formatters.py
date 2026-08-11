@@ -151,7 +151,7 @@ def format_tsv(
 
 def format_output(
     results: dict[str, int],
-    output_format: str = "text",
+    output_format: OutputFormat | str = "text",
     *,
     costs: dict[str, float | None] | None = None,
     include_header: bool = True,
@@ -354,7 +354,7 @@ def _compute_totals(
 
 def format_file_table(
     file_results: dict[str, dict[str, int]],
-    output_format: str = "text",
+    output_format: OutputFormat | str = "text",
     total_only: bool = False,
     *,
     costs: dict[str, dict[str, float | None]] | None = None,

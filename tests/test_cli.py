@@ -427,6 +427,48 @@ def test_bad_path_does_not_abort_good_paths(tmp_path):
     assert "nope.txt" in result.stderr
 
 
+# The .invalid TLD never resolves, so any of these that escaped respx would fail
+# loudly instead of quietly reaching the network.
+_GOOD_URL = "https://toko.invalid/good.txt"
+_BAD_URL = "https://toko.invalid/bad.txt"
+
+
+@respx.mock
+def test_url_path_counts_tokens():
+    respx.get(_GOOD_URL).mock(return_value=httpx.Response(200, text="hello world"))
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-5", _GOOD_URL])
+    assert result.exit_code == 0
+    assert f"{_GOOD_URL},2" in result.stdout
+
+
+@respx.mock
+def test_unfetchable_url_reports_an_error():
+    respx.get(_BAD_URL).mock(return_value=httpx.Response(404))
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-5", _BAD_URL])
+    assert result.exit_code == 1
+    assert f"Error fetching URL {_BAD_URL}" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+@respx.mock
+def test_bad_url_does_not_abort_good_url_or_file(tmp_path):
+    respx.get(_GOOD_URL).mock(return_value=httpx.Response(200, text="hello world"))
+    respx.get(_BAD_URL).mock(side_effect=httpx.ConnectError("boom"))
+    sample = tmp_path / "sample.txt"
+    sample.write_text("goodbye world friend")
+
+    result = _invoke_cli(
+        ["--format", "csv", "-m", "gpt-5", _GOOD_URL, _BAD_URL, str(sample)]
+    )
+    assert result.exit_code == 1
+    assert f"{_GOOD_URL},2" in result.stdout
+    assert "sample.txt,4" in result.stdout
+    assert f"Error fetching URL {_BAD_URL}" in result.stderr
+    assert _BAD_URL not in result.stdout
+
+
 def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
     (tmp_path / "sample.txt").write_text("hello world")
     # A self-referential symlink is unreadable for every user, including root.

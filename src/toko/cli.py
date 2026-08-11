@@ -354,7 +354,7 @@ def _handle_text_input(
     models: list[str],
     text: str,
     *,
-    output_format: str,
+    output_format: OutputFormat,
     include_costs: bool,
     include_header: bool,
 ) -> None:
@@ -376,12 +376,12 @@ def _handle_text_input(
 
     adjusted_format = output_format
     if (
-        output_format == "tsv"
+        output_format == OutputFormat.TSV
         and not include_costs
         and not include_header
         and len(results) == 1
     ):
-        adjusted_format = "text"
+        adjusted_format = OutputFormat.TEXT
 
     output = format_output(
         results,
@@ -434,7 +434,7 @@ def _handle_file_inputs(
     models: list[str],
     files: list[tuple[str, str]],
     *,
-    output_format: str,
+    output_format: OutputFormat,
     total_only: bool,
     include_costs: bool,
     include_header: bool,

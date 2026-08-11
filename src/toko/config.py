@@ -42,7 +42,12 @@ def _parse_output_format(value: object, config_path: Path) -> OutputFormat:
         ) from e
 
 
-_TYPE_NAMES: dict[type, str] = {bool: "a boolean", dict: "a table", str: "a string"}
+_TYPE_NAMES: dict[type, str] = {
+    bool: "a boolean",
+    dict: "a table",
+    list: "a list",
+    str: "a string",
+}
 
 
 def _require_type[T](
@@ -60,6 +65,16 @@ def _require_type[T](
     found = f" {value!r}" if show_value else ""
     raise ValueError(
         f"Invalid {key}{found} in {config_path} (expected {_TYPE_NAMES[expected]})"
+    )
+
+
+def _require_bool(value: object, *, key: str, config_path: Path) -> bool:
+    # bool subclasses int, so this also accepts the 1/0 spellings, which loaded and
+    # behaved correctly before these fields were validated.
+    if isinstance(value, int):
+        return bool(value)
+    raise ValueError(
+        f"Invalid {key} {value!r} in {config_path} (expected {_TYPE_NAMES[bool]})"
     )
 
 
@@ -94,9 +109,8 @@ def load_config() -> Config:
         "1",
         "yes",
     )
-    config_auto_update = _require_type(
+    config_auto_update = _require_bool(
         toko_config.get("auto_update_prices", False),
-        bool,
         key="auto_update_prices",
         config_path=config_path,
     )
@@ -104,8 +118,25 @@ def load_config() -> Config:
     exclude = _require_type(
         toko_config.get("exclude", {}), dict, key="exclude", config_path=config_path
     )
+    # A bare string here would be iterated character by character into pathspec, where
+    # the lone "*" silently excludes every file, so the element types matter too.
+    exclude_patterns = _require_type(
+        exclude.get("patterns", []),
+        list,
+        key="exclude.patterns",
+        config_path=config_path,
+    )
+    for index, pattern in enumerate(exclude_patterns):
+        _require_type(
+            pattern, str, key=f"exclude.patterns[{index}]", config_path=config_path
+        )
+
     api_keys = _require_type(
-        toko_config.get("api_keys", {}), dict, key="api_keys", config_path=config_path
+        toko_config.get("api_keys", {}),
+        dict,
+        key="api_keys",
+        config_path=config_path,
+        show_value=False,
     )
     for name, key_value in api_keys.items():
         _require_type(
@@ -124,16 +155,15 @@ def load_config() -> Config:
             key="default_model",
             config_path=config_path,
         ),
-        respect_gitignore=_require_type(
+        respect_gitignore=_require_bool(
             toko_config.get("respect_gitignore", True),
-            bool,
             key="respect_gitignore",
             config_path=config_path,
         ),
         default_format=_parse_output_format(
             toko_config.get("default_format", "text"), config_path
         ),
-        exclude_patterns=exclude.get("patterns", []),
+        exclude_patterns=exclude_patterns,
         api_keys=api_keys,
         auto_update_prices=env_auto_update or config_auto_update,
     )

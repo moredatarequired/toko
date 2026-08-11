@@ -112,3 +112,38 @@ def test_rejected_api_key_message_never_echoes_the_value(write_config):
     with pytest.raises(ValueError, match=r"Invalid api_keys\.anthropic") as excinfo:
         load_config()
     assert SENTINEL not in str(excinfo.value)
+
+
+def test_api_keys_written_as_a_bare_string_never_echo_the_value(write_config):
+    """The likeliest misspelling puts the key itself where the table belongs."""
+    write_config(f'[toko]\napi_keys = "{SENTINEL}"\n')
+    with pytest.raises(
+        ValueError, match=r"Invalid api_keys in .*expected a table"
+    ) as excinfo:
+        load_config()
+    assert SENTINEL not in str(excinfo.value)
+
+
+def test_string_exclude_patterns_is_rejected(write_config):
+    write_config('[toko.exclude]\npatterns = "*.log"\n')
+    with pytest.raises(
+        ValueError, match=r"Invalid exclude\.patterns '\*\.log' in .*expected a list"
+    ):
+        load_config()
+
+
+def test_non_string_exclude_pattern_is_rejected(write_config):
+    write_config('[toko.exclude]\npatterns = ["*.log", 5]\n')
+    with pytest.raises(
+        ValueError, match=r"Invalid exclude\.patterns\[1\] 5 in .*expected a string"
+    ):
+        load_config()
+
+
+def test_integer_booleans_are_accepted(write_config):
+    """1/0 loaded and behaved correctly before these fields were validated."""
+    write_config("[toko]\nrespect_gitignore = 0\nauto_update_prices = 1\n")
+
+    config = load_config()
+    assert config.respect_gitignore is False
+    assert config.auto_update_prices is True

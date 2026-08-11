@@ -91,6 +91,12 @@ def _broken_tokenizer() -> None:
     raise RuntimeError("REAL NON-ASSERTION REGRESSION")
 
 
+def _model_asserting_on_the_result() -> None:
+    _fetch()
+    count = 1
+    assert count == 99999, "COLLECTED ASSERTION"
+
+
 def _block_collecting_per_model_failures(*operations) -> None:
     """Run the `test_every_listed_model_counts_tokens` shape on the real `HubFailures`."""
     with skip_if_rate_limited() as hub:
@@ -198,6 +204,52 @@ def test_collected_failure_is_reported_when_the_hub_relented(monkeypatch):
     _stub_transport(monkeypatch, [429, 200])
     with pytest.raises(pytest.fail.Exception, match="429 Client Error"):
         _block_collecting_per_model_failures(_refused_then_answered)
+
+
+def test_collected_rate_limited_error_reaches_the_skip_reason(monkeypatch):
+    """The collector drops the entry from its report; the error still has to survive.
+
+    Same guarantee the simple guard already gives: a skip that masks an error names it,
+    so `pytest -rs` shows what was hidden instead of a bare rate-limit line.
+    """
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.skip.Exception) as excinfo:
+        _block_collecting_per_model_failures(_refused_by_the_hub)
+
+    assert "rate limit" in str(excinfo.value)
+    assert "Failed to count tokens for Qwen/Qwen2-7B" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_strict_mode_recovers_a_collected_rate_limited_error(monkeypatch):
+    """Strict mode is the escape hatch, so it must recover what the collector dropped."""
+    monkeypatch.setenv(STRICT_ENV_VAR, "1")
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        _block_collecting_per_model_failures(_refused_by_the_hub)
+
+    assert "rate limit" in str(excinfo.value)
+    assert "Failed to count tokens for Qwen/Qwen2-7B" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_assertion_inside_collect_beats_the_skip(monkeypatch):
+    """A verdict is a verdict wherever it is raised — the collector must not eat it."""
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(AssertionError, match="COLLECTED ASSERTION"):
+        _block_collecting_per_model_failures(_model_asserting_on_the_result)
+
+
+def test_relented_rate_limit_is_reported_alongside_a_genuine_failure(monkeypatch):
+    """Nothing excuses a 429 the Hub answered, so a genuine failure must not hide it."""
+    _stub_transport(monkeypatch, [429, 200])
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        _block_collecting_per_model_failures(_broken_tokenizer, _refused_then_answered)
+
+    message = str(excinfo.value)
+    assert "REAL NON-ASSERTION REGRESSION" in message
+    assert "429 Client Error" in message
+    assert "refused by the Hub" not in message
 
 
 def test_skip_reason_names_an_exception_it_swallowed(monkeypatch):

@@ -55,10 +55,14 @@ class HubTraffic:
     went on to answer it. `refusals_seen` is the wider count, incremented by every 429
     including ones a retry got past, so a block that catches its own errors can tell
     which of them the Hub caused — snapshot it either side of each operation.
+
+    It also carries `masked`, because it is the one object both `skip_if_rate_limited`
+    and a collecting block hold: see `mask`.
     """
 
     def __init__(self) -> None:
         self.refusals_seen = 0
+        self.masked: list[Exception] = []
         self._unanswered: dict[str, None] = {}
 
     @property
@@ -78,6 +82,15 @@ class HubTraffic:
             # request, so it was never what stood between the test and its data.
             self._unanswered.pop(url, None)
 
+    def mask(self, errors: list[Exception]) -> None:
+        """Take custody of errors a block chose not to report because the Hub caused them.
+
+        Handing them here rather than dropping them is what lets `skip_if_rate_limited`
+        name them in the skip reason and chain them onto it, so `-rs` shows what was
+        hidden and strict mode fails carrying the original error.
+        """
+        self.masked.extend(errors)
+
 
 class HubFailures:
     """Failures a guarded block collects instead of raising, split by who is to blame.
@@ -93,16 +106,25 @@ class HubFailures:
         self._hub = hub
         self.genuine: list[str] = []
         self.rate_limited: list[str] = []
+        self._rate_limited_errors: list[Exception] = []
 
     @contextlib.contextmanager
     def collect(self, label: str) -> Iterator[None]:
         refusals_before = self._hub.refusals_seen
         try:
             yield
+        except VERDICT_EXCEPTIONS:
+            # Same rule as the outer guard: a verdict the block reached itself is about
+            # the code under test, so collecting it — and then dropping it as the Hub's
+            # doing — would lose it entirely. `pytest.fail.Exception` and
+            # `pytest.skip.Exception` derive from `BaseException` and never reach the
+            # clause below anyway; `AssertionError` does, which is why this comes first.
+            raise
         except Exception as exc:
             entry = f"{label}: {exc}"
             if self._hub.refusals_seen > refusals_before:
                 self.rate_limited.append(entry)
+                self._rate_limited_errors.append(exc)
             else:
                 self.genuine.append(entry)
 
@@ -111,15 +133,21 @@ class HubFailures:
 
         Rate-limited entries are dropped only when `skip_if_rate_limited` is going to
         skip on the way out. If every 429 was answered on a retry there is no skip
-        coming, and nothing is left excusing those failures, so they are reported.
+        coming, and nothing is left excusing those failures, so they are reported —
+        alongside any genuine ones rather than instead of them, since a real regression
+        is no reason to stop reporting a failure the Hub has stopped accounting for.
+
+        Dropping is never discarding: the errors behind the dropped entries go to the
+        `HubTraffic` record, which is how they reach the skip reason and strict mode.
         """
-        reported = self.genuine or ([] if self._hub.refused else self.rate_limited)
+        reported = self.genuine + ([] if self._hub.refused else self.rate_limited)
         if not reported:
+            self._hub.mask(self._rate_limited_errors)
             return
         formatted = "\n".join(reported)
         omitted = (
             f"\n(plus {len(self.rate_limited)} refused by the Hub with 429, not listed)"
-            if self.genuine and self.rate_limited
+            if self._hub.refused and self.rate_limited
             else ""
         )
         pytest.fail(f"{headline}\n{formatted}{omitted}")
@@ -160,7 +188,7 @@ def skip_if_rate_limited() -> Iterator[HubTraffic]:
 
     patch = pytest.MonkeyPatch()
     patch.setattr(requests.adapters.HTTPAdapter, "send", send)
-    swallowed: Exception | None = None
+    swallowed: list[Exception] = []
     try:
         try:
             yield hub
@@ -179,15 +207,18 @@ def skip_if_rate_limited() -> Iterator[HubTraffic]:
         # costs less than failing one that works. It is not discarded, though — it is
         # chained onto the skip below and named in the reason, so `-rs` still shows it
         # and strict mode still fails on it.
-        swallowed = exc
+        swallowed.append(exc)
+
+    # A block that collects errors rather than raising them makes the same trade one
+    # model at a time, and hands what it dropped to the same place, so the guarantee
+    # above holds however the block is written.
+    swallowed.extend(hub.masked)
 
     if hub.refused:
         message = f"Hugging Face Hub rate limit (429) on {hub.first_refused_url}"
-        if swallowed is not None:
-            message += (
-                f"\nThe guarded block also raised "
-                f"{type(swallowed).__name__}: {swallowed}"
-            )
+        for exc in swallowed:
+            message += f"\nThe guarded block also raised {type(exc).__name__}: {exc}"
+        cause = swallowed[0] if swallowed else None
         if os.environ.get(STRICT_ENV_VAR):
-            raise pytest.fail.Exception(message) from swallowed
-        raise pytest.skip.Exception(message) from swallowed
+            raise pytest.fail.Exception(message) from cause
+        raise pytest.skip.Exception(message) from cause

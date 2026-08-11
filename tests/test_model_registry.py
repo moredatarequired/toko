@@ -92,7 +92,14 @@ GOLDEN_LISTING = {
         "gpt-5.2",
         "gpt-5.2-pro",
     ],
-    "xai": ["grok-4.3", "grok-4.5", "grok-build-0.1"],
+    "xai": [
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-multi-agent-0309",
+        "grok-4.3",
+        "grok-4.5",
+        "grok-build-0.1",
+    ],
 }
 
 GOLDEN_LISTING_WITH_RETIRED = {
@@ -147,16 +154,19 @@ GOLDEN_LISTING_WITH_RETIRED = {
         "grok-2-vision-1212",
         "grok-3",
         "grok-3-mini",
-        "grok-4",
         "grok-4-0709",
         "grok-4-1-fast-non-reasoning",
         "grok-4-1-fast-reasoning",
         "grok-4-fast-non-reasoning",
         "grok-4-fast-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-multi-agent-0309",
         "grok-4.3",
         "grok-4.5",
         "grok-build-0.1",
         "grok-code-fast-1",
+        "grok-imagine-image-pro",
     ],
 }
 
@@ -190,7 +200,9 @@ class TestPackagedRegistry:
         assert models.GOOGLE_MODELS["gemini-2.5-pro"].name == "models/gemini-2.5-pro"
 
     def test_retirement_metadata_survives_the_registry(self):
-        grok_4 = models.XAI_MODELS["grok-4"]
+        # grok-4 is a declared alias of grok-4-0709, so this also proves the
+        # alias inherits the retirement rather than restating it.
+        grok_4 = models.get_model("grok-4")
         assert grok_4.retired == "2026-05-15"
         assert grok_4.redirects_to == "grok-4.3"
         assert grok_4.encoding == "o200k_base"

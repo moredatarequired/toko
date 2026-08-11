@@ -2,6 +2,8 @@
 
 import pytest
 
+import toko.counter as counter
+from toko.cache import get_cached_count
 from toko.counter import count_tokens
 
 
@@ -78,7 +80,53 @@ def test_exactly_resolved_openai_models_are_not_warned_about(model, capsys):
     assert capsys.readouterr().err == ""
 
 
+@pytest.mark.parametrize(
+    ("spelling", "canonical"), [("GPT-5", "gpt-5"), ("Gpt-5.2", "gpt-5.2")]
+)
+def test_openai_model_names_resolve_case_insensitively(spelling, canonical, capsys):
+    text = "The quick brown fox jumps over the lazy dog"
+    expected = count_tokens(text, model=canonical, use_cache=False)
+    capsys.readouterr()
+
+    assert count_tokens(text, model=spelling, use_cache=False) == expected
+    assert capsys.readouterr().err == ""
+
+
 def test_unknown_openai_model_warns_once(capsys):
     count_tokens("hello", model="gpt-6", use_cache=False)
     count_tokens("goodbye", model="gpt-6", use_cache=False)
     assert capsys.readouterr().err.count("Warning:") == 1
+
+
+def test_openai_estimate_warns_again_on_a_repeat_run(capsys):
+    text = "hello world"
+
+    first = count_tokens(text, model="gpt-6")
+    assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
+
+    # A later invocation is a fresh process, which remembers no warnings.
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
+
+    second = count_tokens(text, model="gpt-6")
+
+    assert second == first
+    assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
+    assert get_cached_count(text, "gpt-6") is None
+
+
+def test_warn_once_dedupes_per_kind_not_only_per_model(capsys):
+    counter._warn_once("alpha", "some-model", "first notice")  # noqa: SLF001
+    counter._warn_once("alpha", "some-model", "first notice")  # noqa: SLF001
+    counter._warn_once("beta", "some-model", "second notice")  # noqa: SLF001
+
+    err = capsys.readouterr().err
+    assert err.count("Warning:") == 2
+    assert "first notice" in err
+    assert "second notice" in err
+
+
+def test_exact_openai_count_is_cached(capsys):
+    text = "hello world"
+    count = count_tokens(text, model="gpt-5")
+    assert capsys.readouterr().err == ""
+    assert get_cached_count(text, "gpt-5") == count

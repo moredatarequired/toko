@@ -127,16 +127,10 @@ retired = "2025-10-28"
 [[model]]
 name = "gemini-3.1-pro-preview"
 provider = "google"
-aliases = [
-    "gemini-pro-latest",
-]
 
 [[model]]
 name = "gemini-3.6-flash"
 provider = "google"
-aliases = [
-    "gemini-flash-latest",
-]
 
 [[model]]
 name = "gemini-3.5-flash"
@@ -145,9 +139,6 @@ provider = "google"
 [[model]]
 name = "gemini-3.5-flash-lite"
 provider = "google"
-aliases = [
-    "gemini-flash-lite-latest",
-]
 
 [[model]]
 name = "gemini-3.1-flash-lite"
@@ -174,7 +165,6 @@ aliases = [
     "gemini-2.5-flash-preview-09-2025",
     "gemini-2.5-flash-preview-tts",
     "gemini-2.5-flash-native-audio-preview-09-2025",
-    "gemini-2.5-flash-native-audio-latest",
 ]
 
 [[model]]
@@ -253,23 +243,36 @@ provider = "xai"
 encoding = "o200k_base"
 
 [[model]]
-name = "grok-build-0.1"
+name = "grok-4.20-0309-reasoning"
 provider = "xai"
 encoding = "o200k_base"
 
 [[model]]
-name = "grok-4"
+name = "grok-4.20-0309-non-reasoning"
 provider = "xai"
 encoding = "o200k_base"
-retired = "2026-05-15"
-redirects_to = "grok-4.3"
 
+[[model]]
+name = "grok-4.20-multi-agent-0309"
+provider = "xai"
+encoding = "o200k_base"
+
+[[model]]
+name = "grok-build-0.1"
+provider = "xai"
+encoding = "o200k_base"
+
+# "<modelname> is aliased to the latest stable version. <modelname>-latest is
+# aliased to the latest version." (https://docs.x.ai/developers/models). The last
+# stable Grok 4 was grok-4-0709, so grok-4 inherits its retirement rather than
+# restating it as if xAI had listed grok-4 itself.
 [[model]]
 name = "grok-4-0709"
 provider = "xai"
 encoding = "o200k_base"
 retired = "2026-05-15"
 redirects_to = "grok-4.3"
+aliases = ["grok-4", "grok-4-latest"]
 
 [[model]]
 name = "grok-4-fast-reasoning"
@@ -312,6 +315,13 @@ provider = "xai"
 encoding = "o200k_base"
 retired = "2026-05-15"
 redirects_to = "grok-build-0.1"
+
+[[model]]
+name = "grok-imagine-image-pro"
+provider = "xai"
+encoding = "o200k_base"
+retired = "2026-05-15"
+redirects_to = "grok-imagine-image-quality"
 
 [[model]]
 name = "grok-3-mini"

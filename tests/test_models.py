@@ -4,8 +4,9 @@ import re
 
 import pytest
 
-from toko import models
-from toko.cache import cache_count, clear_cache, get_cached_count
+from toko import counter, models
+from toko.cache import get_cached_count
+from toko.counter import count_tokens
 
 
 @pytest.mark.parametrize(
@@ -36,6 +37,18 @@ def test_dotted_openai_model_keeps_its_own_name_and_encoding():
     assert models.get_model("gpt-5.2") == models.ModelInfo(
         name="gpt-5.2", provider="openai", encoding="o200k_base"
     )
+
+
+def test_every_priced_verified_encoding_is_advertised():
+    """Only a deliberate `listed = false` may keep a verified model off the list."""
+    advertised = set(models.list_models()["openai"])
+    verified = set(models.OPENAI_MODEL_ENCODINGS)
+    unlisted = {name for name, info in models.OPENAI_MODELS.items() if not info.listed}
+
+    assert verified - advertised == unlisted
+    # gpt-5.1-pro counts exactly but genai-prices cannot cost it.
+    assert unlisted == {"gpt-5.1-pro"}
+    assert advertised >= {"gpt-4.1-mini", "gpt-4.1-nano", "gpt-5-mini", "gpt-5-nano"}
 
 
 def test_list_models_includes_core_providers():
@@ -99,15 +112,116 @@ def test_silently_redirected_model_says_whose_count_it_is():
     assert "grok-4.3" in notice
 
 
+def test_retirement_notice_carries_no_presentation_prefix():
+    notice = models.retirement_notice(models.get_model("grok-3"))
+    assert notice is not None
+    assert not notice.startswith("Warning")
+
+
+def test_google_retirement_notice_does_not_leak_the_api_prefix():
+    notice = models.retirement_notice(models.get_model("gemini-2.0-flash-001"))
+    assert notice is not None
+    assert "models/" not in notice
+    assert notice.startswith("gemini-2.0-flash-001 was retired")
+
+
+def test_retired_models_are_never_listed_as_supported():
+    listed = {name for names in models.list_models().values() for name in names}
+    retired = [
+        info.name
+        for registry in (
+            models.ANTHROPIC_MODELS,
+            models.GOOGLE_MODELS,
+            models.XAI_MODELS,
+        )
+        for info in registry.values()
+        if info.retired is not None
+    ]
+    assert retired
+    assert not listed.intersection(retired)
+
+
+class TestXaiRegistry:
+    """xAI's published retirement list is the source of truth for these."""
+
+    def test_grok_4_inherits_its_retirement_from_grok_4_0709(self):
+        # docs.x.ai retires grok-4-0709, not plain grok-4; grok-4 is the alias
+        # for the last stable Grok 4, so its metadata must not be restated.
+        assert "grok-4" not in models.XAI_MODELS
+        for alias in ("grok-4", "grok-4-latest"):
+            resolved = models.get_model(alias)
+            assert resolved.name == "grok-4-0709"
+            assert resolved.retired == "2026-05-15"
+            assert resolved.redirects_to == "grok-4.3"
+
+    def test_the_registry_matches_the_published_retirement_list(self):
+        retired_on_may_15 = {
+            name
+            for name, info in models.XAI_MODELS.items()
+            if info.retired == "2026-05-15"
+        }
+        assert retired_on_may_15 == {
+            "grok-4-1-fast-reasoning",
+            "grok-4-1-fast-non-reasoning",
+            "grok-4-fast-reasoning",
+            "grok-4-fast-non-reasoning",
+            "grok-4-0709",
+            "grok-code-fast-1",
+            "grok-3",
+            "grok-imagine-image-pro",
+        }
+
+    def test_the_current_grok_4_20_family_is_offered(self):
+        listed = models.list_models()["xai"]
+        for name in (
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-multi-agent-0309",
+        ):
+            assert name in listed
+            assert models.get_model(name).retired is None
+
+
+class TestGoogleLatestAliases:
+    """Google repoints its "-latest" aliases on two weeks' notice.
+
+    Pinning a target here means reporting some other model's count the moment
+    Google moves it, so the alias is sent to the API verbatim.
+    """
+
+    @pytest.mark.parametrize(
+        "alias",
+        [
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-flash-native-audio-latest",
+        ],
+    )
+    def test_a_latest_alias_is_passed_through_verbatim(self, alias):
+        resolved = models.get_model(alias)
+        assert resolved.provider == "google"
+        assert resolved.name == f"models/{alias}"
+
+    def test_no_latest_alias_is_pinned_to_a_version(self):
+        pinned = [a for a in models._GOOGLE_ALIAS_MAP if a.endswith("-latest")]  # noqa: SLF001
+        assert pinned == []
+
+    def test_dated_previews_still_resolve_to_their_stable_release(self):
+        assert models.get_model("gemini-2.5-pro-preview-06-05").name == (
+            "models/gemini-2.5-pro"
+        )
+
+
 def test_warning_about_a_retired_model_goes_to_stderr(capsys):
-    models.warn_if_retired(models.get_model("claude-3-opus-20240229"))
+    counter._warn_if_retired(models.get_model("claude-3-opus-20240229"))  # noqa: SLF001
     captured = capsys.readouterr()
     assert "retired" in captured.err
     assert captured.out == ""
 
 
 def test_no_warning_is_emitted_for_a_current_model(capsys):
-    models.warn_if_retired(models.get_model("claude-opus-5"))
+    counter._warn_if_retired(models.get_model("claude-opus-5"))  # noqa: SLF001
     assert capsys.readouterr().err == ""
 
 
@@ -132,18 +246,62 @@ class TestAnthropicTokenizerBoundary:
         assert older.name == "claude-opus-4-6"
         assert newer.name == "claude-opus-4-7"
 
-    def test_models_on_opposite_sides_never_share_a_cache_key(self, cache_dir):
-        clear_cache()
-        assert cache_dir.exists()
-        text = "the boundary must hold"
-        # count_tokens caches under both the name the user asked for and the
-        # resolved name, so a 4.6 count must never be served for a 4.7 request.
-        for name in ("claude-opus-4-6", "claude-opus-4-6-latest"):
-            cache_count(text, models.get_model(name).name, 100)
+    def test_models_on_opposite_sides_never_share_a_cache_key(self, monkeypatch):
+        # count_tokens caches under both the name the user typed and the
+        # resolved name, so a shorthand that crossed the boundary would serve a
+        # 4.6 count for a 4.7 request. Anthropic has no local tokenizer, so the
+        # network call is stubbed with a per-generation count -- resolution,
+        # cache keying and read-back are all the real code.
+        counts = {
+            models.CLAUDE_TOKENIZER_LEGACY: 100,
+            models.CLAUDE_TOKENIZER_OPUS_4_7: 130,
+        }
+        monkeypatch.setitem(
+            counter._PROVIDER_HANDLERS,  # noqa: SLF001
+            "anthropic",
+            lambda _text, model_info: counter.CountResult(counts[model_info.tokenizer]),
+        )
 
-        assert get_cached_count(text, "claude-opus-4-6") == 100
-        assert get_cached_count(text, "claude-opus-4-7") is None
-        assert get_cached_count(text, "claude-opus-5") is None
+        text = "the boundary must hold"
+        assert count_tokens(text, "claude-opus-4-6") == 100
+        assert count_tokens(text, "claude-opus-4-6-latest") == 100
+        assert count_tokens(text, "claude-opus-4-7") == 130
+        assert count_tokens(text, "claude-opus-5") == 130
+
+        # The 4.7 counts must not have landed on a 4.6 key on the way through.
+        assert count_tokens(text, "claude-opus-4-6") == 100
+        assert get_cached_count(text, "claude-opus-4-6-latest") == 100
+
+    def test_a_shorthand_spanning_the_boundary_is_left_unresolvable(self, monkeypatch):
+        # No dated ID in the shipped registry sits on the new tokenizer, so the
+        # alias map's boundary guard is only reachable with an injected
+        # registry -- but the day such an ID ships, the shorthand must not
+        # silently pick a side.
+        def spec(date: str, tokenizer: str):
+            name = f"claude-fictional-9-{date}"
+            return name, models.ModelInfo(
+                name=name, provider="anthropic", tokenizer=tokenizer
+            )
+
+        spanning = dict(
+            [
+                spec("20260101", models.CLAUDE_TOKENIZER_LEGACY),
+                spec("20260601", models.CLAUDE_TOKENIZER_OPUS_4_7),
+            ]
+        )
+        monkeypatch.setattr(models, "ANTHROPIC_MODELS", spanning)
+        assert "claude-fictional-9" not in models._build_anthropic_alias_map()  # noqa: SLF001
+
+        within = dict(
+            [
+                spec("20260101", models.CLAUDE_TOKENIZER_LEGACY),
+                spec("20260601", models.CLAUDE_TOKENIZER_LEGACY),
+            ]
+        )
+        monkeypatch.setattr(models, "ANTHROPIC_MODELS", within)
+        assert models._build_anthropic_alias_map() == {  # noqa: SLF001
+            "claude-fictional-9": "claude-fictional-9-20260601"
+        }
 
     def test_no_shorthand_resolves_across_the_boundary(self):
         """Every name that resolves must land on its own tokenizer generation."""

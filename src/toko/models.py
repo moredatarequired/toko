@@ -251,7 +251,7 @@ OPENAI_MODEL_ENCODINGS = {
     name: info.encoding for name, info in OPENAI_MODELS.items() if info.encoding
 }
 
-_OPENAI_NAME_PATTERN = re.compile(r"(gpt-|o\d)")
+_OPENAI_NAME_PATTERN = re.compile(r"gpt-|o\d")
 
 
 def detect_provider(model: str) -> str | None:
@@ -354,6 +354,13 @@ def _normalize_google_model_name(name: str) -> str:
     if name.startswith("models/"):
         name = name.split("/", 1)[1]
     lowered = name.lower()
+    if lowered.endswith("-latest"):
+        # Google repoints its "-latest" aliases on its own schedule, announced
+        # with two weeks' notice; gemini-flash-latest alone has moved twice.
+        # Any target pinned here goes stale silently and reports another
+        # model's count, so send the alias to countTokens and let Google
+        # resolve it.
+        return lowered
     if lowered in GOOGLE_MODELS:
         return lowered
     alias = _GOOGLE_ALIAS_MAP.get(lowered)
@@ -593,25 +600,22 @@ def retirement_notice(model_info: ModelInfo) -> str | None:
     """Explain that a model is retired, and what the provider serves instead."""
     if model_info.retired is None:
         return None
+    # Google's canonical names carry the API's "models/" prefix, which is an
+    # implementation detail of the endpoint rather than a name users typed.
+    name = model_info.name.removeprefix("models/")
     when = (
         "on an unpublished date"
         if model_info.retired == RETIREMENT_DATE_UNKNOWN
         else f"on {model_info.retired}"
     )
-    notice = f"Warning: {model_info.name} was retired {when}"
+    notice = f"{name} was retired {when}"
     if model_info.redirects_to:
         return (
             f"{notice}; {model_info.provider} still answers for it but serves "
             f"{model_info.redirects_to}, so this count is {model_info.redirects_to}'s, "
-            f"not {model_info.name}'s."
+            f"not {name}'s."
         )
     return f"{notice}; the {model_info.provider} API will reject or redirect it."
-
-
-def warn_if_retired(model_info: ModelInfo) -> None:
-    notice = retirement_notice(model_info)
-    if notice is not None:
-        print(notice, file=sys.stderr)
 
 
 def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:

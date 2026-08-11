@@ -2,8 +2,21 @@
 
 import pytest
 
+from toko import models
 from toko.cost import estimate_cost
 from toko.models import ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS, list_models
+
+# Anthropic and xAI aliases resolve to a canonical name genai-prices already knows,
+# so trying the user's name first must stay invisible for them. Enumerated rather
+# than listed so a newly added alias is covered without touching this file.
+_VERSION_ALIASES = [
+    pytest.param(alias, canonical, id=alias)
+    for alias_map in (
+        models._ANTHROPIC_ALIAS_MAP,  # noqa: SLF001
+        models._XAI_ALIAS_MAP,  # noqa: SLF001
+    )
+    for alias, canonical in sorted(alias_map.items())
+]
 
 
 def _current(registry):
@@ -16,17 +29,38 @@ def _current(registry):
 
 
 # genai-prices ships its price table as data, so an older release simply has no
-# entry for a model released after it. Probing one current model tells us whether
-# the installed release is new enough for the coverage assertions below to mean
-# anything; if it is not, they would fail for every current model at once.
-_PRICES_COVER_CURRENT_MODELS = estimate_cost(1000, "claude-opus-5") is not None
+# entry for a model released after it. Probing tells us whether the installed
+# release is new enough for the coverage assertions below to mean anything; if
+# it is not, they would fail for every current model at once. Each provider gets
+# its own probe: genai-prices adds providers at its own pace, so one provider's
+# coverage says nothing about another's.
+_PROVIDER_PROBES = {
+    "anthropic": "claude-opus-5",
+    "google": "gemini-3.6-flash",
+    "xai": "grok-4.5",
+}
 
-requires_current_prices = pytest.mark.skipif(
-    not _PRICES_COVER_CURRENT_MODELS,
-    reason=(
-        "installed genai-prices predates the current model generation "
-        "(needs >=0.1.1); it has no entry for claude-opus-5"
-    ),
+
+def requires_current_prices(provider: str):
+    probe = _PROVIDER_PROBES[provider]
+    return pytest.mark.skipif(
+        estimate_cost(1000, probe) is None,
+        reason=(
+            f"installed genai-prices predates the current {provider} model "
+            f"generation; it has no entry for {probe}"
+        ),
+    )
+
+
+# xAI ships models faster than genai-prices publishes their rates. These are
+# current on docs.x.ai and so belong in the registry, but asserting a price for
+# them would only assert how stale the installed price table is.
+_UNPRICED_XAI_MODELS = frozenset(
+    {
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+    }
 )
 
 
@@ -76,7 +110,7 @@ class TestPricingCoverage:
                 f"The following current OpenAI models lack pricing data: {', '.join(failures)}"
             )
 
-    @requires_current_prices
+    @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):
         """All current Anthropic models should have pricing data."""
         failures = []
@@ -90,7 +124,7 @@ class TestPricingCoverage:
                 f"The following Anthropic models lack pricing data: {', '.join(failures)}"
             )
 
-    @requires_current_prices
+    @requires_current_prices("google")
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
         failures = []
@@ -104,11 +138,13 @@ class TestPricingCoverage:
                 f"The following Google models lack pricing data: {', '.join(failures)}"
             )
 
-    @requires_current_prices
+    @requires_current_prices("xai")
     def test_xai_models_have_pricing(self):
         """Current xAI models should have pricing data."""
         failures = []
         for model_name in _current(XAI_MODELS):
+            if model_name in _UNPRICED_XAI_MODELS:
+                continue
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -118,17 +154,18 @@ class TestPricingCoverage:
                 f"The following xAI models lack pricing data: {', '.join(failures)}"
             )
 
-    def test_retired_models_are_not_offered_for_pricing(self):
-        """Retired models stay resolvable but must not be listed as supported."""
-        listed = {name for names in list_models().values() for name in names}
-        retired = [
-            info.name
-            for registry in (ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS)
-            for info in registry.values()
-            if info.retired is not None
+        # Keep the exemption list honest: once genai-prices catches up, the
+        # models belong back under the assertion above.
+        caught_up = [
+            name
+            for name in sorted(_UNPRICED_XAI_MODELS)
+            if estimate_cost(100, name) is not None
         ]
-        assert retired
-        assert not listed.intersection(retired)
+        if caught_up:
+            pytest.fail(
+                "genai-prices now prices these; drop them from "
+                f"_UNPRICED_XAI_MODELS: {', '.join(caught_up)}"
+            )
 
     def test_tokenizer_aliases_have_pricing(self):
         """Test that tokenizer aliases (shorthand names) have pricing via OpenRouter."""
@@ -167,6 +204,12 @@ class TestPricingAccuracy:
         cost = estimate_cost(1000, "gemini-2.5-pro")
         assert cost is not None
         assert cost > 0
+
+    @pytest.mark.parametrize(("alias", "canonical"), _VERSION_ALIASES)
+    def test_alias_prices_match_its_canonical_model(self, alias, canonical):
+        # genai-prices matches model refs by prefix, so an alias could otherwise
+        # silently win against a different entry than its canonical name resolves to.
+        assert estimate_cost(1_000_000, alias) == estimate_cost(1_000_000, canonical)
 
     def test_claude_sonnet_pricing(self):
         """Test Claude 3.5 Sonnet pricing calculation."""

@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
+from toko.price_update import PRICE_DATA_URL
 
 runner = CliRunner()
 
@@ -47,6 +48,29 @@ def test_list_models(monkeypatch):
         "openai/gpt-4.1",
         "openai/gpt-5",
     ]
+
+
+def test_update_prices_subcommand_is_reached():
+    result = runner.invoke(app, ["update-prices"])
+    assert result.exit_code == 0
+    assert "Successfully updated pricing data" in result.stdout
+
+
+@respx.mock
+def test_update_prices_reports_download_failure():
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(503))
+
+    result = runner.invoke(app, ["update-prices"])
+
+    assert result.exit_code == 1
+    assert "Failed to fetch pricing data" in result.stderr
+    assert "Successfully updated" not in result.stdout
+
+
+def test_clear_cache_subcommand_is_reached():
+    result = runner.invoke(app, ["clear-cache"])
+    assert result.exit_code == 0
+    assert "Cache cleared" in result.stdout
 
 
 def test_count_with_text():

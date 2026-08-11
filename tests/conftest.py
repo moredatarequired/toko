@@ -3,6 +3,7 @@
 import warnings
 
 import pytest
+from genai_prices.data_snapshot import set_custom_snapshot
 
 from toko.cache import clear_cache, set_cache_dir
 
@@ -38,6 +39,15 @@ def _cache_root(tmp_path):
     finally:
         clear_cache()
         set_cache_dir(None)
+
+
+@pytest.fixture(autouse=True)
+def _bundled_prices():
+    """Keep fetched prices from leaking between tests."""
+    try:
+        yield
+    finally:
+        set_custom_snapshot(None)
 
 
 @pytest.fixture

@@ -8,11 +8,12 @@ import time
 from pathlib import Path
 
 import httpx
-from genai_prices import UpdatePrices, data_snapshot
+from genai_prices import data_snapshot
+from genai_prices.update_prices import DEFAULT_UPDATE_URL
 
 from toko.cache import get_cache_dir
 
-PRICE_DATA_URL = UpdatePrices().url
+PRICE_DATA_URL = DEFAULT_UPDATE_URL
 FETCH_TIMEOUT = httpx.Timeout(timeout=10, connect=5)
 
 
@@ -26,11 +27,6 @@ def get_price_cache_path() -> Path:
 
 
 def get_price_data_path() -> Path:
-    """Get the path to the cached copy of the fetched price data.
-
-    Returns:
-        Path to the cached price payload
-    """
     return get_cache_dir() / "prices.json"
 
 

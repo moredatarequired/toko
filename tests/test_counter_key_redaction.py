@@ -15,8 +15,10 @@ from urllib.parse import quote
 import httpx
 import pytest
 import respx
+from typer.testing import CliRunner
 
 import toko.counter as counter
+from toko.cli import app
 from toko.counter import (
     GOOGLE_COUNT_URL_BASE,
     _describe_request_failure,
@@ -32,6 +34,8 @@ try:
     HAS_PTY = True
 except ImportError:  # pty, termios and fcntl are POSIX-only
     HAS_PTY = False
+
+runner = CliRunner()
 
 SENTINEL = "toko-test-sentinel-do-not-log"
 
@@ -171,6 +175,29 @@ def test_an_echoed_key_is_redacted_from_the_xai_approximation_warning(
     stderr = capsys.readouterr().err
     assert SENTINEL not in stderr
     assert "***" in stderr
+
+
+def test_an_echoed_key_is_redacted_from_the_caveat_json_prints_on_stdout(
+    local_api, monkeypatch, tmp_path
+):
+    """The warning and `TokenCount.caveat` are one string, and JSON puts it on stdout.
+
+    Redacting only on the way to stderr would leave the same text leaking through a
+    piped, machine-read document -- the likelier place for it to be captured.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("XAI_API_KEY", SENTINEL)
+    monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 7)
+    local_api.respond(200, {"detail": f"key {SENTINEL} is not authorized"})
+
+    result = runner.invoke(app, ["--format", "json", "-m", "grok-4.5", "-t", "hello"])
+
+    assert result.exit_code == 0
+    assert SENTINEL not in result.stdout
+    # Not vacuous: the caveat is on stdout, it is just redacted.
+    entry = json.loads(result.stdout)["grok-4.5"]
+    assert entry["tokens"] == 7
+    assert "***" in entry["caveat"]
 
 
 def test_the_xai_approximation_survives_a_key_holding_a_non_utf8_byte(

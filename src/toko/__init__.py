@@ -18,8 +18,13 @@ __all__ = ["TokenCount", "__version__", "count_tokens"]
 _LAZY_EXPORTS = {"count_tokens": "toko.counter", "TokenCount": "toko.result"}
 
 
-def __getattr__(name: str) -> object:
-    module_name = _LAZY_EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return getattr(import_module(module_name), name)
+# Hidden from type checkers: a visible module __getattr__ is a catch-all that types
+# every unknown toko.<name> as object, so `toko.TokenCnt` would pass a downstream
+# check and only fail at runtime. The TYPE_CHECKING imports above are the real names.
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str) -> object:
+        module_name = _LAZY_EXPORTS.get(name)
+        if module_name is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        return getattr(import_module(module_name), name)

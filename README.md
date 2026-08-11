@@ -49,7 +49,7 @@ just setup  # installs lefthook git hooks
 
 ## Quick start
 
-Options in examples appear **before** any paths. `typer`/`click` treat everything after the first path argument as data input, so prefer `toko --total-only src` instead of `toko src --total-only`.
+Options may appear before or after paths, so `toko --total-only src` and `toko src --total-only` are equivalent.
 
 ### Count inline text
 
@@ -202,7 +202,7 @@ Toko reads configuration from `$XDG_CONFIG_HOME/toko/config.toml` (defaults to `
 ```toml
 [toko]
 default_model = "gpt-5"
-default_format = "text"
+default_format = "text"    # one of: text, json, csv, tsv
 respect_gitignore = true
 auto_update_prices = false # fetch latest pricing when cached data is stale
 

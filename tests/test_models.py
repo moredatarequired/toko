@@ -198,6 +198,44 @@ class TestGoogleLatestAliases:
         assert resolved.provider == "google"
         assert resolved.name == f"models/{alias}"
 
+    def test_a_latest_alias_the_prefix_scan_would_capture_still_passes_through(self):
+        """The pass-through only bites on names an alias prefix would have claimed.
+
+        The four aliases above miss the alias map and the prefix scan alike, so
+        they resolve verbatim with or without the pass-through. gemini-2.0-flash
+        *is* an alias prefix, so gemini-2.0-flash-latest is the case that pins
+        the branch: without it the name lands on gemini-2.0-flash-001.
+        """
+        resolved = models.get_model("gemini-2.0-flash-latest")
+        assert resolved.name == "models/gemini-2.0-flash-latest"
+        assert resolved.name != "models/gemini-2.0-flash-001"
+
+    def test_a_latest_alias_of_a_retired_family_still_warns(self):
+        """Passing through must not lose the retirement caveat.
+
+        Google shut gemini-2.0-flash-001 down on 2026-06-01, but genai-prices
+        still prefix-matches the name, so a silent pass-through would price a
+        model that no longer exists.
+        """
+        resolved = models.get_model("gemini-2.0-flash-latest")
+        assert resolved.retired == "2026-06-01"
+        notice = models.retirement_notice(resolved)
+        assert notice is not None
+        assert "retired" in notice
+
+    def test_a_latest_alias_of_a_current_family_is_not_warned_about(self):
+        assert models.get_model("gemini-flash-latest").retired is None
+        assert models.retirement_notice(models.get_model("gemini-flash-latest")) is None
+
+    def test_a_latest_alias_from_another_provider_is_not_claimed(self):
+        """The Google resolver runs before xAI's, so it must not swallow -latest."""
+        assert models.get_model("grok-4-latest").name == "grok-4-0709"
+
+    def test_a_latest_alias_is_matched_case_insensitively(self):
+        assert models.get_model("Gemini-Flash-Latest").name == (
+            "models/gemini-flash-latest"
+        )
+
     def test_no_latest_alias_is_pinned_to_a_version(self):
         pinned = [a for a in models._GOOGLE_ALIAS_MAP if a.endswith("-latest")]  # noqa: SLF001
         assert pinned == []

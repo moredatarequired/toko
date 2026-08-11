@@ -324,7 +324,6 @@ def _handle_text_input(
     text: str,
     *,
     output_format: str,
-    total_only: bool,
     include_costs: bool,
     include_header: bool,
 ) -> None:
@@ -349,7 +348,6 @@ def _handle_text_input(
         output_format == "tsv"
         and not include_costs
         and not include_header
-        and not total_only
         and len(results) == 1
     ):
         adjusted_format = "text"
@@ -512,7 +510,6 @@ def _do_count(
             models,
             inputs.text,
             output_format=actual_format,
-            total_only=total_only,
             include_costs=cost,
             include_header=include_header,
         )

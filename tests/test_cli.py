@@ -386,6 +386,25 @@ def test_total_only_text(tmp_path, monkeypatch):
     assert "second.txt" not in result.stdout
 
 
+def test_total_only_does_not_add_a_model_column_to_text_input():
+    plain = _invoke_cli(["--text", "hello world"])
+    total_only = _invoke_cli(["--total-only", "--text", "hello world"])
+    assert plain.exit_code == 0
+    assert total_only.exit_code == 0
+    assert plain.stdout.strip() == "2"
+    assert total_only.stdout == plain.stdout
+
+
+def test_total_only_leaves_multi_model_text_input_unchanged():
+    args = ["-m", "gpt-5", "-m", "gpt-4.1", "--text", "hello world"]
+    plain = _invoke_cli(args)
+    total_only = _invoke_cli(["--total-only", *args])
+    assert plain.exit_code == 0
+    assert total_only.exit_code == 0
+    assert plain.stdout.strip() == "gpt-5\t2\ngpt-4.1\t2"
+    assert total_only.stdout == plain.stdout
+
+
 def test_without_total_only_keeps_per_file_rows(tmp_path, monkeypatch):
     monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
     args = _two_file_args(tmp_path)

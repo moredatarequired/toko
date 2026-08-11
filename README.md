@@ -51,6 +51,8 @@ just setup  # installs lefthook git hooks
 
 Options may appear before or after paths, so `toko --total-only src` and `toko src --total-only` are equivalent.
 
+A first argument that names a subcommand (`update-prices`, `clear-cache`) runs that subcommand rather than counting a file of the same name. Only the first position is treated this way, so `toko README.md update-prices` counts both files, and `toko -- update-prices` counts a file literally named `update-prices`.
+
 ### Count inline text
 
 ```sh

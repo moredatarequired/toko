@@ -4,10 +4,10 @@ import contextlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
-from genai_prices import UpdatePrices
+from typer.core import TyperGroup
 
 from toko import __version__
 from toko.cache import clear_cache as do_clear_cache
@@ -18,7 +18,17 @@ from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
 from toko.output_format import OutputFormat
-from toko.price_update import update_prices_if_stale
+from toko.price_update import (
+    apply_cached_prices,
+    clear_price_cache,
+    refresh_prices,
+    update_prices_if_stale,
+)
+
+if TYPE_CHECKING:
+    import click
+
+_SUBCOMMAND_META_KEY = "toko.subcommand"
 
 
 def is_stdout_tty() -> bool:
@@ -31,15 +41,37 @@ def is_stderr_tty() -> bool:
     return sys.stderr.isatty()
 
 
+class TokoGroup(TyperGroup):
+    """Keep subcommands reachable alongside the default command's variadic PATHS.
+
+    Click fills the group's own arguments before it looks for a subcommand, so PATHS
+    would otherwise swallow names like ``update-prices`` and treat them as files.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        is_subcommand = bool(args) and args[0] in self.commands
+        ctx.meta[_SUBCOMMAND_META_KEY] = is_subcommand
+        # click.Group defaults allow_interspersed_args to False so that options after
+        # a subcommand name reach the subcommand. The default command needs the
+        # opposite (`toko src --total-only` must not read the flag as a path), so pick
+        # per invocation rather than setting it globally. The parser is built from ctx
+        # inside super().parse_args, so this lands before it is read.
+        ctx.allow_interspersed_args = not is_subcommand
+        return super().parse_args(ctx, args)
+
+    def get_params(self, ctx: click.Context) -> list[click.Parameter]:
+        params = super().get_params(ctx)
+        if ctx.meta.get(_SUBCOMMAND_META_KEY):
+            return [param for param in params if param.name != "paths"]
+        return params
+
+
 app = typer.Typer(
     name="toko",
     help="A CLI-first token counting tool for LLMs",
     no_args_is_help=False,
     invoke_without_command=True,
-    # click.Group defaults allow_interspersed_args to False, which stops option
-    # parsing at the first positional path (`toko src --total-only` would treat
-    # the flag as a path).
-    context_settings={"allow_interspersed_args": True},
+    cls=TokoGroup,
 )
 
 
@@ -134,21 +166,20 @@ def update_prices() -> None:
     """Update pricing data from genai-prices."""
     typer.echo("Fetching latest pricing data from genai-prices...")
 
-    updater = UpdatePrices()
-    result = updater.fetch()
-    if result:
-        typer.echo(
-            f"✓ Successfully updated pricing data ({len(result.providers)} providers)"
-        )
-    else:
-        typer.echo("✗ Failed to fetch pricing data", err=True)
-        raise typer.Exit(1)
+    try:
+        provider_count = refresh_prices()
+    except Exception as e:
+        typer.echo(f"✗ Failed to fetch pricing data: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    typer.echo(f"✓ Successfully updated pricing data ({provider_count} providers)")
 
 
 @app.command()
 def clear_cache() -> None:
-    """Clear the token count cache."""
+    """Clear the token count cache and the cached pricing data."""
     do_clear_cache()
+    clear_price_cache()
     typer.echo("✓ Cache cleared")
 
 
@@ -170,7 +201,11 @@ def _load_runtime_config() -> Config:
     return config
 
 
-def _maybe_update_prices(config: Config) -> None:
+def _prepare_prices(config: Config) -> None:
+    # Prices previously fetched by `toko update-prices` are installed on every run;
+    # only the download itself is opt-in, otherwise the manual command would have no
+    # effect for anyone who has not enabled auto-updates.
+    apply_cached_prices()
     if not config.auto_update_prices:
         return
     with contextlib.suppress(Exception):
@@ -486,7 +521,7 @@ def _do_count(
     list_models: bool,
 ) -> None:
     config = _load_runtime_config()
-    _maybe_update_prices(config)
+    _prepare_prices(config)
     if list_models:
         _show_model_list()
     models = _resolve_models(config, model)

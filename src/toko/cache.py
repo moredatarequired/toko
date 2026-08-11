@@ -27,13 +27,17 @@ def _default_cache_root() -> Path:
     return Path.home() / ".cache"
 
 
-def get_cache_db_path() -> Path:
+def get_cache_dir() -> Path:
     if _CACHE_DIR_OVERRIDE is not None:
         cache_dir = _CACHE_DIR_OVERRIDE
     else:
         cache_dir = _default_cache_root() / "toko"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / "token_cache.db"
+    return cache_dir
+
+
+def get_cache_db_path() -> Path:
+    return get_cache_dir() / "token_cache.db"
 
 
 def set_cache_dir(path: str | Path | None) -> None:

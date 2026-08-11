@@ -6,11 +6,14 @@ import re
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
+from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
 from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
+from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
 runner = CliRunner()
 
@@ -65,6 +68,106 @@ def test_list_models(monkeypatch):
         "openai/gpt-4.1",
         "openai/gpt-5",
     ]
+
+
+@pytest.mark.slow
+def test_update_prices_subcommand_is_reached():
+    result = runner.invoke(app, ["update-prices"])
+    assert result.exit_code == 0
+    assert "Successfully updated pricing data" in result.stdout
+
+
+@respx.mock
+def test_update_prices_reports_download_failure():
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(503))
+
+    result = runner.invoke(app, ["update-prices"])
+
+    assert result.exit_code == 1
+    assert "Failed to fetch pricing data" in result.stderr
+    assert "Successfully updated" not in result.stdout
+
+
+def test_clear_cache_subcommand_is_reached():
+    result = runner.invoke(app, ["clear-cache"])
+    assert result.exit_code == 0
+    assert "Cache cleared" in result.stdout
+
+
+def test_clear_cache_removes_the_price_cache():
+    """Clearing the cache must reach the pricing payload, not just the token database."""
+    get_price_data_path().write_bytes(b"not json")
+    get_price_cache_path().write_text("0")
+
+    result = runner.invoke(app, ["clear-cache"])
+
+    assert result.exit_code == 0
+    assert not get_price_data_path().exists()
+    assert not get_price_cache_path().exists()
+
+
+@pytest.mark.parametrize("subcommand", ["update-prices", "clear-cache"])
+def test_subcommand_help_describes_the_subcommand(subcommand):
+    """`toko <sub> --help` must not fall through to the top-level help."""
+    result = runner.invoke(app, [subcommand, "--help"])
+
+    assert result.exit_code == 0
+    output = _strip_ansi(result.stdout)
+    assert f"Usage: toko {subcommand} [OPTIONS]" in output
+    assert "--list-models" not in output
+
+
+# One provider priced far away from anything genai-prices bundles, so a cost that
+# matches it can only have come from the payload this test served.
+_SENTINEL_PRICES = [
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "api_pattern": r"api\.openai\.com",
+        "models": [
+            {
+                "id": "gpt-5",
+                "name": "GPT-5",
+                "match": {"equals": "gpt-5"},
+                "prices": {"input_mtok": 999.0, "output_mtok": 999.0},
+            }
+        ],
+    }
+]
+
+
+@respx.mock
+def test_counting_run_uses_prices_from_an_earlier_update():
+    """`update-prices` must reach later runs even with auto-update off (the default)."""
+    respx.get(PRICE_DATA_URL).mock(
+        return_value=httpx.Response(200, json=_SENTINEL_PRICES)
+    )
+    env = {"TOKO_AUTO_UPDATE_PRICES": "false"}
+
+    assert _invoke_cli(["update-prices"], env).exit_code == 0
+
+    # Drop the in-process snapshot so the count below starts where a fresh process
+    # would: on the bundled prices, with only prices.json to recover the update from.
+    set_custom_snapshot(None)
+
+    result = _invoke_cli(
+        [
+            "--cost",
+            "--header",
+            "--format",
+            "tsv",
+            "-m",
+            "gpt-5",
+            "--text",
+            "hello world",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    # 2 tokens at the sentinel $999/Mtok; the bundled price would round to $0.000003.
+    assert "$0.0020" in result.stdout
+    assert respx.calls.call_count == 1
 
 
 def test_count_with_text():

@@ -134,6 +134,12 @@ class TestRetirementWarningsThroughCountTokens:
         counter.count_tokens("hi", "grok-4.5")
         assert "retired" not in capsys.readouterr().err
 
+    def test_an_alias_of_a_retired_model_inherits_the_warning(self, capsys):
+        counter.count_tokens("hi", "grok-4")
+        stderr = capsys.readouterr().err
+        assert "grok-4-0709 was retired" in stderr
+        assert "grok-4.3" in stderr
+
 
 def test_xai_failure_without_options(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)

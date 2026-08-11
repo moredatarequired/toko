@@ -30,6 +30,18 @@ requires_current_prices = pytest.mark.skipif(
 )
 
 
+# xAI ships models faster than genai-prices publishes their rates. These are
+# current on docs.x.ai and so belong in the registry, but asserting a price for
+# them would only assert how stale the installed price table is.
+_UNPRICED_XAI_MODELS = frozenset(
+    {
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.20-multi-agent-0309",
+    }
+)
+
+
 class TestPricingCoverage:
     """Test that pricing works for all models we claim to support."""
 
@@ -109,6 +121,8 @@ class TestPricingCoverage:
         """Current xAI models should have pricing data."""
         failures = []
         for model_name in _current(XAI_MODELS):
+            if model_name in _UNPRICED_XAI_MODELS:
+                continue
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -116,6 +130,19 @@ class TestPricingCoverage:
         if failures:
             pytest.fail(
                 f"The following xAI models lack pricing data: {', '.join(failures)}"
+            )
+
+        # Keep the exemption list honest: once genai-prices catches up, the
+        # models belong back under the assertion above.
+        caught_up = [
+            name
+            for name in sorted(_UNPRICED_XAI_MODELS)
+            if estimate_cost(100, name) is not None
+        ]
+        if caught_up:
+            pytest.fail(
+                "genai-prices now prices these; drop them from "
+                f"_UNPRICED_XAI_MODELS: {', '.join(caught_up)}"
             )
 
     def test_retired_models_are_not_offered_for_pricing(self):

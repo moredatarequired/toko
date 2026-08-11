@@ -99,6 +99,47 @@ def test_silently_redirected_model_says_whose_count_it_is():
     assert "grok-4.3" in notice
 
 
+class TestXaiRegistry:
+    """xAI's published retirement list is the source of truth for these."""
+
+    def test_grok_4_inherits_its_retirement_from_grok_4_0709(self):
+        # docs.x.ai retires grok-4-0709, not plain grok-4; grok-4 is the alias
+        # for the last stable Grok 4, so its metadata must not be restated.
+        assert "grok-4" not in models.XAI_MODELS
+        for alias in ("grok-4", "grok-4-latest"):
+            resolved = models.get_model(alias)
+            assert resolved.name == "grok-4-0709"
+            assert resolved.retired == "2026-05-15"
+            assert resolved.redirects_to == "grok-4.3"
+
+    def test_the_registry_matches_the_published_retirement_list(self):
+        retired_on_may_15 = {
+            name
+            for name, info in models.XAI_MODELS.items()
+            if info.retired == "2026-05-15"
+        }
+        assert retired_on_may_15 == {
+            "grok-4-1-fast-reasoning",
+            "grok-4-1-fast-non-reasoning",
+            "grok-4-fast-reasoning",
+            "grok-4-fast-non-reasoning",
+            "grok-4-0709",
+            "grok-code-fast-1",
+            "grok-3",
+            "grok-imagine-image-pro",
+        }
+
+    def test_the_current_grok_4_20_family_is_offered(self):
+        listed = models.list_models()["xai"]
+        for name in (
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-multi-agent-0309",
+        ):
+            assert name in listed
+            assert models.get_model(name).retired is None
+
+
 class TestGoogleLatestAliases:
     """Google repoints its "-latest" aliases on two weeks' notice.
 

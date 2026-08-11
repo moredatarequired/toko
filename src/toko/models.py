@@ -263,12 +263,17 @@ def _resolve_google_model(name: str) -> ModelInfo | None:
 # with a different model instead of 404ing, so a count taken under a retired name
 # silently belongs to whatever now serves it. redirects_to records that.
 #
+# The retired entries below are exactly the eight slugs named in
+# https://docs.x.ai/developers/migration/may-15-retirement.
+#
 # (name, retired date, model served instead)
 _XAI_MODEL_SPECS: tuple[tuple[str, str | None, str | None], ...] = (
     ("grok-4.5", None, None),
     ("grok-4.3", None, None),
+    ("grok-4.20-0309-reasoning", None, None),
+    ("grok-4.20-0309-non-reasoning", None, None),
+    ("grok-4.20-multi-agent-0309", None, None),
     ("grok-build-0.1", None, None),
-    ("grok-4", "2026-05-15", "grok-4.3"),
     ("grok-4-0709", "2026-05-15", "grok-4.3"),
     ("grok-4-fast-reasoning", "2026-05-15", "grok-4.3"),
     ("grok-4-fast-non-reasoning", "2026-05-15", "grok-4.3"),
@@ -276,13 +281,22 @@ _XAI_MODEL_SPECS: tuple[tuple[str, str | None, str | None], ...] = (
     ("grok-4-1-fast-non-reasoning", "2026-05-15", "grok-4.3"),
     ("grok-3", "2026-05-15", "grok-4.3"),
     ("grok-code-fast-1", "2026-05-15", "grok-build-0.1"),
+    ("grok-imagine-image-pro", "2026-05-15", "grok-imagine-image-quality"),
     # Dropped from xAI's model list without a published retirement date.
     ("grok-3-mini", RETIREMENT_DATE_UNKNOWN, None),
     ("grok-2-1212", RETIREMENT_DATE_UNKNOWN, None),
     ("grok-2-vision-1212", RETIREMENT_DATE_UNKNOWN, None),
 )
 
-_XAI_ALIAS_MAP = {"grok-2-image-1212": "grok-2-1212"}
+# "<modelname> is aliased to the latest stable version. <modelname>-latest is
+# aliased to the latest version." (https://docs.x.ai/developers/models). The
+# last stable Grok 4 was grok-4-0709, so grok-4 inherits its retirement rather
+# than restating it as if xAI had listed grok-4 itself.
+_XAI_ALIAS_MAP = {
+    "grok-2-image-1212": "grok-2-1212",
+    "grok-4": "grok-4-0709",
+    "grok-4-latest": "grok-4-0709",
+}
 
 XAI_MODELS = {
     name: ModelInfo(

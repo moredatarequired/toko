@@ -1,5 +1,6 @@
 """Tests for price_update module."""
 
+import json
 import time
 from pathlib import Path
 
@@ -156,6 +157,55 @@ def test_failed_download_leaves_prices_stale():
 
     assert not get_price_cache_path().exists()
     assert should_update_prices()
+    assert get_snapshot().from_auto_update is False
+
+
+_DRIFTED_PRICES = [
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "api_pattern": r"api\.openai\.com",
+        "models": [
+            {
+                "id": "gpt-5",
+                "name": "GPT-5",
+                "match": {"starts_with": "gpt-5"},
+                # A future payload renames the token price keys; this genai-prices
+                # reads them as absent and prices the tokens at zero. The per-request
+                # key survives the rename, so a payload-wide "some price is non-zero"
+                # check would wave this through.
+                "prices": {
+                    "input_mtok_v2": 1.25,
+                    "output_mtok_v2": 10,
+                    "requests_kcount": 12,
+                },
+            }
+        ],
+    }
+]
+
+
+@respx.mock
+def test_schema_drifted_payload_leaves_prices_stale():
+    """Prices we parse but cannot read must not silently become $0.00."""
+    respx.get(PRICE_DATA_URL).mock(
+        return_value=httpx.Response(200, json=_DRIFTED_PRICES)
+    )
+
+    with pytest.raises(ValueError, match="no usable per-token prices"):
+        refresh_prices()
+
+    assert not get_price_data_path().exists()
+    assert get_snapshot().from_auto_update is False
+
+
+def test_schema_drifted_cache_is_rejected(capsys):
+    """A cached payload whose price keys have drifted must fall back to bundled data."""
+    get_price_data_path().write_text(json.dumps(_DRIFTED_PRICES))
+
+    assert apply_cached_prices() is False
+
+    assert "unusable cached price data" in capsys.readouterr().err
     assert get_snapshot().from_auto_update is False
 
 

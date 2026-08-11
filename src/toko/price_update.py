@@ -6,16 +6,18 @@ import os
 import sys
 import tempfile
 import time
+import warnings
 from pathlib import Path
 
 import httpx
-from genai_prices import data_snapshot
+from genai_prices import Usage, data_snapshot, types
 from genai_prices.update_prices import DEFAULT_UPDATE_URL
 
 from toko.cache import get_cache_dir
 
 PRICE_DATA_URL = DEFAULT_UPDATE_URL
 FETCH_TIMEOUT = httpx.Timeout(timeout=10, connect=5)
+_PROBE_USAGE = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
 
 
 def get_price_cache_path() -> Path:
@@ -55,6 +57,25 @@ def should_update_prices(max_age_seconds: int = 86400) -> bool:
         return age > max_age_seconds
 
 
+def _has_usable_price(providers: list[types.Provider]) -> bool:
+    # The payload comes from a URL that evolves independently of the pinned library, so
+    # it can parse cleanly and still price everything at zero once its price keys drift
+    # past what this genai-prices understands. Silent $0.00 is worse than a fallback.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for provider in providers:
+            for model in provider.models:
+                try:
+                    priced = model.calc_price(_PROBE_USAGE, provider)
+                except Exception:  # noqa: S112
+                    continue
+                # Per-token input and output, specifically: keys priced per request
+                # can survive a rename of the token keys and mask the drift.
+                if priced.input_price > 0 and priced.output_price > 0:
+                    return True
+    return False
+
+
 def _build_snapshot(payload: bytes) -> data_snapshot.DataSnapshot:
     # genai-prices only parses price payloads inside UpdatePrices.fetch(), which always
     # downloads them and hands back a snapshot rather than the bytes we need to cache.
@@ -65,6 +86,8 @@ def _build_snapshot(payload: bytes) -> data_snapshot.DataSnapshot:
     providers = _providers_from_raw(json.loads(payload))
     if not providers:
         raise ValueError("Pricing data contains no providers")
+    if not _has_usable_price(providers):
+        raise ValueError("Pricing data has no usable per-token prices")
     return data_snapshot.DataSnapshot(providers, from_auto_update=True)
 
 

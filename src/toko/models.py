@@ -197,6 +197,7 @@ def _build_aliases(
     canonical: frozenset[str],
 ) -> dict[str, dict[str, str]]:
     aliases: dict[str, dict[str, str]] = defaultdict(dict)
+    claims: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
     for name, fields in merged.items():
         provider = _string_field(fields, "provider")
         declared = fields.get("aliases")
@@ -220,26 +221,31 @@ def _build_aliases(
                     "before any alias"
                 )
                 continue
-            previous = aliases[provider].get(key)
-            # `name` comes later in merged order, so it takes the alias. Only a
-            # loser declared no earlier than the winner has anything to report:
-            # a later document beating an earlier one is a re-point working, and
-            # warning there would nag on every run.
-            if (
-                previous is not None
-                and previous != name
-                and alias_origins.get((name, key), 0)
-                <= alias_origins.get((previous, key), 0)
-            ):
-                _warn(
-                    f"alias '{alias}' declared on '{previous}' has no effect: "
-                    f"'{name}' declares it too and comes later in the merged "
-                    f"registry order, so '{name}' keeps it. Overriding a "
-                    "packaged model keeps that model's position, so re-point an "
-                    "alias by declaring it on a model name that does not exist "
-                    "yet, which is appended last."
-                )
+            claims[(provider, key)].append((alias, name))
             aliases[provider][key] = name
+
+    # Warning has to wait for the whole walk: the model holding an alias partway
+    # through is not always the one that ends up with it, and a message naming a
+    # middle claimant as the winner sends the user to fix a model that is fine.
+    for (provider, key), claimed in claims.items():
+        winner = aliases[provider][key]
+        for alias, name in claimed:
+            # Only a loser declared no earlier than the winner has anything to
+            # report: a later document beating an earlier one is a re-point
+            # working, and warning there would nag on every run.
+            if (
+                name == winner
+                or alias_origins[(winner, key)] > alias_origins[(name, key)]
+            ):
+                continue
+            _warn(
+                f"alias '{alias}' declared on '{name}' has no effect: "
+                f"'{winner}' declares it too and comes later in the merged "
+                f"registry order, so '{winner}' keeps it. Overriding a "
+                "packaged model keeps that model's position, so re-point an "
+                "alias by declaring it on a model name that does not exist "
+                "yet, which is appended last."
+            )
     return aliases
 
 

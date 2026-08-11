@@ -520,15 +520,19 @@ TRANSFORMERS_MODELS: tuple[str, ...] = (
     "NousResearch/Hermes-3-Llama-3.1-8B",
 )
 
-# Dead OpenAI engines that tiktoken still carries in MODEL_TO_ENCODING. They tokenize
-# fine, so counting is untouched; they are just hidden from --list-models by default.
-# Deliberately absent because they are still live: gpt-3.5-turbo (and its Azure
-# deployment alias gpt-35-turbo), gpt-4, text-embedding-ada-002, and the fine-tuning
-# bases babbage-002 and davinci-002 that replaced the original babbage and davinci.
+# Names tiktoken still carries in MODEL_TO_ENCODING that --list-models should not
+# advertise. They tokenize fine, so counting is untouched; they are only hidden from
+# the default listing. As of 2026-08-11 that covers OpenAI engines already shut down,
+# babbage-002 and davinci-002 (no new fine-tuning since 2024-10-28, API shutdown
+# 2026-09-28, and genai-prices no longer prices them), and gpt-35-turbo, which is the
+# Azure deployment spelling of gpt-3.5-turbo rather than a name the OpenAI API accepts.
+# Deliberately absent because they are still live: gpt-3.5-turbo, gpt-4 (both shut down
+# 2026-10-23) and text-embedding-ada-002.
 RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
     {
         "ada",
         "babbage",
+        "babbage-002",
         "code-cushman-001",
         "code-cushman-002",
         "code-davinci-001",
@@ -539,9 +543,11 @@ RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
         "curie",
         "cushman-codex",
         "davinci",
+        "davinci-002",
         "davinci-codex",
         "gpt-2",
         "gpt-3.5",
+        "gpt-35-turbo",
         "gpt2",
         "text-ada-001",
         "text-babbage-001",

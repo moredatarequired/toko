@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
-import httpx
 import typer
 from typer.core import TyperGroup
 
@@ -18,6 +17,7 @@ from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
+from toko.output_format import OutputFormat
 from toko.price_update import (
     apply_cached_prices,
     clear_price_cache,
@@ -49,7 +49,14 @@ class TokoGroup(TyperGroup):
     """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        ctx.meta[_SUBCOMMAND_META_KEY] = bool(args) and args[0] in self.commands
+        is_subcommand = bool(args) and args[0] in self.commands
+        ctx.meta[_SUBCOMMAND_META_KEY] = is_subcommand
+        # click.Group defaults allow_interspersed_args to False so that options after
+        # a subcommand name reach the subcommand. The default command needs the
+        # opposite (`toko src --total-only` must not read the flag as a path), so pick
+        # per invocation rather than setting it globally. The parser is built from ctx
+        # inside super().parse_args, so this lands before it is read.
+        ctx.allow_interspersed_args = not is_subcommand
         return super().parse_args(ctx, args)
 
     def get_params(self, ctx: click.Context) -> list[click.Parameter]:
@@ -120,8 +127,8 @@ def main(
         ),
     ] = False,
     output_format: Annotated[
-        str, typer.Option("--format", "-f", help="Output format: text, json, csv, tsv")
-    ] = "text",
+        OutputFormat, typer.Option("--format", "-f", help="Output format")
+    ] = OutputFormat.TEXT,
     cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
     header: Annotated[
         bool | None,
@@ -180,6 +187,7 @@ def clear_cache() -> None:
 class InputSelection:
     text: str | None
     files: list[tuple[str, str]]
+    had_failures: bool = False
 
 
 def _load_runtime_config() -> Config:
@@ -208,9 +216,9 @@ def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
     return cli_models or [config.default_model]
 
 
-def _resolve_output_format(config: Config, requested: str) -> str:
-    if requested == "text":
-        return config.default_format if is_stdout_tty() else "tsv"
+def _resolve_output_format(config: Config, requested: OutputFormat) -> OutputFormat:
+    if requested == OutputFormat.TEXT:
+        return config.default_format if is_stdout_tty() else OutputFormat.TSV
     return requested
 
 
@@ -234,7 +242,7 @@ def _collect_inputs(
         return InputSelection(text=text, files=[])
 
     if paths:
-        files = _collect_files_from_paths(
+        files, had_failures = _collect_files_from_paths(
             paths,
             config,
             no_ignore=no_ignore,
@@ -242,9 +250,11 @@ def _collect_inputs(
             exclude_patterns=exclude_patterns,
         )
         if not files:
-            typer.echo("Error: No files found matching criteria", err=True)
+            # A per-path error was already reported; don't pile a vague one on top.
+            if not had_failures:
+                typer.echo("Error: No files found matching criteria", err=True)
             raise typer.Exit(1)
-        return InputSelection(text=None, files=files)
+        return InputSelection(text=None, files=files, had_failures=had_failures)
 
     if not is_stdin_empty():
         stdin_text = sys.stdin.read()
@@ -264,38 +274,39 @@ def _collect_files_from_paths(
     no_ignore: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], bool]:
     collected: list[tuple[str, str]] = []
     should_respect_gitignore = config.respect_gitignore if not no_ignore else False
+    had_failures = False
 
     for path_str in paths:
         if path_str.startswith(("http://", "https://")):
-            _collect_from_url(path_str, collected)
-            continue
-        _collect_from_filesystem(
-            Path(path_str),
-            collected,
-            recursive=not no_recursive,
-            respect_gitignore=should_respect_gitignore,
-            exclude_patterns=exclude_patterns,
-        )
+            ok = _collect_from_url(path_str, collected)
+        else:
+            ok = _collect_from_filesystem(
+                Path(path_str),
+                collected,
+                recursive=not no_recursive,
+                respect_gitignore=should_respect_gitignore,
+                exclude_patterns=exclude_patterns,
+            )
+        had_failures = had_failures or not ok
 
-    return collected
+    return collected, had_failures
 
 
-def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> None:
+def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> bool:
     try:
         content = fetch_url(path_str)
-        collected.append((path_str, content))
-    except httpx.HTTPError as e:
-        typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
-        raise typer.Exit(1) from e
-    except UnicodeDecodeError as e:
+    except UnicodeDecodeError:
         typer.echo(f"Error: URL content is not valid UTF-8: {path_str}", err=True)
-        raise typer.Exit(1) from e
+        return False
     except Exception as e:
         typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
-        raise typer.Exit(1) from e
+        return False
+
+    collected.append((path_str, content))
+    return True
 
 
 def _collect_from_filesystem(
@@ -305,7 +316,7 @@ def _collect_from_filesystem(
     recursive: bool,
     respect_gitignore: bool,
     exclude_patterns: list[str] | None,
-) -> None:
+) -> bool:
     try:
         files = find_files(
             path,
@@ -315,8 +326,9 @@ def _collect_from_filesystem(
         )
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1) from e
+        return False
 
+    ok = True
     for file_path in files:
         try:
             content = read_file(file_path)
@@ -325,7 +337,8 @@ def _collect_from_filesystem(
             continue
         except Exception as e:
             typer.echo(f"Error reading {file_path}: {e}", err=True)
-            raise typer.Exit(1) from e
+            ok = False
+            continue
 
         try:
             display_name = str(file_path.relative_to(Path.cwd()))
@@ -334,13 +347,14 @@ def _collect_from_filesystem(
 
         collected.append((display_name, content))
 
+    return ok
+
 
 def _handle_text_input(
     models: list[str],
     text: str,
     *,
-    output_format: str,
-    total_only: bool,
+    output_format: OutputFormat,
     include_costs: bool,
     include_header: bool,
 ) -> None:
@@ -362,18 +376,16 @@ def _handle_text_input(
 
     adjusted_format = output_format
     if (
-        output_format == "tsv"
+        output_format == OutputFormat.TSV
         and not include_costs
         and not include_header
-        and not total_only
         and len(results) == 1
     ):
-        adjusted_format = "text"
+        adjusted_format = OutputFormat.TEXT
 
     output = format_output(
         results,
         output_format=adjusted_format,
-        total_only=total_only,
         costs=costs,
         include_header=include_header,
     )
@@ -422,7 +434,7 @@ def _handle_file_inputs(
     models: list[str],
     files: list[tuple[str, str]],
     *,
-    output_format: str,
+    output_format: OutputFormat,
     total_only: bool,
     include_costs: bool,
     include_header: bool,
@@ -503,7 +515,7 @@ def _do_count(
     no_ignore: bool,
     no_recursive: bool,
     total_only: bool,
-    output_format: str,
+    output_format: OutputFormat,
     cost: bool,
     header: bool | None,
     list_models: bool,
@@ -529,7 +541,6 @@ def _do_count(
             models,
             inputs.text,
             output_format=actual_format,
-            total_only=total_only,
             include_costs=cost,
             include_header=include_header,
         )
@@ -542,6 +553,9 @@ def _do_count(
         include_costs=cost,
         include_header=include_header,
     )
+    # Results for the readable inputs are already printed; signal the bad ones.
+    if inputs.had_failures:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

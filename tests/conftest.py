@@ -57,7 +57,11 @@ def cache_dir(_cache_root):
 
 
 @pytest.fixture(autouse=True)
-def _reset_approximation_warnings():
+def _reset_warned_models():
+    """Start every test from an empty warned-once registry.
+
+    It is process-global, so a "warns once" assertion is otherwise order-dependent.
+    """
     counter._WARNED_ONCE.clear()  # noqa: SLF001
     yield
     counter._WARNED_ONCE.clear()  # noqa: SLF001

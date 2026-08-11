@@ -177,6 +177,12 @@ anthropic/claude-3-7-sonnet-20250219
 anthropic/claude-3-haiku-20240307
 ```
 
+Retired OpenAI engines (`text-davinci-003`, `code-cushman-001`, and friends) are hidden from that listing. Add `--include-retired` to see them; it affects `--list-models` only, and those names still count exactly as before.
+
+```sh
+toko --list-models --include-retired | grep davinci
+```
+
 ## API keys and optional providers
 
 Some providers require API credentials to access token counting endpoints:

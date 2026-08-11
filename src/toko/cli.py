@@ -176,6 +176,13 @@ def main(
     list_models: Annotated[
         bool, typer.Option("--list-models", help="List all supported models and exit")
     ] = False,
+    include_retired: Annotated[
+        bool,
+        typer.Option(
+            "--include-retired",
+            help="Include retired OpenAI engines in --list-models output",
+        ),
+    ] = False,
 ) -> None:
     """Toko - Token counter for LLMs."""
     # If a subcommand was invoked, don't run default behavior
@@ -195,6 +202,7 @@ def main(
         cost,
         header,
         list_models,
+        include_retired=include_retired,
     )
 
 
@@ -529,8 +537,8 @@ def _format_model_name(provider: str, model: str) -> str:
     return f"{provider}/{base}"
 
 
-def _collect_supported_models() -> list[str]:
-    models_by_provider = get_model_list()
+def _collect_supported_models(*, include_retired: bool) -> list[str]:
+    models_by_provider = get_model_list(include_retired=include_retired)
     names: set[str] = set()
     for provider, provider_models in models_by_provider.items():
         for model in provider_models:
@@ -538,8 +546,8 @@ def _collect_supported_models() -> list[str]:
     return sorted(names, key=str.lower)
 
 
-def _show_model_list() -> None:
-    models = _collect_supported_models()
+def _show_model_list(*, include_retired: bool) -> None:
+    models = _collect_supported_models(include_retired=include_retired)
     typer.echo("\n".join(models))
     raise typer.Exit
 
@@ -556,11 +564,13 @@ def _do_count(
     cost: bool,
     header: bool | None,
     list_models: bool,
+    *,
+    include_retired: bool = False,
 ) -> None:
     config = _load_runtime_config()
     _prepare_prices(config)
     if list_models:
-        _show_model_list()
+        _show_model_list(include_retired=include_retired)
     models = _resolve_models(config, model)
     actual_format = _resolve_output_format(config, output_format)
     merged_exclude = _merge_excludes(config, exclude)

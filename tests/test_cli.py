@@ -52,7 +52,7 @@ def test_version():
 def test_list_models(monkeypatch):
     monkeypatch.setattr(
         "toko.cli.get_model_list",
-        lambda: {
+        lambda **_kwargs: {
             "openai": ["gpt-4.1", "gpt-5"],
             "google": ["models/gemini-flash-latest"],
             "huggingface": ["meta-llama/Llama-3.2-1B"],
@@ -68,6 +68,28 @@ def test_list_models(monkeypatch):
         "openai/gpt-4.1",
         "openai/gpt-5",
     ]
+
+
+def test_list_models_hides_retired_engines_without_the_flag():
+    default = _invoke_cli(["--list-models"])
+    with_retired = _invoke_cli(["--list-models", "--include-retired"])
+
+    assert default.exit_code == 0
+    assert with_retired.exit_code == 0
+    assert "openai/text-davinci-003" not in default.stdout.splitlines()
+    assert "openai/text-davinci-003" in with_retired.stdout.splitlines()
+    assert "openai/gpt-4" in default.stdout.splitlines()
+
+
+def test_retired_models_still_count(tmp_path):
+    """--include-retired only shortens the listing; counting is untouched."""
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(["--format", "csv", "-m", "text-davinci-003", str(sample)])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in _strip_ansi(result.stdout)
 
 
 @pytest.mark.slow

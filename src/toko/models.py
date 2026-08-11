@@ -291,6 +291,48 @@ POPULAR_OPENAI_MODELS = tuple(
     )
 )
 
+# Dead OpenAI engines that tiktoken still carries in MODEL_TO_ENCODING. They tokenize
+# fine, so counting is untouched; they are just hidden from --list-models by default.
+# gpt-3.5-turbo, gpt-4, and text-embedding-ada-002 are deliberately absent: still live.
+RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
+    {
+        "ada",
+        "babbage",
+        "babbage-002",
+        "code-cushman-001",
+        "code-cushman-002",
+        "code-davinci-001",
+        "code-davinci-002",
+        "code-davinci-edit-001",
+        "code-search-ada-code-001",
+        "code-search-babbage-code-001",
+        "curie",
+        "cushman-codex",
+        "davinci",
+        "davinci-002",
+        "davinci-codex",
+        "gpt-2",
+        "gpt-3.5",
+        "gpt-35-turbo",
+        "gpt2",
+        "text-ada-001",
+        "text-babbage-001",
+        "text-curie-001",
+        "text-davinci-001",
+        "text-davinci-002",
+        "text-davinci-003",
+        "text-davinci-edit-001",
+        "text-search-ada-doc-001",
+        "text-search-babbage-doc-001",
+        "text-search-curie-doc-001",
+        "text-search-davinci-doc-001",
+        "text-similarity-ada-001",
+        "text-similarity-babbage-001",
+        "text-similarity-curie-001",
+        "text-similarity-davinci-001",
+    }
+)
+
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
 
 
@@ -457,7 +499,7 @@ def get_model(name: str) -> ModelInfo:
     return builder(name)
 
 
-def list_models() -> dict[str, list[str]]:
+def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
     """List all supported models grouped by provider.
 
     Returns:
@@ -469,6 +511,8 @@ def list_models() -> dict[str, list[str]]:
         providers[model.provider].add(model.name)
 
     for model_name in TIKTOKEN_MODEL_TO_ENCODING:
+        if not include_retired and model_name in RETIRED_OPENAI_MODELS:
+            continue
         provider = detect_provider(model_name)
         if provider is None:
             provider = "openai"

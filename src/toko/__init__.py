@@ -14,10 +14,11 @@ except PackageNotFoundError:  # e.g. running from a repo checkout without instal
 __all__ = ["TokenCount", "__version__", "count_tokens"]
 
 
-# Without this, dir(toko) lists the import machinery this module happens to use
-# instead of the names it exports, since the lazy ones are not in the namespace.
+# The lazy names are not in the namespace until first access, so without this
+# dir(toko) omits them and lists the import machinery this module happens to use.
+# Unioning with globals() keeps the module dunders that dir-based tooling expects.
 def __dir__() -> list[str]:
-    return sorted(__all__)
+    return sorted(set(__all__) | set(globals()))
 
 
 # Resolved on first attribute access rather than at import. Reaching count_tokens pulls

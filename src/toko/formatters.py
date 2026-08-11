@@ -2,20 +2,13 @@
 
 import json
 import sys
-from enum import StrEnum
 from io import StringIO
 
 from rich.console import Console
 from rich.table import Table
 
 from toko.cost import format_cost
-
-
-class OutputFormat(StrEnum):
-    TEXT = "text"
-    JSON = "json"
-    CSV = "csv"
-    TSV = "tsv"
+from toko.output_format import OutputFormat
 
 
 def format_table(
@@ -176,13 +169,13 @@ def format_output(
     Raises:
         ValueError: If format is not supported
     """
-    if output_format == "text":
+    if output_format == OutputFormat.TEXT:
         return format_text(results, costs=costs, include_header=include_header)
-    if output_format == "json":
+    if output_format == OutputFormat.JSON:
         return format_json(results, costs=costs)
-    if output_format == "csv":
+    if output_format == OutputFormat.CSV:
         return format_csv(results, include_header=include_header, costs=costs)
-    if output_format == "tsv":
+    if output_format == OutputFormat.TSV:
         return format_tsv(results, include_header=include_header, costs=costs)
     raise ValueError(f"Unknown format: {output_format}")
 
@@ -370,22 +363,22 @@ def format_file_table(
     """Format per-file token counts with files as rows and models as columns."""
     models = _collect_models(file_results)
 
-    if output_format == "json":
+    if output_format == OutputFormat.JSON:
         return _format_file_json(
             file_results, models=models, total_only=total_only, costs=costs
         )
 
-    if output_format in ("csv", "tsv"):
+    if output_format in (OutputFormat.CSV, OutputFormat.TSV):
         return _format_file_table_delimited(
             file_results,
             models=models,
-            separator="," if output_format == "csv" else "\t",
+            separator="," if output_format == OutputFormat.CSV else "\t",
             total_only=total_only,
             include_header=include_header,
             costs=costs,
         )
 
-    if output_format == "text":
+    if output_format == OutputFormat.TEXT:
         return _format_file_table_text(
             file_results,
             models=models,

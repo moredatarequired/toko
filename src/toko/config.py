@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from toko.formatters import OutputFormat
+from toko.output_format import OutputFormat
 
 
 @dataclass

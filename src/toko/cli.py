@@ -15,13 +15,9 @@ from toko.config import Config, apply_api_keys, load_config
 from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
-from toko.formatters import (
-    OutputFormat,
-    format_file_table,
-    format_output,
-    is_stdin_empty,
-)
+from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
+from toko.output_format import OutputFormat
 from toko.price_update import update_prices_if_stale
 
 

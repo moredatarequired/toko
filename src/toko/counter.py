@@ -16,7 +16,7 @@ import httpx
 import tiktoken
 
 from toko.cache import cache_count, get_cached_count
-from toko.models import ModelInfo, get_model
+from toko.models import ModelInfo, get_model, retirement_notice
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -161,6 +161,12 @@ def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
 
     _warn_openai_estimate(model_info.name, encoding_name)
     return CountResult(len(encoding.encode(text)), approximate=True)
+
+
+def _warn_if_retired(model_info: ModelInfo) -> None:
+    notice = retirement_notice(model_info)
+    if notice is not None:
+        _warn_once("retired", model_info.name, notice)
 
 
 def _warn_approximate(model_name: str, reason: str) -> None:
@@ -449,13 +455,16 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
     Raises:
         ValueError: If model is not supported or API key is missing
     """
-    # Check cache first
+    # Resolve before the cache lookup: a retired name's caveat describes the
+    # number, not the work of producing it, so a cached count needs it too.
+    model_info = get_model(model)
+    _warn_if_retired(model_info)
+
     if use_cache:
         cached = get_cached_count(text, model)
         if cached is not None:
             return cached
 
-    model_info = get_model(model)
     result = _count_with_provider(text, model_info)
 
     # Approximate counts are deliberately not cached. A cache hit returns before any

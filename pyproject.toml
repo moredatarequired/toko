@@ -8,6 +8,8 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    # Imported directly by toko::cli; typer stopped requiring it in 0.26.0.
+    "click>=8.3.1",
     # Upper bound because toko::price_update reuses genai-prices' private payload
     # parser; revisit the parser when relaxing this.
     "genai-prices>=0.1.1,<0.2",

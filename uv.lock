@@ -1176,6 +1176,7 @@ name = "toko"
 version = "0.2.1"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "genai-prices" },
     { name = "httpx" },
     { name = "pathspec" },
@@ -1221,6 +1222,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
     { name = "genai-prices", specifier = ">=0.1.1,<0.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mistral-common", extras = ["sentencepiece"], marker = "extra == 'all'", specifier = ">=1.8.5" },

@@ -51,6 +51,35 @@ PROVIDERS = [
     pytest.param("XAI_API_KEY", "grok-4.5", "xAI", id="xai"),
 ]
 
+# (environment variable, model, a body it counts, the header carrying the key and the
+# value that header must hold once the key has been stripped)
+KEY_HEADER_PROVIDERS = [
+    pytest.param(
+        "GOOGLE_API_KEY",
+        "gemini-2.5-flash",
+        {"totalTokens": 4},
+        "x-goog-api-key",
+        SENTINEL,
+        id="google",
+    ),
+    pytest.param(
+        "ANTHROPIC_API_KEY",
+        "claude-sonnet-4-5",
+        {"input_tokens": 4},
+        "x-api-key",
+        SENTINEL,
+        id="anthropic",
+    ),
+    pytest.param(
+        "XAI_API_KEY",
+        "grok-4.5",
+        {"token_count": 4},
+        "Authorization",
+        f"Bearer {SENTINEL}",
+        id="xai",
+    ),
+]
+
 
 @pytest.fixture
 def local_api(monkeypatch):
@@ -135,15 +164,22 @@ def test_a_key_holding_a_control_character_does_not_leak(
     assert local_api.base in message
 
 
+@pytest.mark.parametrize(
+    ("env_var", "model", "body", "header", "sent"), KEY_HEADER_PROVIDERS
+)
 def test_a_trailing_newline_is_stripped_so_the_request_still_goes_out(
-    local_api, monkeypatch
+    local_api, monkeypatch, env_var, model, body, header, sent
 ):
-    """`export ANTHROPIC_API_KEY=$(cat keyfile)` leaves one behind."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", f"{SENTINEL}\n")
-    local_api.respond(200, {"input_tokens": 4})
+    """`export ANTHROPIC_API_KEY=$(cat keyfile)` leaves one behind.
 
-    assert count_tokens("hello", model="claude-sonnet-4-5", use_cache=False).count == 4
-    assert local_api.requests[-1]["x-api-key"] == SENTINEL
+    Every provider resolves its key through the same helper, so every provider has to
+    survive the same environment.
+    """
+    monkeypatch.setenv(env_var, f"{SENTINEL}\n")
+    local_api.respond(200, body)
+
+    assert count_tokens("hello", model=model, use_cache=False).count == 4
+    assert local_api.requests[-1][header] == sent
 
 
 @pytest.mark.parametrize(("env_var", "model", "provider"), PROVIDERS)

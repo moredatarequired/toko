@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 import typer
 from genai_prices import UpdatePrices
 
@@ -156,6 +155,7 @@ def clear_cache() -> None:
 class InputSelection:
     text: str | None
     files: list[tuple[str, str]]
+    had_failures: bool = False
 
 
 def _load_runtime_config() -> Config:
@@ -206,7 +206,7 @@ def _collect_inputs(
         return InputSelection(text=text, files=[])
 
     if paths:
-        files = _collect_files_from_paths(
+        files, had_failures = _collect_files_from_paths(
             paths,
             config,
             no_ignore=no_ignore,
@@ -216,7 +216,7 @@ def _collect_inputs(
         if not files:
             typer.echo("Error: No files found matching criteria", err=True)
             raise typer.Exit(1)
-        return InputSelection(text=None, files=files)
+        return InputSelection(text=None, files=files, had_failures=had_failures)
 
     if not is_stdin_empty():
         stdin_text = sys.stdin.read()
@@ -236,38 +236,39 @@ def _collect_files_from_paths(
     no_ignore: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], bool]:
     collected: list[tuple[str, str]] = []
     should_respect_gitignore = config.respect_gitignore if not no_ignore else False
+    had_failures = False
 
     for path_str in paths:
         if path_str.startswith(("http://", "https://")):
-            _collect_from_url(path_str, collected)
-            continue
-        _collect_from_filesystem(
-            Path(path_str),
-            collected,
-            recursive=not no_recursive,
-            respect_gitignore=should_respect_gitignore,
-            exclude_patterns=exclude_patterns,
-        )
+            ok = _collect_from_url(path_str, collected)
+        else:
+            ok = _collect_from_filesystem(
+                Path(path_str),
+                collected,
+                recursive=not no_recursive,
+                respect_gitignore=should_respect_gitignore,
+                exclude_patterns=exclude_patterns,
+            )
+        had_failures = had_failures or not ok
 
-    return collected
+    return collected, had_failures
 
 
-def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> None:
+def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> bool:
     try:
         content = fetch_url(path_str)
-        collected.append((path_str, content))
-    except httpx.HTTPError as e:
-        typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
-        raise typer.Exit(1) from e
-    except UnicodeDecodeError as e:
+    except UnicodeDecodeError:
         typer.echo(f"Error: URL content is not valid UTF-8: {path_str}", err=True)
-        raise typer.Exit(1) from e
+        return False
     except Exception as e:
         typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
-        raise typer.Exit(1) from e
+        return False
+
+    collected.append((path_str, content))
+    return True
 
 
 def _collect_from_filesystem(
@@ -277,7 +278,7 @@ def _collect_from_filesystem(
     recursive: bool,
     respect_gitignore: bool,
     exclude_patterns: list[str] | None,
-) -> None:
+) -> bool:
     try:
         files = find_files(
             path,
@@ -287,7 +288,7 @@ def _collect_from_filesystem(
         )
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1) from e
+        return False
 
     for file_path in files:
         try:
@@ -305,6 +306,8 @@ def _collect_from_filesystem(
             display_name = str(file_path)
 
         collected.append((display_name, content))
+
+    return True
 
 
 def _handle_text_input(
@@ -514,6 +517,9 @@ def _do_count(
         include_costs=cost,
         include_header=include_header,
     )
+    # Results for the readable inputs are already printed; signal the bad ones.
+    if inputs.had_failures:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

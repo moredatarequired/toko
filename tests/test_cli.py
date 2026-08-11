@@ -286,6 +286,23 @@ def test_help_after_positional_path(tmp_path):
     assert "Usage: toko" in result.stdout
 
 
+def test_bad_path_does_not_abort_good_paths(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+    missing = tmp_path / "nope.txt"
+
+    result = runner.invoke(app, ["--format", "csv", str(sample), str(missing)])
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "nope.txt" in result.stderr
+
+
+def test_all_paths_bad_reports_no_files(tmp_path):
+    result = runner.invoke(app, [str(tmp_path / "nope.txt")])
+    assert result.exit_code == 1
+    assert "Error: No files found matching criteria" in result.stderr
+
+
 def test_partial_success_missing_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     assert not os.environ.get("HF_TOKEN")

@@ -262,6 +262,30 @@ def test_google_bad_response_reports_error_without_traceback():
     assert "Error: All models failed to count tokens" in result.stderr
 
 
+def test_option_after_positional_path(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = runner.invoke(app, [str(sample), "--total-only", "--format", "csv"])
+    assert result.exit_code == 0
+    assert "2" in result.stdout
+
+
+def test_short_option_after_positional_path(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = runner.invoke(app, [str(sample), "-m", "gpt-5", "--format", "tsv"])
+    assert result.exit_code == 0
+    assert "\t2" in result.stdout
+
+
+def test_help_after_positional_path(tmp_path):
+    result = runner.invoke(app, [str(tmp_path), "--help"])
+    assert result.exit_code == 0
+    assert "Usage: toko" in result.stdout
+
+
 def test_partial_success_missing_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     assert not os.environ.get("HF_TOKEN")

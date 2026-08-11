@@ -36,6 +36,10 @@ app = typer.Typer(
     help="A CLI-first token counting tool for LLMs",
     no_args_is_help=False,
     invoke_without_command=True,
+    # click.Group defaults allow_interspersed_args to False, which stops option
+    # parsing at the first positional path (`toko src --total-only` would treat
+    # the flag as a path).
+    context_settings={"allow_interspersed_args": True},
 )
 
 

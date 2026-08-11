@@ -15,6 +15,7 @@ from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_token
 runner = CliRunner()
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_BOX_DRAWING = re.compile(r"[─-╿]")
 
 
 def _strip_ansi(text: str) -> str:
@@ -22,12 +23,21 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
 
-def _invoke_cli(args: list[str], env_overrides: dict[str, str] | None = None):
+def _normalize_cli_output(text: str) -> str:
+    """Rich wraps panel prose to the terminal width, so drop borders and rejoin lines."""
+    return " ".join(_BOX_DRAWING.sub(" ", _strip_ansi(text)).split())
+
+
+def _invoke_cli(
+    args: list[str],
+    env_overrides: dict[str, str] | None = None,
+    stdin: str | None = None,
+):
     """Invoke the CLI in an isolated filesystem with predictable config."""
     overrides = dict(env_overrides or {})
     with runner.isolated_filesystem():
         overrides.setdefault("XDG_CONFIG_HOME", str(Path.cwd()))
-        return runner.invoke(app, args, env=overrides)
+        return runner.invoke(app, args, env=overrides, input=stdin)
 
 
 def test_version():
@@ -46,7 +56,7 @@ def test_list_models(monkeypatch):
         },
     )
 
-    result = runner.invoke(app, ["--list-models"])
+    result = _invoke_cli(["--list-models"])
     assert result.exit_code == 0
     lines = [line for line in result.stdout.splitlines() if line]
     assert lines == [
@@ -71,7 +81,7 @@ def test_count_with_text_default_output():
 
 
 def test_count_from_stdin():
-    result = runner.invoke(app, ["--header", "--format", "tsv"], input="hello world")
+    result = _invoke_cli(["--header", "--format", "tsv"], stdin="hello world")
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
 
@@ -134,8 +144,8 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
 
-    result = runner.invoke(
-        app, ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
+    result = _invoke_cli(
+        ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -274,7 +284,7 @@ def test_option_after_positional_path(tmp_path):
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
 
-    result = runner.invoke(app, [str(sample), "--total-only", "--format", "csv"])
+    result = _invoke_cli([str(sample), "--total-only", "--format", "csv"])
     assert result.exit_code == 0
     assert result.stdout.strip().endswith("TOTAL,2")
 
@@ -283,15 +293,15 @@ def test_short_option_after_positional_path(tmp_path):
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
 
-    result = runner.invoke(app, [str(sample), "-m", "gpt-5", "--format", "tsv"])
+    result = _invoke_cli([str(sample), "-m", "gpt-5", "--format", "tsv"])
     assert result.exit_code == 0
     assert "\t2" in result.stdout
 
 
 def test_help_after_positional_path(tmp_path):
-    result = runner.invoke(app, [str(tmp_path), "--help"])
+    result = _invoke_cli([str(tmp_path), "--help"])
     assert result.exit_code == 0
-    assert "Usage: toko" in _strip_ansi(result.stdout)
+    assert "Usage: toko" in _normalize_cli_output(result.stdout)
 
 
 def test_bad_path_does_not_abort_good_paths(tmp_path):
@@ -299,7 +309,7 @@ def test_bad_path_does_not_abort_good_paths(tmp_path):
     sample.write_text("hello world")
     missing = tmp_path / "nope.txt"
 
-    result = runner.invoke(app, ["--format", "csv", str(sample), str(missing)])
+    result = _invoke_cli(["--format", "csv", str(sample), str(missing)])
     assert result.exit_code == 1
     assert "sample.txt,2" in result.stdout
     assert "nope.txt" in result.stderr
@@ -310,7 +320,7 @@ def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
     # A self-referential symlink is unreadable for every user, including root.
     (tmp_path / "loop.txt").symlink_to("loop.txt")
 
-    result = runner.invoke(app, ["--format", "csv", str(tmp_path)])
+    result = _invoke_cli(["--format", "csv", str(tmp_path)])
     assert result.exit_code == 1
     assert "sample.txt,2" in result.stdout
     assert "Error reading" in result.stderr
@@ -318,7 +328,7 @@ def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
 
 
 def test_all_paths_bad_reports_no_files(tmp_path):
-    result = runner.invoke(app, [str(tmp_path / "nope.txt")])
+    result = _invoke_cli([str(tmp_path / "nope.txt")])
     assert result.exit_code == 1
     assert "Error: No files found matching criteria" in result.stderr
 
@@ -333,28 +343,28 @@ def _two_file_args(tmp_path: Path) -> list[str]:
 
 def test_total_only_csv(tmp_path):
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--total-only", "--format", "csv", *args])
+    result = _invoke_cli(["--total-only", "--format", "csv", *args])
     assert result.exit_code == 0
     assert result.stdout.strip() == "TOTAL,6"
 
 
 def test_total_only_csv_with_header(tmp_path):
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--header", "--total-only", "--format", "csv", *args])
+    result = _invoke_cli(["--header", "--total-only", "--format", "csv", *args])
     assert result.exit_code == 0
     assert result.stdout.strip() == "file,gpt-5\nTOTAL,6"
 
 
 def test_total_only_tsv(tmp_path):
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--total-only", "--format", "tsv", *args])
+    result = _invoke_cli(["--total-only", "--format", "tsv", *args])
     assert result.exit_code == 0
     assert result.stdout.strip() == "TOTAL\t6"
 
 
 def test_total_only_json(tmp_path):
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--total-only", "--format", "json", *args])
+    result = _invoke_cli(["--total-only", "--format", "json", *args])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"gpt-5": 6}
 
@@ -362,7 +372,7 @@ def test_total_only_json(tmp_path):
 def test_total_only_text(tmp_path, monkeypatch):
     monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--total-only", *args])
+    result = _invoke_cli(["--total-only", *args])
     assert result.exit_code == 0
     assert "TOTAL" in result.stdout
     assert "first.txt" not in result.stdout
@@ -372,7 +382,7 @@ def test_total_only_text(tmp_path, monkeypatch):
 def test_without_total_only_keeps_per_file_rows(tmp_path, monkeypatch):
     monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, args)
+    result = _invoke_cli(args)
     assert result.exit_code == 0
     assert "first.txt" in result.stdout
     assert "second.txt" in result.stdout
@@ -381,7 +391,7 @@ def test_without_total_only_keeps_per_file_rows(tmp_path, monkeypatch):
 
 def test_without_total_only_keeps_per_file_rows_csv(tmp_path):
     args = _two_file_args(tmp_path)
-    result = runner.invoke(app, ["--format", "csv", *args])
+    result = _invoke_cli(["--format", "csv", *args])
     assert result.exit_code == 0
     lines = [line for line in result.stdout.splitlines() if line]
     assert [line.split(",")[-1] for line in lines] == ["2", "4"]
@@ -403,11 +413,11 @@ def test_invalid_format_is_a_usage_error_without_leaking_keys(tmp_path):
     )
 
     assert result.exit_code == 2
-    combined = result.stdout + result.stderr
+    combined = _normalize_cli_output(result.stdout + result.stderr)
     assert "Traceback" not in combined
     assert "api_keys" not in combined
     assert sentinel not in combined
-    assert "'jsonl' is not one of" in combined.replace("\n", " ")
+    assert "'jsonl' is not one of" in combined
 
 
 def test_partial_success_missing_hf_token(monkeypatch):

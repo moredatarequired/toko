@@ -99,6 +99,19 @@ def test_silently_redirected_model_says_whose_count_it_is():
     assert "grok-4.3" in notice
 
 
+def test_retirement_notice_carries_no_presentation_prefix():
+    notice = models.retirement_notice(models.get_model("grok-3"))
+    assert notice is not None
+    assert not notice.startswith("Warning")
+
+
+def test_google_retirement_notice_does_not_leak_the_api_prefix():
+    notice = models.retirement_notice(models.get_model("gemini-2.0-flash-001"))
+    assert notice is not None
+    assert "models/" not in notice
+    assert notice.startswith("gemini-2.0-flash-001 was retired")
+
+
 class TestXaiRegistry:
     """xAI's published retirement list is the source of truth for these."""
 

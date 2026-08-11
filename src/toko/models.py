@@ -548,17 +548,20 @@ def retirement_notice(model_info: ModelInfo) -> str | None:
     """Explain that a model is retired, and what the provider serves instead."""
     if model_info.retired is None:
         return None
+    # Google's canonical names carry the API's "models/" prefix, which is an
+    # implementation detail of the endpoint rather than a name users typed.
+    name = model_info.name.removeprefix("models/")
     when = (
         "on an unpublished date"
         if model_info.retired == RETIREMENT_DATE_UNKNOWN
         else f"on {model_info.retired}"
     )
-    notice = f"Warning: {model_info.name} was retired {when}"
+    notice = f"{name} was retired {when}"
     if model_info.redirects_to:
         return (
             f"{notice}; {model_info.provider} still answers for it but serves "
             f"{model_info.redirects_to}, so this count is {model_info.redirects_to}'s, "
-            f"not {model_info.name}'s."
+            f"not {name}'s."
         )
     return f"{notice}; the {model_info.provider} API will reject or redirect it."
 
@@ -566,7 +569,7 @@ def retirement_notice(model_info: ModelInfo) -> str | None:
 def warn_if_retired(model_info: ModelInfo) -> None:
     notice = retirement_notice(model_info)
     if notice is not None:
-        print(notice, file=sys.stderr)
+        print(f"Warning: {notice}", file=sys.stderr)
 
 
 def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:

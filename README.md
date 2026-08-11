@@ -239,8 +239,9 @@ Entries merge field by field and yours win, so naming an existing model
 overrides just the fields you list and leaves the rest of the shipped entry
 alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
 `retired`, `redirects_to`, `tokenizer`, `listed`, and `aliases` (Google and xAI
-only). A malformed file is reported on stderr and skipped — Toko falls back to
-the registry it shipped with rather than failing to run.
+only). A malformed file — including one that is not valid UTF-8 — is reported on
+stderr and skipped, and Toko falls back to the registry it shipped with rather
+than failing to run.
 
 `tokenizer` matters for Anthropic: Claude Opus 4.7 changed tokenizer, and the
 same text counts roughly 30% higher on 4.7-generation models. Toko refuses to

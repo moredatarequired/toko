@@ -169,15 +169,15 @@ def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
 def _load_packaged_document() -> tuple[str, dict[str, object]]:
     resource = resources.files("toko.data").joinpath(REGISTRY_FILENAME)
     try:
-        text = resource.read_text(encoding="utf-8")
+        data = resource.read_bytes()
     except OSError as e:
         raise RuntimeError(
             f"{REGISTRY_FILENAME} is missing from the toko installation, so no "
             "models are known. Reinstall toko."
         ) from e
     try:
-        return _PACKAGED_REGISTRY_SOURCE, tomllib.loads(text)
-    except tomllib.TOMLDecodeError as e:
+        return _PACKAGED_REGISTRY_SOURCE, tomllib.loads(data.decode())
+    except ValueError as e:
         raise RuntimeError(f"{_PACKAGED_REGISTRY_SOURCE} is corrupt: {e}") from e
 
 
@@ -189,7 +189,9 @@ def _load_user_document() -> tuple[str, dict[str, object]] | None:
     try:
         with path.open("rb") as f:
             return str(path), tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    # tomllib decodes the bytes itself, so a file that is not UTF-8 raises
+    # UnicodeDecodeError rather than TOMLDecodeError. Both are ValueErrors.
+    except (OSError, ValueError) as e:
         _warn(f"ignoring {path}: {e}")
         return None
 

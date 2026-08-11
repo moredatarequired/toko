@@ -3,6 +3,7 @@
 import importlib
 import tomllib
 from importlib import resources
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +18,11 @@ def user_registry(tmp_path, monkeypatch):
     config_dir.mkdir()
     overlay = config_dir / "models.toml"
 
-    def write(text: str):
-        overlay.write_text(text)
+    def write(text: str | bytes):
+        if isinstance(text, bytes):
+            overlay.write_bytes(text)
+        else:
+            overlay.write_text(text)
         return importlib.reload(models)
 
     yield write
@@ -66,6 +70,17 @@ class TestPackagedRegistry:
         assert grok_4.retired == "2026-05-15"
         assert grok_4.redirects_to == "grok-4.3"
         assert grok_4.encoding == "o200k_base"
+
+    def test_a_packaged_registry_that_is_not_utf8_fails_loudly(self, monkeypatch):
+        """An install bug must surface as a clear error, not a decode traceback."""
+        corrupt = SimpleNamespace(read_bytes=lambda: b'[[model]]\nname = "\xff"\n')
+        monkeypatch.setattr(
+            models.resources,
+            "files",
+            lambda _: SimpleNamespace(joinpath=lambda _: corrupt),
+        )
+        with pytest.raises(RuntimeError, match="corrupt"):
+            models._load_packaged_document()  # noqa: SLF001
 
 
 class TestRegistryParsing:
@@ -197,8 +212,17 @@ class TestUserOverlay:
         assert overridden.retired == "2030-01-01"
         assert overridden.tokenizer == reloaded.CLAUDE_TOKENIZER_LEGACY
 
-    def test_a_malformed_overlay_is_ignored_with_a_message(self, user_registry, capsys):
-        reloaded = user_registry("[[model]\nname = ")
+    @pytest.mark.parametrize(
+        "overlay",
+        [
+            pytest.param("[[model]\nname = ", id="bad-syntax"),
+            pytest.param(b'[[model]]\nname = "\xff\xfe-bad"\n', id="not-utf-8"),
+        ],
+    )
+    def test_a_malformed_overlay_is_ignored_with_a_message(
+        self, user_registry, capsys, overlay
+    ):
+        reloaded = user_registry(overlay)
         stderr = capsys.readouterr().err
         assert "models.toml" in stderr
         # The packaged registry still stands, so nothing the user typed can

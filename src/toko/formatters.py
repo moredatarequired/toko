@@ -62,18 +62,25 @@ def _any_approximate(results: dict[str, TokenCount]) -> bool:
     return any(counted.approximate for counted in results.values())
 
 
+def _any_caveat(results: dict[str, TokenCount]) -> bool:
+    return any(counted.caveat is not None for counted in results.values())
+
+
 def _json_payload(
     results: dict[str, TokenCount],
     *,
     show_costs: bool,
     show_approximate: bool | None = None,
+    any_caveat: bool | None = None,
 ) -> dict[str, object]:
-    # Callers spanning several payloads pass the document-wide answer, so one
-    # approximate count anywhere gives every file the same keys.
+    # Callers spanning several payloads pass the document-wide answers, so one
+    # annotated count anywhere gives every file the same keys.
     if show_approximate is None:
         show_approximate = _any_approximate(results)
+    if any_caveat is None:
+        any_caveat = _any_caveat(results)
 
-    if not show_costs and not show_approximate:
+    if not show_costs and not show_approximate and not any_caveat:
         return {model: counted.count for model, counted in results.items()}
 
     # Costs stay as raw numbers (or null) rather than the display strings the
@@ -86,8 +93,10 @@ def _json_payload(
         if show_approximate:
             # Present on every entry even when exact, so one document never mixes shapes.
             entry["approximate"] = counted.approximate
-            if counted.caveat is not None:
-                entry["caveat"] = counted.caveat
+        # Independent of the approximate gate: a caveat is worth reporting on its
+        # own, and its visibility should not depend on some sibling model.
+        if counted.caveat is not None:
+            entry["caveat"] = counted.caveat
         payload[model] = entry
     return payload
 
@@ -191,14 +200,18 @@ def _format_file_json(
         totals = _compute_totals(file_results, models=models)
         return json.dumps(_json_payload(totals, show_costs=show_costs), indent=2)
 
-    # One approximate count anywhere switches every file to the object form, so a
+    # One annotated count anywhere switches every file to the object form, so a
     # reader never has to test which shape a given entry took.
     approximate_anywhere = any(
         _any_approximate(counts) for counts in file_results.values()
     )
+    caveat_anywhere = any(_any_caveat(counts) for counts in file_results.values())
     payload = {
         filename: _json_payload(
-            counts, show_costs=show_costs, show_approximate=approximate_anywhere
+            counts,
+            show_costs=show_costs,
+            show_approximate=approximate_anywhere,
+            any_caveat=caveat_anywhere,
         )
         for filename, counts in file_results.items()
     }

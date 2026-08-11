@@ -383,6 +383,9 @@ def _handle_text_input(
         and not include_costs
         and not include_header
         and len(results) == 1
+        # A bare number would strand the approximate marker on stderr, which is
+        # exactly where a piping consumer will not see it.
+        and not any(counted.approximate for counted in results.values())
     ):
         adjusted_format = OutputFormat.TEXT
 

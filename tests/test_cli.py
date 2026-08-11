@@ -336,13 +336,23 @@ def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():
     )
 
 
-def test_unknown_openai_model_keeps_tsv_output_clean():
+def test_piped_single_model_tsv_keeps_approximate_marker():
+    # Without a header there is nowhere else for the marker to go, and stderr is
+    # not where a consumer on the other end of the pipe is looking.
     result = _invoke_cli(
         ["--format", "tsv", "--model", "gpt-6", "--text", "hello world"]
     )
     assert result.exit_code == 0
-    assert result.stdout.strip() == "2"
+    assert result.stdout.strip() == "gpt-6\t2\ttrue"
     assert "unknown OpenAI model 'gpt-6'" in result.stderr
+
+
+def test_piped_single_model_tsv_stays_bare_when_exact():
+    result = _invoke_cli(
+        ["--format", "tsv", "--model", "gpt-5", "--text", "hello world"]
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "2"
 
 
 def test_default_no_header_when_not_tty(monkeypatch):

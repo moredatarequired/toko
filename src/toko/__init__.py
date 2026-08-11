@@ -13,6 +13,13 @@ except PackageNotFoundError:  # e.g. running from a repo checkout without instal
 
 __all__ = ["TokenCount", "__version__", "count_tokens"]
 
+
+# Without this, dir(toko) lists the import machinery this module happens to use
+# instead of the names it exports, since the lazy ones are not in the namespace.
+def __dir__() -> list[str]:
+    return sorted(__all__)
+
+
 # Resolved on first attribute access rather than at import. Reaching count_tokens pulls
 # in tiktoken, which triples the cost of an `import toko` that only wanted __version__.
 _LAZY_EXPORTS = {"count_tokens": "toko.counter", "TokenCount": "toko.result"}

@@ -163,6 +163,40 @@ gpt-5,2
 
 Use `--format tsv` to force TSV even when running interactively.
 
+## Library usage
+
+`count_tokens` is the whole public API, and it returns a `TokenCount` describing how the
+number was reached:
+
+```python
+from toko import count_tokens
+
+result = count_tokens("hello world", model="gpt-5")
+print(result.count)  # 2
+```
+
+| Field         | Type            | Meaning                                                                               |
+| ------------- | --------------- | ------------------------------------------------------------------------------------- |
+| `count`       | `int`           | The token count.                                                                      |
+| `model`       | `str`           | The canonical model the request resolved to, which need not be the string you passed. |
+| `provider`    | `str`           | The provider that produced the count.                                                 |
+| `approximate` | `bool`          | True when the count came from a stand-in tokenizer rather than the model's own.       |
+| `caveat`      | `str \| None`   | Why the count is approximate, when it is.                                             |
+| `cost`        | `float \| None` | Estimated cost in USD, when pricing data covers the model.                            |
+
+Counts fall back to a stand-in tokenizer when the model's own is unreachable — an
+unrecognized model name, or a provider whose API key is missing — so check
+`approximate` before treating a count as exact:
+
+```python
+result = count_tokens("hello world", model="grok-4")
+if result.approximate:
+    print(f"estimate only: {result.caveat}")
+```
+
+`TokenCount` is deliberately not int-like: it does not implement `__int__`, `__eq__`, or
+arithmetic, so use `result.count` wherever you need the number.
+
 ## Know which models are available
 
 ```sh

@@ -49,6 +49,31 @@ def test_json_costs_cover_every_model():
     }
 
 
+def test_json_reports_a_caveat_on_an_exact_count():
+    """A caveat must not need an approximate sibling to become visible."""
+    counted = TokenCount(
+        count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+    )
+    payload = json.loads(format_output({"gpt-5": counted}, output_format="json"))
+    assert payload == {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}}
+
+
+def test_file_json_keeps_one_shape_when_only_one_file_has_a_caveat():
+    file_results = {
+        "a.txt": {
+            "gpt-5": TokenCount(
+                count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+            )
+        },
+        "b.txt": {"gpt-5": _counted(4)},
+    }
+    payload = json.loads(format_file_table(file_results, output_format="json"))
+    assert payload == {
+        "a.txt": {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}},
+        "b.txt": {"gpt-5": {"tokens": 4}},
+    }
+
+
 def test_file_json_matches_plain_mapping_without_costs():
     payload = json.loads(
         format_file_table({"a.txt": {"gpt-5": _counted(4)}}, output_format="json")

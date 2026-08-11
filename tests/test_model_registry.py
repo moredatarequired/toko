@@ -213,6 +213,11 @@ class TestGoogleAliasPrefixes:
     def test_the_longest_matching_alias_wins(self, name, expected):
         assert models.get_model(name).name == expected
 
+    def test_a_prefix_only_matches_on_a_separator(self):
+        """gemini-2.0-flash-lite must not claim a name that merely starts with it."""
+        resolved = models.get_model("gemini-2.0-flash-litex")
+        assert resolved.name == "models/gemini-2.0-flash-001"
+
     def test_resolution_does_not_depend_on_registry_order(self, user_registry):
         """Appending an alias must not re-route names that already resolved."""
         before = models.get_model("gemini-2.0-flash-lite-preview-11-11").name

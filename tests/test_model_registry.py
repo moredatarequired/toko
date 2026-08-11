@@ -147,6 +147,22 @@ class TestRegistryParsing:
         assert "encoding" in stderr
         assert "retried" in stderr
 
+    def test_a_name_declared_twice_in_one_document_is_flagged(self, capsys):
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            encoding = "o200k_base"
+
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            retired = "2030-01-01"
+        """)
+        merged = registry.models["xai"]["grok-imaginary-9"]
+        assert (merged.encoding, merged.retired) == ("o200k_base", "2030-01-01")
+        assert "grok-imaginary-9" in capsys.readouterr().err
+
     def test_alias_lists_accumulate_instead_of_replacing(self):
         registry = _registry(
             """

@@ -128,11 +128,15 @@ def _merge_entries(
         if not isinstance(entries, list):
             _warn(f"{source}: 'model' must be an array of tables")
             continue
+        seen: set[str] = set()
         for entry in entries:
             cleaned = _clean_entry(entry, source)
             if cleaned is None:
                 continue
             name, fields = cleaned
+            if name in seen:
+                _warn(f"{source}: merging a second [[model]] entry named '{name}'")
+            seen.add(name)
             target = merged.setdefault(name, {})
             aliases = _extended_aliases(target.get("aliases"), fields.get("aliases"))
             target.update(fields)

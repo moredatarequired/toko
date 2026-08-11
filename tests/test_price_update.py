@@ -1,10 +1,21 @@
 """Tests for price_update module."""
 
+import json
 import time
 from pathlib import Path
 
+import httpx
+import pytest
+import respx
+from genai_prices.data_snapshot import get_snapshot, set_custom_snapshot
+
 from toko.price_update import (
+    PRICE_DATA_URL,
+    _write_atomic,
+    apply_cached_prices,
     get_price_cache_path,
+    get_price_data_path,
+    refresh_prices,
     should_update_prices,
     update_prices_if_stale,
 )
@@ -56,6 +67,7 @@ def test_should_update_prices_fresh():
     timestamp_file.unlink()
 
 
+@pytest.mark.slow
 def test_update_prices_if_stale():
     """Test updating prices if stale."""
     timestamp_file = get_price_cache_path()
@@ -73,3 +85,143 @@ def test_update_prices_if_stale():
     # Clean up
     if timestamp_file.exists():
         timestamp_file.unlink()
+
+
+@pytest.mark.slow
+def test_refresh_prices_applies_fetched_snapshot():
+    """Fetched prices must actually replace the bundled ones."""
+    assert get_snapshot().from_auto_update is False
+
+    provider_count = refresh_prices()
+
+    assert provider_count > 0
+    assert get_snapshot().from_auto_update is True
+    assert len(get_snapshot().providers) == provider_count
+
+
+@pytest.mark.slow
+def test_cached_prices_are_reapplied_without_refetching():
+    """Reinstalling from the cache must not need another download.
+
+    This resets the in-process snapshot rather than starting a real second process;
+    the CLI sentinel test is what proves the payload survives across processes.
+    """
+    refresh_prices()
+    assert get_price_data_path().read_bytes()
+
+    # Simulate a fresh process, which starts out on the bundled price data.
+    set_custom_snapshot(None)
+    assert get_snapshot().from_auto_update is False
+
+    assert apply_cached_prices() is True
+    assert get_snapshot().from_auto_update is True
+    assert update_prices_if_stale() is False
+
+
+def test_write_atomic_swaps_the_payload_in_without_leaving_debris(tmp_path):
+    """Readers see either the old payload or the whole new one, never a partial file."""
+    target = tmp_path / "prices.json"
+    target.write_bytes(b"original")
+
+    _write_atomic(target, b"replacement")
+
+    assert target.read_bytes() == b"replacement"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_corrupt_cached_prices_are_reported(capsys):
+    """A truncated cache must say so rather than quietly serving bundled prices."""
+    get_price_data_path().write_bytes(b'[{"id": "openai", "name": "Ope')
+
+    assert apply_cached_prices() is False
+
+    assert "unusable cached price data" in capsys.readouterr().err
+    assert get_snapshot().from_auto_update is False
+
+
+def test_corrupt_cached_prices_are_discarded(capsys):
+    """The warning must not repeat forever; a poisoned payload deletes itself."""
+    get_price_data_path().write_bytes(b'[{"id": "openai", "name": "Ope')
+
+    assert apply_cached_prices() is False
+    assert "unusable cached price data" in capsys.readouterr().err
+    assert not get_price_data_path().exists()
+
+    assert apply_cached_prices() is False
+    assert capsys.readouterr().err == ""
+
+
+@respx.mock
+def test_failed_download_leaves_prices_stale():
+    """A failed fetch must not mark prices fresh for the next day."""
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(503))
+
+    with pytest.raises(httpx.HTTPError):
+        update_prices_if_stale()
+
+    assert not get_price_cache_path().exists()
+    assert should_update_prices()
+    assert get_snapshot().from_auto_update is False
+
+
+_DRIFTED_PRICES = [
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "api_pattern": r"api\.openai\.com",
+        "models": [
+            {
+                "id": "gpt-5",
+                "name": "GPT-5",
+                "match": {"starts_with": "gpt-5"},
+                # A future payload renames the token price keys; this genai-prices
+                # reads them as absent and prices the tokens at zero. The per-request
+                # key survives the rename, so a payload-wide "some price is non-zero"
+                # check would wave this through.
+                "prices": {
+                    "input_mtok_v2": 1.25,
+                    "output_mtok_v2": 10,
+                    "requests_kcount": 12,
+                },
+            }
+        ],
+    }
+]
+
+
+@respx.mock
+def test_schema_drifted_payload_leaves_prices_stale():
+    """Prices we parse but cannot read must not silently become $0.00."""
+    respx.get(PRICE_DATA_URL).mock(
+        return_value=httpx.Response(200, json=_DRIFTED_PRICES)
+    )
+
+    with pytest.raises(ValueError, match="no usable per-token prices"):
+        refresh_prices()
+
+    assert not get_price_data_path().exists()
+    assert get_snapshot().from_auto_update is False
+
+
+def test_schema_drifted_cache_is_rejected(capsys):
+    """A cached payload whose price keys have drifted must fall back to bundled data."""
+    get_price_data_path().write_text(json.dumps(_DRIFTED_PRICES))
+
+    assert apply_cached_prices() is False
+
+    assert "unusable cached price data" in capsys.readouterr().err
+    assert get_snapshot().from_auto_update is False
+
+
+@respx.mock
+def test_empty_payload_leaves_prices_stale():
+    """Data we cannot use must not count as a successful update."""
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(200, json=[]))
+
+    with pytest.raises(ValueError, match="no providers"):
+        refresh_prices()
+
+    assert not get_price_cache_path().exists()
+    assert not get_price_data_path().exists()
+    assert should_update_prices()
+    assert get_snapshot().from_auto_update is False

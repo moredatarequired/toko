@@ -51,6 +51,8 @@ just setup  # installs lefthook git hooks
 
 Options in examples appear **before** any paths. `typer`/`click` treat everything after the first path argument as data input, so prefer `toko --total-only src` instead of `toko src --total-only`.
 
+A first argument that names a subcommand (`update-prices`, `clear-cache`) runs that subcommand rather than counting a file of the same name. Only the first position is treated this way, so `toko README.md update-prices` counts both files, and `toko -- update-prices` counts a file literally named `update-prices`.
+
 ### Count inline text
 
 ```sh

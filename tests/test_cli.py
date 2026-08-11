@@ -790,6 +790,7 @@ def test_invalid_default_format_in_config_is_a_clean_error(tmp_path):
     assert "text, json, csv, tsv" in combined
 
 
+@pytest.mark.slow
 def test_partial_success_missing_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     assert not os.environ.get("HF_TOKEN")

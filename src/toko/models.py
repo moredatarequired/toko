@@ -81,18 +81,25 @@ def detect_provider(model: str) -> str | None:
 
 # Anthropic models (API-based counting)
 _ANTHROPIC_MODELS = [
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
     "claude-opus-4-5-20251101",
-    "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5-20251001",
     "claude-opus-4-1-20250805",
     "claude-opus-4-20250514",
     "claude-sonnet-4-20250514",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
-    "claude-3-5-sonnet-20240620",
     "claude-3-haiku-20240307",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-haiku-20241022",
     "claude-3-opus-20240229",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-20240620",
 ]
 
 ANTHROPIC_MODELS = {
@@ -132,10 +139,17 @@ def _resolve_anthropic_model(name: str) -> ModelInfo | None:
 # Note: Google API requires "models/" prefix
 # Only models with documented CountTokens support are included
 _GOOGLE_CANONICAL_MODELS = (
+    "gemini-3.1-pro-preview",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash-image",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-pro-preview",
     "gemini-2.0-flash-001",
     "gemini-2.0-flash-lite-001",
     "gemini-2.0-flash-preview-image-generation",
@@ -168,9 +182,9 @@ _GOOGLE_ALIAS_MAP: dict[str, str] = {
     "gemini-2.5-flash-native-audio-preview-09-2025": "gemini-2.5-flash",
     "gemini-2.5-flash-native-audio-latest": "gemini-2.5-flash",
     "gemini-exp-1206": "gemini-2.5-pro",
-    "gemini-flash-latest": "gemini-2.5-flash",
-    "gemini-flash-lite-latest": "gemini-2.5-flash-lite",
-    "gemini-pro-latest": "gemini-2.5-pro",
+    "gemini-flash-latest": "gemini-3.6-flash",
+    "gemini-flash-lite-latest": "gemini-3.5-flash-lite",
+    "gemini-pro-latest": "gemini-3.1-pro-preview",
 }
 
 GOOGLE_MODELS = {
@@ -202,17 +216,23 @@ def _resolve_google_model(name: str) -> ModelInfo | None:
 # xAI models (using tiktoken for estimation)
 # xAI uses OpenAI-compatible API, use o200k_base as approximation
 _XAI_MODELS = (
+    "grok-4.5",
+    "grok-4.3",
+    "grok-build-0.1",
     "grok-4",
+    "grok-4-0709",
     "grok-4-fast-reasoning",
     "grok-4-fast-non-reasoning",
+    "grok-4-1-fast-reasoning",
+    "grok-4-1-fast-non-reasoning",
     "grok-3",
+    "grok-code-fast-1",
     "grok-3-mini",
     "grok-2-1212",
     "grok-2-vision-1212",
-    "grok-code-fast-1",
 )
 
-_XAI_ALIAS_MAP = {"grok-4-0709": "grok-4", "grok-2-image-1212": "grok-2-1212"}
+_XAI_ALIAS_MAP = {"grok-2-image-1212": "grok-2-1212"}
 
 XAI_MODELS = {
     name: ModelInfo(name=name, provider="xai", encoding="o200k_base")

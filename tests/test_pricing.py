@@ -5,6 +5,20 @@ import pytest
 from toko.cost import estimate_cost
 from toko.models import ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS, list_models
 
+# genai-prices ships its price table as data, so an older release simply has no
+# entry for a model released after it. Probing one current model tells us whether
+# the installed release is new enough for the coverage assertions below to mean
+# anything; if it is not, they would fail for every current model at once.
+_PRICES_COVER_CURRENT_MODELS = estimate_cost(1000, "claude-opus-5") is not None
+
+requires_current_prices = pytest.mark.skipif(
+    not _PRICES_COVER_CURRENT_MODELS,
+    reason=(
+        "installed genai-prices predates the current model generation "
+        "(needs >=0.1.1); it has no entry for claude-opus-5"
+    ),
+)
+
 
 class TestPricingCoverage:
     """Test that pricing works for all models we claim to support."""
@@ -52,8 +66,9 @@ class TestPricingCoverage:
                 f"The following current OpenAI models lack pricing data: {', '.join(failures)}"
             )
 
+    @requires_current_prices
     def test_anthropic_models_have_pricing(self):
-        """All Anthropic models should have pricing data."""
+        """All current Anthropic models should have pricing data."""
         failures = []
         for model_name in ANTHROPIC_MODELS:
             cost = estimate_cost(100, model_name)
@@ -65,6 +80,7 @@ class TestPricingCoverage:
                 f"The following Anthropic models lack pricing data: {', '.join(failures)}"
             )
 
+    @requires_current_prices
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
         failures = []
@@ -78,12 +94,15 @@ class TestPricingCoverage:
                 f"The following Google models lack pricing data: {', '.join(failures)}"
             )
 
+    @requires_current_prices
     def test_xai_models_have_pricing(self):
         """Current xAI models should have pricing data."""
-        # Newer models that may not be in genai-prices yet
+        # Retired slugs xAI now serves with another model; priced with it.
         expected_missing = {
             "grok-4-fast-non-reasoning",
             "grok-4-fast-reasoning",
+            "grok-4-1-fast-non-reasoning",
+            "grok-4-1-fast-reasoning",
             "grok-code-fast-1",
         }
 

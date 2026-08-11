@@ -334,9 +334,14 @@ def _compute_totals(
     *,
     models: list[str],
     costs: dict[str, dict[str, float | None]] | None,
-) -> tuple[dict[str, int], dict[str, float] | None]:
+) -> tuple[dict[str, int], dict[str, float | None] | None]:
     totals: dict[str, int] = dict.fromkeys(models, 0)
-    total_costs: dict[str, float] | None = dict.fromkeys(models, 0.0) if costs else None
+    # Seeded with None, not 0.0: a model no file could be priced for has no
+    # total, and reporting $0.000000 for it reads as a confident free. A model
+    # only some files could be priced for keeps the sum of those files.
+    total_costs: dict[str, float | None] | None = (
+        dict.fromkeys(models) if costs else None
+    )
 
     for filename, model_counts in file_results.items():
         for model in models:
@@ -346,8 +351,10 @@ def _compute_totals(
             if costs is None or total_costs is None:
                 continue
             cost_val = costs.get(filename, {}).get(model)
-            if cost_val is not None:
-                total_costs[model] += cost_val
+            if cost_val is None:
+                continue
+            running = total_costs[model]
+            total_costs[model] = cost_val if running is None else running + cost_val
 
     return totals, total_costs
 

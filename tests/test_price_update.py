@@ -100,8 +100,12 @@ def test_refresh_prices_applies_fetched_snapshot():
 
 
 @pytest.mark.slow
-def test_cached_prices_survive_into_a_fresh_process():
-    """A later run should reuse the cached payload instead of fetching again."""
+def test_cached_prices_are_reapplied_without_refetching():
+    """Reinstalling from the cache must not need another download.
+
+    This resets the in-process snapshot rather than starting a real second process;
+    the CLI sentinel test is what proves the payload survives across processes.
+    """
     refresh_prices()
     assert get_price_data_path().read_bytes()
 

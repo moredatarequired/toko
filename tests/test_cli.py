@@ -18,13 +18,30 @@ from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_da
 
 runner = CliRunner()
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_BOX_DRAWING = re.compile(r"[─-╿]")
 
-def _invoke_cli(args: list[str], env_overrides: dict[str, str] | None = None):
+
+def _strip_ansi(text: str) -> str:
+    """Rich splits styled help text with SGR codes whenever color is forced (as CI does)."""
+    return _ANSI_ESCAPE.sub("", text)
+
+
+def _normalize_cli_output(text: str) -> str:
+    """Rich wraps panel prose to the terminal width, so drop borders and rejoin lines."""
+    return " ".join(_BOX_DRAWING.sub(" ", _strip_ansi(text)).split())
+
+
+def _invoke_cli(
+    args: list[str],
+    env_overrides: dict[str, str] | None = None,
+    stdin: str | None = None,
+):
     """Invoke the CLI in an isolated filesystem with predictable config."""
     overrides = dict(env_overrides or {})
     with runner.isolated_filesystem():
         overrides.setdefault("XDG_CONFIG_HOME", str(Path.cwd()))
-        return runner.invoke(app, args, env=overrides)
+        return runner.invoke(app, args, env=overrides, input=stdin)
 
 
 def test_version():
@@ -43,7 +60,7 @@ def test_list_models(monkeypatch):
         },
     )
 
-    result = runner.invoke(app, ["--list-models"])
+    result = _invoke_cli(["--list-models"])
     assert result.exit_code == 0
     lines = [line for line in result.stdout.splitlines() if line]
     assert lines == [
@@ -88,12 +105,6 @@ def test_clear_cache_removes_the_price_cache():
     assert result.exit_code == 0
     assert not get_price_data_path().exists()
     assert not get_price_cache_path().exists()
-
-
-def _strip_ansi(text: str) -> str:
-    # Typer colorizes whenever GITHUB_ACTIONS is set, tty or not, so CI output carries
-    # SGR codes that split any literal we assert on.
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 @pytest.mark.parametrize("subcommand", ["update-prices", "clear-cache"])
@@ -174,7 +185,7 @@ def test_count_with_text_default_output():
 
 
 def test_count_from_stdin():
-    result = runner.invoke(app, ["--header", "--format", "tsv"], input="hello world")
+    result = _invoke_cli(["--header", "--format", "tsv"], stdin="hello world")
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
 
@@ -237,8 +248,8 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
 
-    result = runner.invoke(
-        app, ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
+    result = _invoke_cli(
+        ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -380,6 +391,230 @@ def test_google_bad_response_reports_error_without_traceback():
     assert result.exit_code == 1
     assert "Unexpected response from Google" in result.stderr
     assert "Error: All models failed to count tokens" in result.stderr
+
+
+def test_option_after_positional_path(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli([str(sample), "--total-only", "--format", "csv"])
+    assert result.exit_code == 0
+    assert result.stdout.strip().endswith("TOTAL,2")
+
+
+def test_short_option_after_positional_path(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli([str(sample), "-m", "gpt-5", "--format", "tsv"])
+    assert result.exit_code == 0
+    assert "\t2" in result.stdout
+
+
+def test_help_after_positional_path(tmp_path):
+    result = _invoke_cli([str(tmp_path), "--help"])
+    assert result.exit_code == 0
+    assert "Usage: toko" in _normalize_cli_output(result.stdout)
+
+
+def test_bad_path_does_not_abort_good_paths(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+    missing = tmp_path / "nope.txt"
+
+    result = _invoke_cli(["--format", "csv", str(sample), str(missing)])
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "nope.txt" in result.stderr
+
+
+# The .invalid TLD never resolves, so any of these that escaped respx would fail
+# loudly instead of quietly reaching the network.
+_GOOD_URL = "https://toko.invalid/good.txt"
+_BAD_URL = "https://toko.invalid/bad.txt"
+
+
+@respx.mock
+def test_url_path_counts_tokens():
+    respx.get(_GOOD_URL).mock(return_value=httpx.Response(200, text="hello world"))
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-5", _GOOD_URL])
+    assert result.exit_code == 0
+    assert f"{_GOOD_URL},2" in result.stdout
+
+
+@respx.mock
+def test_unfetchable_url_reports_an_error():
+    respx.get(_BAD_URL).mock(return_value=httpx.Response(404))
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-5", _BAD_URL])
+    assert result.exit_code == 1
+    assert f"Error fetching URL {_BAD_URL}" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+@respx.mock
+def test_bad_url_does_not_abort_good_url_or_file(tmp_path):
+    respx.get(_GOOD_URL).mock(return_value=httpx.Response(200, text="hello world"))
+    respx.get(_BAD_URL).mock(side_effect=httpx.ConnectError("boom"))
+    sample = tmp_path / "sample.txt"
+    sample.write_text("goodbye world friend")
+
+    result = _invoke_cli(
+        ["--format", "csv", "-m", "gpt-5", _GOOD_URL, _BAD_URL, str(sample)]
+    )
+    assert result.exit_code == 1
+    assert f"{_GOOD_URL},2" in result.stdout
+    assert "sample.txt,4" in result.stdout
+    assert f"Error fetching URL {_BAD_URL}" in result.stderr
+    assert _BAD_URL not in result.stdout
+
+
+def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
+    (tmp_path / "sample.txt").write_text("hello world")
+    # A self-referential symlink is unreadable for every user, including root.
+    (tmp_path / "loop.txt").symlink_to("loop.txt")
+
+    result = _invoke_cli(["--format", "csv", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "Error reading" in result.stderr
+    assert "loop.txt" in result.stderr
+
+
+def test_missing_path_reports_only_the_specific_error(tmp_path):
+    result = _invoke_cli([str(tmp_path / "nope.txt")])
+    assert result.exit_code == 1
+    assert "Error: Path not found" in result.stderr
+    assert "No files found matching criteria" not in result.stderr
+
+
+def test_empty_directory_reports_no_files(tmp_path):
+    result = _invoke_cli([str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Error: No files found matching criteria" in result.stderr
+
+
+def _two_file_args(tmp_path: Path) -> list[str]:
+    first = tmp_path / "first.txt"
+    first.write_text("hello world")
+    second = tmp_path / "second.txt"
+    second.write_text("goodbye world friend")
+    return [str(first), str(second)]
+
+
+def test_total_only_csv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--total-only", "--format", "csv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "TOTAL,6"
+
+
+def test_total_only_csv_with_header(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--header", "--total-only", "--format", "csv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "file,gpt-5\nTOTAL,6"
+
+
+def test_total_only_tsv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--total-only", "--format", "tsv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "TOTAL\t6"
+
+
+def test_total_only_json(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--total-only", "--format", "json", *args])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"gpt-5": 6}
+
+
+def test_total_only_text(tmp_path, monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--total-only", *args])
+    assert result.exit_code == 0
+    assert "TOTAL" in result.stdout
+    assert "first.txt" not in result.stdout
+    assert "second.txt" not in result.stdout
+
+
+def test_total_only_does_not_add_a_model_column_to_text_input():
+    plain = _invoke_cli(["--text", "hello world"])
+    total_only = _invoke_cli(["--total-only", "--text", "hello world"])
+    assert plain.exit_code == 0
+    assert total_only.exit_code == 0
+    assert plain.stdout.strip() == "2"
+    assert total_only.stdout == plain.stdout
+
+
+def test_total_only_leaves_multi_model_text_input_unchanged():
+    args = ["-m", "gpt-5", "-m", "gpt-4.1", "--text", "hello world"]
+    plain = _invoke_cli(args)
+    total_only = _invoke_cli(["--total-only", *args])
+    assert plain.exit_code == 0
+    assert total_only.exit_code == 0
+    assert plain.stdout.strip() == "gpt-5\t2\ngpt-4.1\t2"
+    assert total_only.stdout == plain.stdout
+
+
+def test_without_total_only_keeps_per_file_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(args)
+    assert result.exit_code == 0
+    assert "first.txt" in result.stdout
+    assert "second.txt" in result.stdout
+    assert "TOTAL" in result.stdout
+
+
+def test_without_total_only_keeps_per_file_rows_csv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(["--format", "csv", *args])
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert [line.split(",")[-1] for line in lines] == ["2", "4"]
+    assert not any(line.startswith("TOTAL") for line in lines)
+
+
+def test_invalid_format_is_a_usage_error_without_leaking_keys(tmp_path):
+    sentinel = "sk-ant-FAKE-SENTINEL-XYZZY"
+    config_dir = tmp_path / "toko"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        f'[toko.api_keys]\nanthropic = "{sentinel}"\n'
+    )
+
+    result = runner.invoke(
+        app,
+        ["--format", "jsonl", "--text", "hello"],
+        env={"XDG_CONFIG_HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 2
+    combined = _normalize_cli_output(result.stdout + result.stderr)
+    assert "Traceback" not in combined
+    assert "api_keys" not in combined
+    assert sentinel not in combined
+    assert "'jsonl' is not one of" in combined
+
+
+def test_invalid_default_format_in_config_is_a_clean_error(tmp_path):
+    config_dir = tmp_path / "toko"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text('[toko]\ndefault_format = "jsonl"\n')
+
+    result = runner.invoke(
+        app, ["--text", "hello"], env={"XDG_CONFIG_HOME": str(tmp_path)}
+    )
+
+    assert result.exit_code == 1
+    combined = _normalize_cli_output(result.stdout + result.stderr)
+    assert "Traceback" not in combined
+    assert "Invalid default_format 'jsonl'" in combined
+    assert "text, json, csv, tsv" in combined
 
 
 def test_partial_success_missing_hf_token(monkeypatch):

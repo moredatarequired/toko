@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -74,6 +75,23 @@ def test_clear_cache_subcommand_is_reached():
     result = runner.invoke(app, ["clear-cache"])
     assert result.exit_code == 0
     assert "Cache cleared" in result.stdout
+
+
+def _strip_ansi(text: str) -> str:
+    # Typer colorizes whenever GITHUB_ACTIONS is set, tty or not, so CI output carries
+    # SGR codes that split any literal we assert on.
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+@pytest.mark.parametrize("subcommand", ["update-prices", "clear-cache"])
+def test_subcommand_help_describes_the_subcommand(subcommand):
+    """`toko <sub> --help` must not fall through to the top-level help."""
+    result = runner.invoke(app, [subcommand, "--help"])
+
+    assert result.exit_code == 0
+    output = _strip_ansi(result.stdout)
+    assert f"Usage: toko {subcommand} [OPTIONS]" in output
+    assert "--list-models" not in output
 
 
 # One provider priced far away from anything genai-prices bundles, so a cost that

@@ -23,7 +23,7 @@ def test_json_includes_costs_when_requested():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 12, "cost": 0.000015, "approximate": False}}
+    assert payload == {"gpt-5": {"tokens": 12, "cost": 0.000015}}
 
 
 def test_json_reports_unpriced_model_as_null_cost():
@@ -34,9 +34,7 @@ def test_json_reports_unpriced_model_as_null_cost():
             show_costs=True,
         )
     )
-    assert payload == {
-        "mystery-model": {"tokens": 3, "cost": None, "approximate": False}
-    }
+    assert payload == {"mystery-model": {"tokens": 3, "cost": None}}
 
 
 def test_json_costs_cover_every_model():
@@ -46,8 +44,8 @@ def test_json_costs_cover_every_model():
     }
     payload = json.loads(format_output(results, output_format="json", show_costs=True))
     assert payload == {
-        "gpt-5": {"tokens": 12, "cost": 0.0001, "approximate": False},
-        "gpt-4.1": {"tokens": 14, "cost": 0.0002, "approximate": False},
+        "gpt-5": {"tokens": 12, "cost": 0.0001},
+        "gpt-4.1": {"tokens": 14, "cost": 0.0002},
     }
 
 
@@ -70,8 +68,8 @@ def test_file_json_includes_costs_when_requested():
         )
     )
     assert payload == {
-        "a.txt": {"gpt-5": {"tokens": 4, "cost": 0.0002, "approximate": False}},
-        "b.txt": {"gpt-5": {"tokens": 9, "cost": None, "approximate": False}},
+        "a.txt": {"gpt-5": {"tokens": 4, "cost": 0.0002}},
+        "b.txt": {"gpt-5": {"tokens": 9, "cost": None}},
     }
 
 
@@ -87,9 +85,7 @@ def test_total_only_json_reports_wholly_unpriced_model_as_null():
             show_costs=True,
         )
     )
-    assert payload == {
-        "mystery-model": {"tokens": 13, "cost": None, "approximate": False}
-    }
+    assert payload == {"mystery-model": {"tokens": 13, "cost": None}}
 
 
 def test_total_only_json_sums_only_the_files_it_could_price():
@@ -104,7 +100,7 @@ def test_total_only_json_sums_only_the_files_it_could_price():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 13, "cost": 0.0002, "approximate": False}}
+    assert payload == {"gpt-5": {"tokens": 13, "cost": 0.0002}}
 
 
 def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():

@@ -63,9 +63,17 @@ def _any_approximate(results: dict[str, TokenCount]) -> bool:
 
 
 def _json_payload(
-    results: dict[str, TokenCount], *, show_costs: bool, force_object: bool = False
+    results: dict[str, TokenCount],
+    *,
+    show_costs: bool,
+    show_approximate: bool | None = None,
 ) -> dict[str, object]:
-    if not force_object and not show_costs and not _any_approximate(results):
+    # Callers spanning several payloads pass the document-wide answer, so one
+    # approximate count anywhere gives every file the same keys.
+    if show_approximate is None:
+        show_approximate = _any_approximate(results)
+
+    if not show_costs and not show_approximate:
         return {model: counted.count for model, counted in results.items()}
 
     # Costs stay as raw numbers (or null) rather than the display strings the
@@ -75,10 +83,11 @@ def _json_payload(
         entry: dict[str, object] = {"tokens": counted.count}
         if show_costs:
             entry["cost"] = counted.cost
-        # Present on every entry even when exact, so one document never mixes shapes.
-        entry["approximate"] = counted.approximate
-        if counted.caveat is not None:
-            entry["caveat"] = counted.caveat
+        if show_approximate:
+            # Present on every entry even when exact, so one document never mixes shapes.
+            entry["approximate"] = counted.approximate
+            if counted.caveat is not None:
+                entry["caveat"] = counted.caveat
         payload[model] = entry
     return payload
 
@@ -189,7 +198,7 @@ def _format_file_json(
     )
     payload = {
         filename: _json_payload(
-            counts, show_costs=show_costs, force_object=approximate_anywhere
+            counts, show_costs=show_costs, show_approximate=approximate_anywhere
         )
         for filename, counts in file_results.items()
     }

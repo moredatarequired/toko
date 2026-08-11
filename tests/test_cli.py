@@ -239,9 +239,8 @@ def test_json_includes_cost_with_flag():
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert set(payload["gpt-5"]) == {"tokens", "cost", "approximate"}
+    assert set(payload["gpt-5"]) == {"tokens", "cost"}
     assert payload["gpt-5"]["tokens"] == 1
-    assert payload["gpt-5"]["approximate"] is False
 
 
 def test_json_file_output_includes_cost_with_flag(tmp_path):
@@ -254,9 +253,8 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     entry = next(iter(payload.values()))["gpt-5"]
-    assert set(entry) == {"tokens", "cost", "approximate"}
+    assert set(entry) == {"tokens", "cost"}
     assert entry["tokens"] == 2
-    assert entry["approximate"] is False
 
 
 def test_json_reports_an_approximate_count_and_the_reason_for_it():
@@ -286,6 +284,32 @@ def test_json_labels_every_entry_once_any_count_is_approximate():
     payload = json.loads(result.stdout)
     assert payload["gpt-5"] == {"tokens": 2, "approximate": False}
     assert payload["gpt-6"]["approximate"] is True
+
+
+def test_json_gains_the_approximate_field_only_when_a_count_is_approximate():
+    """Costs alone must not add the field: --cost stays byte-identical to before."""
+    exact = _invoke_cli(
+        ["--format", "json", "--cost", "-m", "gpt-5", "--text", "hello world"]
+    )
+    approximate = _invoke_cli(
+        [
+            "--format",
+            "json",
+            "--cost",
+            "-m",
+            "gpt-5",
+            "-m",
+            "gpt-6",
+            "--text",
+            "hello world",
+        ]
+    )
+
+    assert set(json.loads(exact.stdout)["gpt-5"]) == {"tokens", "cost"}
+    labelled = json.loads(approximate.stdout)
+    assert set(labelled["gpt-5"]) == {"tokens", "cost", "approximate"}
+    assert labelled["gpt-5"]["approximate"] is False
+    assert labelled["gpt-6"]["approximate"] is True
 
 
 def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():

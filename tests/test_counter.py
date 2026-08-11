@@ -2,6 +2,8 @@
 
 import pytest
 
+import toko.counter as counter
+from toko.cache import get_cached_count
 from toko.counter import count_tokens
 
 
@@ -82,3 +84,26 @@ def test_unknown_openai_model_warns_once(capsys):
     count_tokens("hello", model="gpt-6", use_cache=False)
     count_tokens("goodbye", model="gpt-6", use_cache=False)
     assert capsys.readouterr().err.count("Warning:") == 1
+
+
+def test_openai_estimate_warns_again_on_a_repeat_run(capsys):
+    text = "hello world"
+
+    first = count_tokens(text, model="gpt-6")
+    assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
+
+    # A later invocation is a fresh process, which remembers no warnings.
+    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+
+    second = count_tokens(text, model="gpt-6")
+
+    assert second == first
+    assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
+    assert get_cached_count(text, "gpt-6") is None
+
+
+def test_exact_openai_count_is_cached(capsys):
+    text = "hello world"
+    count = count_tokens(text, model="gpt-5")
+    assert capsys.readouterr().err == ""
+    assert get_cached_count(text, "gpt-5") == count

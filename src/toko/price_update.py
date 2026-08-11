@@ -1,16 +1,16 @@
 """Automatic price update handling."""
 
 import json
+import os
+import sys
+import tempfile
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import httpx
 from genai_prices import UpdatePrices, data_snapshot
 
 from toko.cache import get_cache_dir
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 PRICE_DATA_URL = UpdatePrices().url
 FETCH_TIMEOUT = httpx.Timeout(timeout=10, connect=5)
@@ -64,7 +64,23 @@ def _build_snapshot(payload: bytes) -> data_snapshot.DataSnapshot:
     from genai_prices.types import _providers_from_raw  # noqa: PLC0415
 
     providers = _providers_from_raw(json.loads(payload))
+    if not providers:
+        raise ValueError("Pricing data contains no providers")
     return data_snapshot.DataSnapshot(providers, from_auto_update=True)
+
+
+def _write_atomic(path: Path, payload: bytes) -> None:
+    # Concurrent toko processes share this cache, so a half-written file must never be
+    # observable: write a sibling temp file and swap it in with a single rename.
+    fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(payload)
+        temp_path.replace(path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def apply_cached_prices() -> bool:
@@ -73,9 +89,19 @@ def apply_cached_prices() -> bool:
     Returns:
         True if cached prices were applied, False otherwise
     """
+    data_path = get_price_data_path()
+    if not data_path.exists():
+        return False
+
     try:
-        snapshot = _build_snapshot(get_price_data_path().read_bytes())
-    except Exception:
+        snapshot = _build_snapshot(data_path.read_bytes())
+    except Exception as e:
+        print(
+            f"Warning: ignoring unusable cached price data at {data_path}"
+            f" ({type(e).__name__}: {e}). Falling back to bundled prices;"
+            " run 'toko update-prices' to refetch.",
+            file=sys.stderr,
+        )
         return False
 
     data_snapshot.set_custom_snapshot(snapshot)
@@ -99,12 +125,10 @@ def refresh_prices() -> int:
     response.raise_for_status()
 
     snapshot = _build_snapshot(response.content)
-    if not snapshot.providers:
-        raise ValueError("Fetched pricing data contains no providers")
 
     data_snapshot.set_custom_snapshot(snapshot)
-    get_price_data_path().write_bytes(response.content)
-    get_price_cache_path().write_text(str(time.time()))
+    _write_atomic(get_price_data_path(), response.content)
+    _write_atomic(get_price_cache_path(), str(time.time()).encode())
     return len(snapshot.providers)
 
 

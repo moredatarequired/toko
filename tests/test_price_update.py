@@ -10,6 +10,7 @@ from genai_prices.data_snapshot import get_snapshot, set_custom_snapshot
 
 from toko.price_update import (
     PRICE_DATA_URL,
+    _write_atomic,
     apply_cached_prices,
     get_price_cache_path,
     get_price_data_path,
@@ -107,6 +108,27 @@ def test_cached_prices_survive_into_a_fresh_process():
     assert apply_cached_prices() is True
     assert get_snapshot().from_auto_update is True
     assert update_prices_if_stale() is False
+
+
+def test_write_atomic_swaps_the_payload_in_without_leaving_debris(tmp_path):
+    """Readers see either the old payload or the whole new one, never a partial file."""
+    target = tmp_path / "prices.json"
+    target.write_bytes(b"original")
+
+    _write_atomic(target, b"replacement")
+
+    assert target.read_bytes() == b"replacement"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_corrupt_cached_prices_are_reported(capsys):
+    """A truncated cache must say so rather than quietly serving bundled prices."""
+    get_price_data_path().write_bytes(b'[{"id": "openai", "name": "Ope')
+
+    assert apply_cached_prices() is False
+
+    assert "unusable cached price data" in capsys.readouterr().err
+    assert get_snapshot().from_auto_update is False
 
 
 @respx.mock

@@ -147,6 +147,26 @@ class TestRegistryParsing:
         assert "encoding" in stderr
         assert "retried" in stderr
 
+    def test_alias_lists_accumulate_instead_of_replacing(self):
+        registry = _registry(
+            """
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["grok-a", "grok-b"]
+            """,
+            """
+            [[model]]
+            name = "grok-imaginary-9"
+            aliases = ["grok-b", "grok-c"]
+            """,
+        )
+        assert registry.aliases["xai"] == {
+            "grok-a": "grok-imaginary-9",
+            "grok-b": "grok-imaginary-9",
+            "grok-c": "grok-imaginary-9",
+        }
+
     def test_only_aliasable_providers_may_declare_aliases(self, capsys):
         registry = _registry("""
             [[model]]
@@ -211,6 +231,20 @@ class TestUserOverlay:
         overridden = reloaded.get_model("claude-opus-4-6")
         assert overridden.retired == "2030-01-01"
         assert overridden.tokenizer == reloaded.CLAUDE_TOKENIZER_LEGACY
+
+    def test_an_override_extends_the_shipped_aliases(self, user_registry):
+        """Adding an alias must not unpublish the ones the registry shipped."""
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-2.5-pro"
+            provider = "google"
+            aliases = ["my-pro"]
+        """)
+        assert reloaded.get_model("my-pro").name == "models/gemini-2.5-pro"
+        # Dropping a shipped alias does not raise: the name falls through to the
+        # generic Google builder and is sent to the API under an ID it does not
+        # serve, so nothing but this assertion would notice.
+        assert reloaded.get_model("gemini-exp-1206").name == "models/gemini-2.5-pro"
 
     @pytest.mark.parametrize(
         "overlay",

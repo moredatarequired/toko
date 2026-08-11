@@ -101,13 +101,26 @@ def _clean_entry(entry: object, source: str) -> tuple[str, dict[str, object]] | 
     return name, fields
 
 
+def _extended_aliases(existing: object, incoming: object) -> list[object] | None:
+    """Combine two alias lists, keeping order and dropping repeats."""
+    if not isinstance(existing, list) or not isinstance(incoming, list):
+        return None
+    combined: list[object] = list(existing)
+    for alias in incoming:
+        if alias not in combined:
+            combined.append(alias)
+    return combined
+
+
 def _merge_entries(
     documents: list[tuple[str, dict[str, object]]],
 ) -> dict[str, dict[str, object]]:
     """Merge registry documents field by field, later documents winning.
 
     A user entry that names an existing model updates only the fields it
-    declares, so overriding one field cannot silently drop the others.
+    declares, so overriding one field cannot silently drop the others. Aliases
+    are the exception: they accumulate, because replacing the packaged list
+    would leave the names it held resolving to nothing in particular.
     """
     merged: dict[str, dict[str, object]] = {}
     for source, document in documents:
@@ -120,7 +133,11 @@ def _merge_entries(
             if cleaned is None:
                 continue
             name, fields = cleaned
-            merged.setdefault(name, {}).update(fields)
+            target = merged.setdefault(name, {})
+            aliases = _extended_aliases(target.get("aliases"), fields.get("aliases"))
+            target.update(fields)
+            if aliases is not None:
+                target["aliases"] = aliases
     return merged
 
 

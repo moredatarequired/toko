@@ -11,7 +11,7 @@ import requests
 import requests.adapters
 import urllib3
 
-from tests.hf_hub import STRICT_ENV_VAR, skip_if_rate_limited
+from tests.hf_hub import STRICT_ENV_VAR, HubFailures, skip_if_rate_limited
 
 RESOLVE_URL = (
     "https://huggingface.co/meta-llama/Llama-3.2-1B/resolve/main/tokenizer.json"
@@ -76,6 +76,31 @@ def _block_that_swallows_the_refusal() -> None:
         _fetch()
 
 
+def _refused_by_the_hub() -> None:
+    _fetch()
+    raise RuntimeError("Failed to count tokens for Qwen/Qwen2-7B: 429 Client Error")
+
+
+def _refused_then_answered() -> None:
+    _fetch()
+    _fetch()
+    raise RuntimeError("Failed to count tokens for Qwen/Qwen2-7B: 429 Client Error")
+
+
+def _broken_tokenizer() -> None:
+    raise RuntimeError("REAL NON-ASSERTION REGRESSION")
+
+
+def _block_collecting_per_model_failures(*operations) -> None:
+    """Run the `test_every_listed_model_counts_tokens` shape on the real `HubFailures`."""
+    with skip_if_rate_limited() as hub:
+        failures = HubFailures(hub)
+        for operation in operations:
+            with failures.collect(f"model-for-{operation.__name__}"):
+                operation()
+        failures.report("The following models failed to count tokens:")
+
+
 def test_rate_limited_load_skips(monkeypatch):
     _stub_transport(monkeypatch, [429])
     with pytest.raises(pytest.skip.Exception, match="rate limit"):
@@ -136,3 +161,62 @@ def test_strict_mode_turns_the_skip_into_a_failure(monkeypatch):
     _stub_transport(monkeypatch, [429])
     with pytest.raises(pytest.fail.Exception, match="rate limit"):
         _load_refused_by_the_hub()
+
+
+def test_collected_failures_the_hub_caused_do_not_beat_the_skip(monkeypatch):
+    """A loop that catches its own errors must not turn a 429 into a red build.
+
+    Every entry here is the Hub refusing the fetch, so there is nothing to report and
+    the skip is allowed through. Without attribution the `pytest.fail` built from those
+    entries would be a verdict, and verdicts always win.
+    """
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.skip.Exception, match="rate limit"):
+        _block_collecting_per_model_failures(_refused_by_the_hub)
+
+
+def test_collected_genuine_failure_beats_a_coincident_rate_limit(monkeypatch):
+    """A real regression during a Hub outage still fails, naming only the real one."""
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        _block_collecting_per_model_failures(_broken_tokenizer, _refused_by_the_hub)
+
+    message = str(excinfo.value)
+    assert "REAL NON-ASSERTION REGRESSION" in message
+    assert "429 Client Error" not in message
+    assert "plus 1 refused by the Hub" in message
+
+
+def test_collected_genuine_failure_without_a_rate_limit_is_reported(monkeypatch):
+    _stub_transport(monkeypatch, [200])
+    with pytest.raises(pytest.fail.Exception, match="REAL NON-ASSERTION REGRESSION"):
+        _block_collecting_per_model_failures(_broken_tokenizer)
+
+
+def test_collected_failure_is_reported_when_the_hub_relented(monkeypatch):
+    """A 429 the Hub went on to answer excuses nothing — no skip is coming."""
+    _stub_transport(monkeypatch, [429, 200])
+    with pytest.raises(pytest.fail.Exception, match="429 Client Error"):
+        _block_collecting_per_model_failures(_refused_then_answered)
+
+
+def test_skip_reason_names_an_exception_it_swallowed(monkeypatch):
+    """Non-strict runs still skip, but the masked error is in the reason, not lost."""
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.skip.Exception) as excinfo:
+        _block_failing_for_another_reason()
+
+    assert "rate limit" in str(excinfo.value)
+    assert "ValueError: server error" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ValueError)
+
+
+def test_strict_mode_never_loses_a_swallowed_exception(monkeypatch):
+    monkeypatch.setenv(STRICT_ENV_VAR, "1")
+    _stub_transport(monkeypatch, [429])
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        _block_failing_for_another_reason()
+
+    assert "rate limit" in str(excinfo.value)
+    assert "ValueError: server error" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ValueError)

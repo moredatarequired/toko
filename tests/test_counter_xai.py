@@ -24,13 +24,6 @@ class StubTokenizer:
         return list(text.encode())
 
 
-@pytest.fixture(autouse=True)
-def _reset_approximation_warnings():
-    counter._WARNED_ONCE.clear()  # noqa: SLF001
-    yield
-    counter._WARNED_ONCE.clear()  # noqa: SLF001
-
-
 def _install_stub_tokenizer(monkeypatch):
     monkeypatch.setattr(counter, "HAS_TRANSFORMERS", True)
     monkeypatch.setitem(

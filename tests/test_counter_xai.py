@@ -50,7 +50,7 @@ def test_xai_prefers_api(monkeypatch, capsys):
     # Ensure fallback is not invoked
     monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
 
-    tokens = counter.count_tokens("hello", "grok-3", use_cache=False)
+    tokens = counter.count_tokens("hello", "grok-4.5", use_cache=False)
     assert tokens == 7
     # An exact API count must not be labelled approximate.
     assert capsys.readouterr().err == ""
@@ -65,7 +65,7 @@ def test_xai_falls_back_to_transformers(monkeypatch):
     monkeypatch.setattr(counter.httpx, "post", fake_post)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
+    tokens = counter.count_tokens("hi", "grok-4.5", use_cache=False)
     assert tokens == len("hi")
 
 
@@ -78,11 +78,11 @@ def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
     monkeypatch.setattr(counter.httpx, "post", fake_post)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
+    tokens = counter.count_tokens("hi", "grok-4.5", use_cache=False)
 
     stderr = capsys.readouterr().err
     assert tokens == len("hi")
-    assert "grok-3" in stderr
+    assert "grok-4.5" in stderr
     assert "approximate" in stderr
     assert "boom" in stderr
 
@@ -91,7 +91,7 @@ def test_xai_without_api_key_warns_that_count_is_approximate(monkeypatch, capsys
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     _install_stub_tokenizer(monkeypatch)
 
-    tokens = counter.count_tokens("hi", "grok-3", use_cache=False)
+    tokens = counter.count_tokens("hi", "grok-4.5", use_cache=False)
 
     stderr = capsys.readouterr().err
     assert tokens == len("hi")
@@ -104,7 +104,7 @@ def test_xai_approximation_warning_is_not_repeated(monkeypatch, capsys):
     _install_stub_tokenizer(monkeypatch)
 
     for text in ("one", "two", "three"):
-        counter.count_tokens(text, "grok-3", use_cache=False)
+        counter.count_tokens(text, "grok-4.5", use_cache=False)
 
     assert capsys.readouterr().err.count("approximate") == 1
 
@@ -119,4 +119,4 @@ def test_xai_failure_without_options(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="XAI_API_KEY"):
-        counter.count_tokens("hello", "grok-3", use_cache=False)
+        counter.count_tokens("hello", "grok-4.5", use_cache=False)

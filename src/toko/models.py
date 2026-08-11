@@ -2,6 +2,7 @@
 
 import json
 import re
+import sys
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
@@ -19,6 +20,19 @@ class ModelInfo:
     provider: str
     encoding: str | None = None  # For tiktoken models
     api_endpoint: str | None = None  # For API-based counting
+    # ISO date the provider retired the model, or "unknown" when the provider
+    # dropped it without publishing a date. Retired models stay in the registry
+    # so toko can explain the failure instead of surfacing a raw 404.
+    retired: str | None = None
+    # Set when the provider still answers for a retired name but serves a
+    # different model, which would otherwise mislabel the count.
+    redirects_to: str | None = None
+    # Tokenizer generation. Counts are only comparable within one generation, so
+    # alias resolution must never map a name across two of these.
+    tokenizer: str | None = None
+
+
+RETIREMENT_DATE_UNKNOWN = "unknown"
 
 
 _OPENAI_NAME_PATTERN = re.compile(r"(gpt-|o\d)")
@@ -80,30 +94,42 @@ def detect_provider(model: str) -> str | None:
 
 
 # Anthropic models (API-based counting)
-_ANTHROPIC_MODELS = [
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-sonnet-5",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-opus-4-5-20251101",
-    "claude-sonnet-4-5-20250929",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-1-20250805",
-    "claude-opus-4-20250514",
-    "claude-sonnet-4-20250514",
-    "claude-3-haiku-20240307",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-sonnet-20240620",
-]
+#
+# Anthropic replaced its tokenizer at Claude Opus 4.7: the same text produces
+# roughly 30% more tokens on 4.7-generation models than on everything before
+# them. Counting and cost therefore differ per generation, and the two must
+# never be conflated -- see _build_anthropic_alias_map.
+CLAUDE_TOKENIZER_OPUS_4_7 = "claude-opus-4-7"
+CLAUDE_TOKENIZER_LEGACY = "claude-legacy"
+
+# (name, tokenizer, retired date)
+_ANTHROPIC_MODEL_SPECS: tuple[tuple[str, str, str | None], ...] = (
+    ("claude-fable-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
+    ("claude-opus-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
+    ("claude-opus-4-8", CLAUDE_TOKENIZER_OPUS_4_7, None),
+    ("claude-opus-4-7", CLAUDE_TOKENIZER_OPUS_4_7, None),
+    ("claude-sonnet-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
+    ("claude-opus-4-6", CLAUDE_TOKENIZER_LEGACY, None),
+    ("claude-sonnet-4-6", CLAUDE_TOKENIZER_LEGACY, None),
+    ("claude-opus-4-5-20251101", CLAUDE_TOKENIZER_LEGACY, None),
+    ("claude-sonnet-4-5-20250929", CLAUDE_TOKENIZER_LEGACY, None),
+    ("claude-haiku-4-5-20251001", CLAUDE_TOKENIZER_LEGACY, None),
+    ("claude-opus-4-1-20250805", CLAUDE_TOKENIZER_LEGACY, "2026-08-05"),
+    ("claude-opus-4-20250514", CLAUDE_TOKENIZER_LEGACY, "2026-06-15"),
+    ("claude-sonnet-4-20250514", CLAUDE_TOKENIZER_LEGACY, "2026-06-15"),
+    ("claude-3-haiku-20240307", CLAUDE_TOKENIZER_LEGACY, "2026-04-20"),
+    ("claude-3-7-sonnet-20250219", CLAUDE_TOKENIZER_LEGACY, "2026-02-19"),
+    ("claude-3-5-haiku-20241022", CLAUDE_TOKENIZER_LEGACY, "2026-02-19"),
+    ("claude-3-opus-20240229", CLAUDE_TOKENIZER_LEGACY, "2026-01-05"),
+    ("claude-3-5-sonnet-20241022", CLAUDE_TOKENIZER_LEGACY, "2025-10-28"),
+    ("claude-3-5-sonnet-20240620", CLAUDE_TOKENIZER_LEGACY, "2025-10-28"),
+)
 
 ANTHROPIC_MODELS = {
-    name: ModelInfo(name=name, provider="anthropic") for name in _ANTHROPIC_MODELS
+    name: ModelInfo(
+        name=name, provider="anthropic", tokenizer=tokenizer, retired=retired
+    )
+    for name, tokenizer, retired in _ANTHROPIC_MODEL_SPECS
 }
 
 
@@ -113,23 +139,36 @@ def _strip_anthropic_version(name: str) -> str:
     return name
 
 
-_ANTHROPIC_ALIAS_MAP: dict[str, str] = {}
-for canonical in _ANTHROPIC_MODELS:
-    alias = _strip_anthropic_version(canonical)
-    existing = _ANTHROPIC_ALIAS_MAP.get(alias)
-    if existing is None or canonical > existing:
-        _ANTHROPIC_ALIAS_MAP[alias] = canonical
+def _build_anthropic_alias_map() -> dict[str, str]:
+    candidates: dict[str, list[str]] = defaultdict(list)
+    for canonical in ANTHROPIC_MODELS:
+        alias = _strip_anthropic_version(canonical)
+        if alias != canonical:
+            candidates[alias].append(canonical)
+
+    aliases: dict[str, str] = {}
+    for alias, names in candidates.items():
+        if len({ANTHROPIC_MODELS[name].tokenizer for name in names}) > 1:
+            # The alias spans the Opus 4.7 tokenizer change, so resolving it
+            # either way would report another generation's token count. Leave it
+            # unresolvable and make the user name the model they mean.
+            continue
+        aliases[alias] = max(names)
+    return aliases
+
+
+_ANTHROPIC_ALIAS_MAP = _build_anthropic_alias_map()
 
 
 def _resolve_anthropic_model(name: str) -> ModelInfo | None:
     if name in ANTHROPIC_MODELS:
         return ANTHROPIC_MODELS[name]
 
-    normalized = name
-    normalized = normalized.removesuffix("-latest")
+    normalized = name.removesuffix("-latest")
+    if normalized in ANTHROPIC_MODELS:
+        return ANTHROPIC_MODELS[normalized]
 
-    base = _strip_anthropic_version(normalized)
-    canonical = _ANTHROPIC_ALIAS_MAP.get(base)
+    canonical = _ANTHROPIC_ALIAS_MAP.get(_strip_anthropic_version(normalized))
     if canonical:
         return ANTHROPIC_MODELS[canonical]
     return None
@@ -138,21 +177,22 @@ def _resolve_anthropic_model(name: str) -> ModelInfo | None:
 # Google models (API-based counting)
 # Note: Google API requires "models/" prefix
 # Only models with documented CountTokens support are included
-_GOOGLE_CANONICAL_MODELS = (
-    "gemini-3.1-pro-preview",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-image",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3-pro-preview",
-    "gemini-2.0-flash-001",
-    "gemini-2.0-flash-lite-001",
-    "gemini-2.0-flash-preview-image-generation",
+# (name, retired date)
+_GOOGLE_MODEL_SPECS: tuple[tuple[str, str | None], ...] = (
+    ("gemini-3.1-pro-preview", None),
+    ("gemini-3.6-flash", None),
+    ("gemini-3.5-flash", None),
+    ("gemini-3.5-flash-lite", None),
+    ("gemini-3.1-flash-lite", None),
+    ("gemini-2.5-pro", None),
+    ("gemini-2.5-flash", None),
+    ("gemini-2.5-flash-lite", None),
+    ("gemini-2.5-flash-image", None),
+    ("gemini-3.1-flash-lite-preview", "2026-05-25"),
+    ("gemini-3-pro-preview", "2026-03-09"),
+    ("gemini-2.0-flash-001", "2026-06-01"),
+    ("gemini-2.0-flash-lite-001", "2026-06-01"),
+    ("gemini-2.0-flash-preview-image-generation", "2025-11-14"),
 )
 
 _GOOGLE_ALIAS_MAP: dict[str, str] = {
@@ -188,8 +228,8 @@ _GOOGLE_ALIAS_MAP: dict[str, str] = {
 }
 
 GOOGLE_MODELS = {
-    name: ModelInfo(name=f"models/{name}", provider="google")
-    for name in _GOOGLE_CANONICAL_MODELS
+    name: ModelInfo(name=f"models/{name}", provider="google", retired=retired)
+    for name, retired in _GOOGLE_MODEL_SPECS
 }
 
 
@@ -215,28 +255,41 @@ def _resolve_google_model(name: str) -> ModelInfo | None:
 
 # xAI models (using tiktoken for estimation)
 # xAI uses OpenAI-compatible API, use o200k_base as approximation
-_XAI_MODELS = (
-    "grok-4.5",
-    "grok-4.3",
-    "grok-build-0.1",
-    "grok-4",
-    "grok-4-0709",
-    "grok-4-fast-reasoning",
-    "grok-4-fast-non-reasoning",
-    "grok-4-1-fast-reasoning",
-    "grok-4-1-fast-non-reasoning",
-    "grok-3",
-    "grok-code-fast-1",
-    "grok-3-mini",
-    "grok-2-1212",
-    "grok-2-vision-1212",
+#
+# xAI retired eight slugs on 2026-05-15 but kept them resolving: the API answers
+# with a different model instead of 404ing, so a count taken under a retired name
+# silently belongs to whatever now serves it. redirects_to records that.
+#
+# (name, retired date, model served instead)
+_XAI_MODEL_SPECS: tuple[tuple[str, str | None, str | None], ...] = (
+    ("grok-4.5", None, None),
+    ("grok-4.3", None, None),
+    ("grok-build-0.1", None, None),
+    ("grok-4", "2026-05-15", "grok-4.3"),
+    ("grok-4-0709", "2026-05-15", "grok-4.3"),
+    ("grok-4-fast-reasoning", "2026-05-15", "grok-4.3"),
+    ("grok-4-fast-non-reasoning", "2026-05-15", "grok-4.3"),
+    ("grok-4-1-fast-reasoning", "2026-05-15", "grok-4.3"),
+    ("grok-4-1-fast-non-reasoning", "2026-05-15", "grok-4.3"),
+    ("grok-3", "2026-05-15", "grok-4.3"),
+    ("grok-code-fast-1", "2026-05-15", "grok-build-0.1"),
+    # Dropped from xAI's model list without a published retirement date.
+    ("grok-3-mini", RETIREMENT_DATE_UNKNOWN, None),
+    ("grok-2-1212", RETIREMENT_DATE_UNKNOWN, None),
+    ("grok-2-vision-1212", RETIREMENT_DATE_UNKNOWN, None),
 )
 
 _XAI_ALIAS_MAP = {"grok-2-image-1212": "grok-2-1212"}
 
 XAI_MODELS = {
-    name: ModelInfo(name=name, provider="xai", encoding="o200k_base")
-    for name in _XAI_MODELS
+    name: ModelInfo(
+        name=name,
+        provider="xai",
+        encoding="o200k_base",
+        retired=retired,
+        redirects_to=redirects_to,
+    )
+    for name, retired, redirects_to in _XAI_MODEL_SPECS
 }
 
 
@@ -474,8 +527,38 @@ def get_model(name: str) -> ModelInfo:
     return builder(name)
 
 
-def list_models() -> dict[str, list[str]]:
+def retirement_notice(model_info: ModelInfo) -> str | None:
+    """Explain that a model is retired, and what the provider serves instead."""
+    if model_info.retired is None:
+        return None
+    when = (
+        "on an unpublished date"
+        if model_info.retired == RETIREMENT_DATE_UNKNOWN
+        else f"on {model_info.retired}"
+    )
+    notice = f"Warning: {model_info.name} was retired {when}"
+    if model_info.redirects_to:
+        return (
+            f"{notice}; {model_info.provider} still answers for it but serves "
+            f"{model_info.redirects_to}, so this count is {model_info.redirects_to}'s, "
+            f"not {model_info.name}'s."
+        )
+    return f"{notice}; the {model_info.provider} API will reject or redirect it."
+
+
+def warn_if_retired(model_info: ModelInfo) -> None:
+    notice = retirement_notice(model_info)
+    if notice is not None:
+        print(notice, file=sys.stderr)
+
+
+def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
     """List all supported models grouped by provider.
+
+    Args:
+        include_retired: Also list models the provider has retired. They stay in
+            the registry so toko can explain the failure, but they are hidden by
+            default because they can no longer be counted.
 
     Returns:
         Dictionary mapping provider name to list of model names
@@ -483,6 +566,8 @@ def list_models() -> dict[str, list[str]]:
     providers: dict[str, set[str]] = defaultdict(set)
 
     for model in MODELS.values():
+        if model.retired is not None and not include_retired:
+            continue
         providers[model.provider].add(model.name)
 
     for model_name in TIKTOKEN_MODEL_TO_ENCODING:

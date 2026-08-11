@@ -15,7 +15,7 @@ import httpx
 import tiktoken
 
 from toko.cache import cache_count, get_cached_count
-from toko.models import ModelInfo, get_model
+from toko.models import ModelInfo, get_model, warn_if_retired
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,6 +55,7 @@ _TOKENIZER_CACHE: dict[str, object] = {}
 # Models already warned about, so counting a directory does not repeat the same
 # approximation notice once per file.
 _APPROXIMATE_WARNED: set[str] = set()
+_RETIRED_WARNED: set[str] = set()
 
 OPENAI_FALLBACK_ENCODING = "o200k_base"
 
@@ -143,6 +144,14 @@ def _count_openai(text: str, model_info: ModelInfo) -> int:
     if model_info.encoding is None:
         _warn_openai_estimate(model_info.name, encoding_name)
     return len(encoding.encode(text))
+
+
+def _warn_if_retired(model_info: ModelInfo) -> None:
+    """Warn once per model that its counts come from a retired name."""
+    if model_info.retired is None or model_info.name in _RETIRED_WARNED:
+        return
+    _RETIRED_WARNED.add(model_info.name)
+    warn_if_retired(model_info)
 
 
 def _warn_approximate(model_name: str, reason: str) -> None:
@@ -441,6 +450,7 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
             return cached
 
     model_info = get_model(model)
+    _warn_if_retired(model_info)
     token_count = _count_with_provider(text, model_info)
 
     if use_cache:

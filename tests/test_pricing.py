@@ -5,6 +5,16 @@ import pytest
 from toko.cost import estimate_cost
 from toko.models import ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS, list_models
 
+
+def _current(registry):
+    """Return the model names the provider still serves.
+
+    Retired models are kept in the registry only to explain the failure, so
+    pricing them is not required.
+    """
+    return [name for name, info in registry.items() if info.retired is None]
+
+
 # genai-prices ships its price table as data, so an older release simply has no
 # entry for a model released after it. Probing one current model tells us whether
 # the installed release is new enough for the coverage assertions below to mean
@@ -70,7 +80,7 @@ class TestPricingCoverage:
     def test_anthropic_models_have_pricing(self):
         """All current Anthropic models should have pricing data."""
         failures = []
-        for model_name in ANTHROPIC_MODELS:
+        for model_name in _current(ANTHROPIC_MODELS):
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -84,7 +94,7 @@ class TestPricingCoverage:
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
         failures = []
-        for model_name in GOOGLE_MODELS:
+        for model_name in _current(GOOGLE_MODELS):
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -97,19 +107,8 @@ class TestPricingCoverage:
     @requires_current_prices
     def test_xai_models_have_pricing(self):
         """Current xAI models should have pricing data."""
-        # Retired slugs xAI now serves with another model; priced with it.
-        expected_missing = {
-            "grok-4-fast-non-reasoning",
-            "grok-4-fast-reasoning",
-            "grok-4-1-fast-non-reasoning",
-            "grok-4-1-fast-reasoning",
-            "grok-code-fast-1",
-        }
-
         failures = []
-        for model_name in XAI_MODELS:
-            if model_name in expected_missing:
-                continue
+        for model_name in _current(XAI_MODELS):
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)
@@ -118,6 +117,18 @@ class TestPricingCoverage:
             pytest.fail(
                 f"The following xAI models lack pricing data: {', '.join(failures)}"
             )
+
+    def test_retired_models_are_not_offered_for_pricing(self):
+        """Retired models stay resolvable but must not be listed as supported."""
+        listed = {name for names in list_models().values() for name in names}
+        retired = [
+            info.name
+            for registry in (ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS)
+            for info in registry.values()
+            if info.retired is not None
+        ]
+        assert retired
+        assert not listed.intersection(retired)
 
     def test_tokenizer_aliases_have_pricing(self):
         """Test that tokenizer aliases (shorthand names) have pricing via OpenRouter."""

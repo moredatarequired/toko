@@ -1,5 +1,6 @@
 """API keys must never reach a user-visible error message, warning or traceback."""
 
+import inspect
 import json
 import os
 import select
@@ -410,10 +411,20 @@ def test_redact_key_replaces_the_percent_encoded_form_of_a_non_utf8_byte():
     )
 
 
+def test_describe_request_failure_takes_the_api_key_without_a_default():
+    """A default lets a call site drop the argument and skip redaction silently."""
+    api_key = inspect.signature(_describe_request_failure).parameters["api_key"]
+
+    assert api_key.default is inspect.Parameter.empty
+    assert api_key.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+
+
 def test_describe_request_failure_strips_a_query_string_and_fragment():
     """No caller passes a key in the URL today; this pins the guard against that."""
     described = _describe_request_failure(
-        httpx.ReadTimeout("slow"), f"https://example.test/v1:count?key={SENTINEL}#frag"
+        httpx.ReadTimeout("slow"),
+        f"https://example.test/v1:count?key={SENTINEL}#frag",
+        SENTINEL,
     )
 
     assert described == "ReadTimeout contacting https://example.test/v1:count"

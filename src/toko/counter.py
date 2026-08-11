@@ -104,9 +104,7 @@ def _redact_key(message: str, api_key: str | None) -> str:
     return message
 
 
-def _describe_request_failure(
-    exc: Exception, url: str, api_key: str | None = None
-) -> str:
+def _describe_request_failure(exc: Exception, url: str, api_key: str | None) -> str:
     """Say what a failed request did without quoting the transport's own message.
 
     httpx echoes back whatever it was handed -- the request URL for a key sent as a
@@ -115,6 +113,9 @@ def _describe_request_failure(
     character appears in the message as the two characters of an escape sequence.
     Reporting only the status code and the exception type removes the whole class,
     bar the one carve-out below where the transport's message is provably an errno.
+
+    `api_key` has no default on purpose: a defaulted one lets a call site drop the
+    argument and disable redaction without anything failing.
     """
     endpoint = url.split("?", 1)[0].split("#", 1)[0]
     if isinstance(exc, httpx.HTTPStatusError):

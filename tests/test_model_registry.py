@@ -144,6 +144,36 @@ class TestRegistryParsing:
         assert "aliases" in capsys.readouterr().err
 
 
+class TestGoogleAliasPrefixes:
+    """An unrecognized variant must fall back to its closest alias, not any."""
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("gemini-2.0-flash-lite-preview-11-11", "models/gemini-2.0-flash-lite-001"),
+            ("gemini-2.0-flash-exp-11-11", "models/gemini-2.0-flash-001"),
+            (
+                "gemini-2.0-flash-exp-image-generation-11-11",
+                "models/gemini-2.0-flash-preview-image-generation",
+            ),
+            ("gemini-2.5-flash-lite-preview-11-11", "models/gemini-2.5-flash-lite"),
+        ],
+    )
+    def test_the_longest_matching_alias_wins(self, name, expected):
+        assert models.get_model(name).name == expected
+
+    def test_resolution_does_not_depend_on_registry_order(self, user_registry):
+        """Appending an alias must not re-route names that already resolved."""
+        before = models.get_model("gemini-2.0-flash-lite-preview-11-11").name
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-2.5-pro"
+            provider = "google"
+            aliases = ["gemini-2.0-flash-imaginary"]
+        """)
+        assert reloaded.get_model("gemini-2.0-flash-lite-preview-11-11").name == before
+
+
 class TestUserOverlay:
     def test_a_new_model_is_picked_up(self, user_registry):
         reloaded = user_registry("""

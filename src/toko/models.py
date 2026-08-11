@@ -336,9 +336,13 @@ def _normalize_google_model_name(name: str) -> str:
     alias = _GOOGLE_ALIAS_MAP.get(lowered)
     if alias:
         return alias
-    for prefix, canonical in _GOOGLE_ALIAS_MAP.items():
-        if lowered.startswith(prefix):
-            return canonical
+    # Longest alias prefix wins. Matching in registry order would let the short
+    # gemini-2.0-flash swallow variants of gemini-2.0-flash-lite, which is a
+    # different model at a different price, and would make resolution depend on
+    # where a user happened to add an alias in ~/.config/toko/models.toml.
+    prefixes = [prefix for prefix in _GOOGLE_ALIAS_MAP if lowered.startswith(prefix)]
+    if prefixes:
+        return _GOOGLE_ALIAS_MAP[max(prefixes, key=len)]
     return lowered
 
 

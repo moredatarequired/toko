@@ -103,13 +103,23 @@ def test_non_table_api_keys_is_rejected(write_config):
 
 def test_non_string_api_key_is_rejected(write_config):
     write_config("[toko.api_keys]\nopenai = 123\n")
-    with pytest.raises(ValueError, match=r"Invalid api_keys\.openai in .*a string"):
+    with pytest.raises(ValueError, match=r"Invalid api_keys\.<redacted> in .*a string"):
         load_config()
 
 
 def test_rejected_api_key_message_never_echoes_the_value(write_config):
     write_config(f'[toko.api_keys]\nanthropic = ["{SENTINEL}"]\n')
-    with pytest.raises(ValueError, match=r"Invalid api_keys\.anthropic") as excinfo:
+    with pytest.raises(ValueError, match=r"Invalid api_keys\.<redacted>") as excinfo:
+        load_config()
+    assert SENTINEL not in str(excinfo.value)
+
+
+def test_rejected_api_key_message_never_echoes_the_key_name(write_config):
+    """A key pasted into the name position is just as secret as one in the value."""
+    write_config(f'[toko.api_keys]\n"{SENTINEL}" = 123\n')
+    with pytest.raises(
+        ValueError, match=r"Invalid api_keys\.<redacted> in .*a string"
+    ) as excinfo:
         load_config()
     assert SENTINEL not in str(excinfo.value)
 
@@ -147,3 +157,11 @@ def test_integer_booleans_are_accepted(write_config):
     config = load_config()
     assert config.respect_gitignore is False
     assert config.auto_update_prices is True
+
+
+def test_other_integers_are_not_booleans(write_config):
+    write_config("[toko]\nrespect_gitignore = 42\n")
+    with pytest.raises(
+        ValueError, match=r"Invalid respect_gitignore 42 in .*expected a boolean"
+    ):
+        load_config()

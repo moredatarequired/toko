@@ -56,6 +56,12 @@ _TYPE_NAMES: dict[type, str] = {
 }
 
 
+def _redact_leaf(key: str) -> str:
+    """Replace the last dotted component, which may itself be a secret."""
+    head, separator, _ = key.rpartition(".")
+    return f"{head}{separator}<redacted>" if separator else key
+
+
 def _require_type[T](
     value: object,
     expected: type[T],
@@ -66,18 +72,24 @@ def _require_type[T](
 ) -> T:
     if isinstance(value, expected):
         return value
-    # show_value=False for secrets: naming the offending key is enough, and the
-    # message reaches the terminal.
-    found = f" {value!r}" if show_value else ""
+    # show_value=False for secrets, and the message reaches the terminal. Under
+    # [toko.api_keys] the key itself is the secret, so the leaf name goes too and the
+    # message only says where the mistake is.
+    if show_value:
+        raise ValueError(
+            f"Invalid {key} {value!r} in {config_path}"
+            f" (expected {_TYPE_NAMES[expected]})"
+        )
     raise ValueError(
-        f"Invalid {key}{found} in {config_path} (expected {_TYPE_NAMES[expected]})"
+        f"Invalid {_redact_leaf(key)} in {config_path}"
+        f" (expected {_TYPE_NAMES[expected]})"
     )
 
 
 def _require_bool(value: object, *, key: str, config_path: Path) -> bool:
-    # bool subclasses int, so this also accepts the 1/0 spellings, which loaded and
-    # behaved correctly before these fields were validated.
-    if isinstance(value, int):
+    # The 1/0 spellings loaded and behaved correctly before these fields were
+    # validated, so they stay accepted; every other int is a mistake, not a boolean.
+    if isinstance(value, bool) or (isinstance(value, int) and value in (0, 1)):
         return bool(value)
     raise ValueError(
         f"Invalid {key} {value!r} in {config_path} (expected {_TYPE_NAMES[bool]})"

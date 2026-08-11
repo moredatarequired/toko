@@ -78,6 +78,11 @@ def _clean_entry(entry: object, source: str) -> tuple[str, dict[str, object]] | 
     if not isinstance(name, str) or not name:
         _warn(f"{source}: ignoring a [[model]] entry with no 'name'")
         return None
+    # Every lookup resolves through a lowercased name, so an entry that kept its
+    # capitals would be listed and then match only that exact spelling. It would
+    # also merge beside the packaged entry it meant to override rather than into
+    # it.
+    name = name.lower()
 
     fields: dict[str, object] = {}
     for key, value in table.items():
@@ -114,16 +119,23 @@ def _extended_aliases(existing: object, incoming: object) -> list[object] | None
 
 def _merge_entries(
     documents: list[tuple[str, dict[str, object]]],
-) -> dict[str, dict[str, object]]:
+) -> tuple[dict[str, dict[str, object]], dict[tuple[str, str], int]]:
     """Merge registry documents field by field, later documents winning.
 
     A user entry that names an existing model updates only the fields it
     declares, so overriding one field cannot silently drop the others. Aliases
     are the exception: they accumulate, because replacing the packaged list
     would leave the names it held resolving to nothing in particular.
+
+    Also returns which document first declared each (model, alias) pair. Merged
+    model order decides which model keeps a shared alias, so a declaration can
+    lose to one made in an earlier document -- the only case worth warning
+    about, since a later document beating an earlier one is a re-point working
+    as documented.
     """
     merged: dict[str, dict[str, object]] = {}
-    for source, document in documents:
+    alias_origins: dict[tuple[str, str], int] = {}
+    for index, (source, document) in enumerate(documents):
         entries = document.get("model", [])
         if not isinstance(entries, list):
             _warn(f"{source}: 'model' must be an array of tables")
@@ -137,12 +149,17 @@ def _merge_entries(
             if name in seen:
                 _warn(f"{source}: merging a second [[model]] entry named '{name}'")
             seen.add(name)
+            incoming = fields.get("aliases")
+            if isinstance(incoming, list):
+                for alias in incoming:
+                    if isinstance(alias, str):
+                        alias_origins.setdefault((name, alias.lower()), index)
             target = merged.setdefault(name, {})
-            aliases = _extended_aliases(target.get("aliases"), fields.get("aliases"))
+            aliases = _extended_aliases(target.get("aliases"), incoming)
             target.update(fields)
             if aliases is not None:
                 target["aliases"] = aliases
-    return merged
+    return merged, alias_origins
 
 
 def _string_field(fields: dict[str, object], key: str) -> str | None:
@@ -150,11 +167,11 @@ def _string_field(fields: dict[str, object], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
+def _build_models(
+    merged: dict[str, dict[str, object]],
+) -> dict[str, dict[str, ModelInfo]]:
     models: dict[str, dict[str, ModelInfo]] = defaultdict(dict)
-    aliases: dict[str, dict[str, str]] = defaultdict(dict)
-
-    for name, fields in _merge_entries(documents).items():
+    for name, fields in merged.items():
         provider = _string_field(fields, "provider")
         if not provider:
             _warn(f"ignoring model '{name}', which names no provider")
@@ -171,9 +188,19 @@ def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
             tokenizer=_string_field(fields, "tokenizer"),
             listed=listed if isinstance(listed, bool) else True,
         )
+    return models
 
+
+def _build_aliases(
+    merged: dict[str, dict[str, object]],
+    alias_origins: dict[tuple[str, str], int],
+    canonical: frozenset[str],
+) -> dict[str, dict[str, str]]:
+    aliases: dict[str, dict[str, str]] = defaultdict(dict)
+    for name, fields in merged.items():
+        provider = _string_field(fields, "provider")
         declared = fields.get("aliases")
-        if not isinstance(declared, list) or not declared:
+        if not provider or not isinstance(declared, list) or not declared:
             continue
         if provider not in _ALIASABLE_PROVIDERS:
             _warn(
@@ -186,16 +213,43 @@ def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
             # Every lookup goes through a lowercased name, so an alias key that
             # kept its capitals would be registered and then never match.
             key = alias.lower()
-            previous = aliases[provider].get(key)
-            if previous is not None and previous != name:
+            if key in canonical:
                 _warn(
-                    f"alias '{alias}' is declared on both '{previous}' and "
-                    f"'{name}'; '{name}' wins because it is declared later. "
-                    "Aliases accumulate, so re-pointing one only takes effect "
-                    "if the intended model is declared after the original."
+                    f"ignoring alias '{alias}' on '{name}': a model of that name "
+                    "is already registered, and a model name is always matched "
+                    "before any alias"
+                )
+                continue
+            previous = aliases[provider].get(key)
+            # `name` comes later in merged order, so it takes the alias. Only a
+            # loser declared no earlier than the winner has anything to report:
+            # a later document beating an earlier one is a re-point working, and
+            # warning there would nag on every run.
+            if (
+                previous is not None
+                and previous != name
+                and alias_origins.get((name, key), 0)
+                <= alias_origins.get((previous, key), 0)
+            ):
+                _warn(
+                    f"alias '{alias}' declared on '{previous}' has no effect: "
+                    f"'{name}' declares it too and comes later in the merged "
+                    f"registry order, so '{name}' keeps it. Overriding a "
+                    "packaged model keeps that model's position, so re-point an "
+                    "alias by declaring it on a model name that does not exist "
+                    "yet, which is appended last."
                 )
             aliases[provider][key] = name
+    return aliases
 
+
+def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
+    merged, alias_origins = _merge_entries(documents)
+    models = _build_models(merged)
+    # Model names are matched before any alias table and across every provider,
+    # so an alias repeating one could never be reached.
+    canonical = frozenset(name for entries in models.values() for name in entries)
+    aliases = _build_aliases(merged, alias_origins, canonical)
     return Registry(models=dict(models), aliases=dict(aliases))
 
 
@@ -349,10 +403,11 @@ _ANTHROPIC_ALIAS_MAP = _build_anthropic_alias_map()
 
 
 def _resolve_anthropic_model(name: str) -> ModelInfo | None:
-    if name in ANTHROPIC_MODELS:
-        return ANTHROPIC_MODELS[name]
+    lowered = name.lower()
+    if lowered in ANTHROPIC_MODELS:
+        return ANTHROPIC_MODELS[lowered]
 
-    normalized = name.removesuffix("-latest")
+    normalized = lowered.removesuffix("-latest")
     if normalized in ANTHROPIC_MODELS:
         return ANTHROPIC_MODELS[normalized]
 
@@ -588,9 +643,11 @@ def get_model(name: str) -> ModelInfo:
     Raises:
         ValueError: If model provider cannot be detected
     """
-    # First try the registry
-    if name in MODELS:
-        return MODELS[name]
+    # First try the registry. Its names are stored lowercased, so a name typed
+    # with capitals finds its entry instead of falling through to a bare one
+    # that carries none of its metadata.
+    if (registered := MODELS.get(name.lower())) is not None:
+        return registered
 
     resolved_anthropic = _resolve_anthropic_model(name)
     if resolved_anthropic is not None:

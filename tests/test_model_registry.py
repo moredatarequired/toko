@@ -215,6 +215,16 @@ class TestPackagedRegistry:
             GOLDEN_HINT
         )
 
+    def test_the_packaged_registry_loads_without_a_word_on_stderr(self, capsys):
+        """Every warning reports a user's edit, so an overlay-free run is quiet.
+
+        This is also what keeps a duplicate alias inside models.toml itself from
+        being invisible: the warning for one now fires only when a declaration
+        loses to an earlier document, which no packaged entry can do.
+        """
+        models.build_registry([models._load_packaged_document()])  # noqa: SLF001
+        assert capsys.readouterr().err == ""
+
     def test_a_packaged_registry_that_is_not_utf8_fails_loudly(self, monkeypatch):
         """An install bug must surface as a clear error, not a decode traceback."""
         corrupt = SimpleNamespace(read_bytes=lambda: b'[[model]]\nname = "\xff"\n')
@@ -366,6 +376,24 @@ class TestRegistryParsing:
         """)
         assert "grok-solo" not in capsys.readouterr().err
 
+    def test_an_alias_that_repeats_a_model_name_is_ignored_out_loud(self, capsys):
+        """A model name is matched before any alias table, across providers."""
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-8"
+            provider = "xai"
+
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["grok-imaginary-8"]
+        """)
+        assert registry.aliases.get("xai", {}) == {}
+
+        err = capsys.readouterr().err
+        assert "grok-imaginary-8" in err
+        assert "grok-imaginary-9" in err
+
     def test_only_aliasable_providers_may_declare_aliases(self, capsys):
         registry = _registry("""
             [[model]]
@@ -494,8 +522,15 @@ class TestUserOverlay:
         assert "gemini-3.1-pro-preview" in err
         assert "gemini-2.5-pro" in err
 
-    def test_re_pointing_a_shipped_alias_forwards_takes_effect(self, user_registry):
-        """gemini-2.5-flash is declared after gemini-2.5-pro, so it wins."""
+    def test_re_pointing_a_shipped_alias_forwards_takes_effect(
+        self, user_registry, capsys
+    ):
+        """gemini-2.5-flash is declared after gemini-2.5-pro, so it wins.
+
+        Silently: this is the documented, supported way to re-point an alias,
+        and warning about it would nag on every invocation -- including runs
+        that never mention Google.
+        """
         reloaded = user_registry("""
             [[model]]
             name = "gemini-2.5-flash"
@@ -503,6 +538,91 @@ class TestUserOverlay:
             aliases = ["gemini-exp-1206"]
         """)
         assert reloaded.get_model("gemini-exp-1206").name == "models/gemini-2.5-flash"
+        assert capsys.readouterr().err == ""
+
+    def test_a_new_model_name_is_the_reliable_way_to_re_point_an_alias(
+        self, user_registry, capsys
+    ):
+        """A name the packaged registry lacks is appended last, so it always wins.
+
+        The overlay claims one alias twice and lists the doomed entry first.
+        Overriding a packaged model inherits that model's position, so the
+        user's own file order decides nothing -- which is why the README sends
+        people to a brand-new name.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-3.1-pro-preview"
+            provider = "google"
+            aliases = ["gemini-exp-1206"]
+
+            [[model]]
+            name = "my-own-gemini"
+            provider = "google"
+            aliases = ["gemini-exp-1206"]
+        """)
+        assert reloaded.get_model("gemini-exp-1206").name == "models/my-own-gemini"
+
+        # Only the declaration that lost is reported; the one that worked is not.
+        err = capsys.readouterr().err
+        assert "gemini-3.1-pro-preview" in err
+        assert "my-own-gemini" not in err
+
+    def test_a_capitalised_model_name_is_reachable_under_either_spelling(
+        self, user_registry
+    ):
+        """A capitalised entry must not answer to its own spelling alone."""
+        reloaded = user_registry("""
+            [[model]]
+            name = "Gemini-My-Model"
+            provider = "google"
+            retired = "2099-01-01"
+        """)
+        for spelling in ("Gemini-My-Model", "gemini-my-model"):
+            resolved = reloaded.get_model(spelling)
+            assert resolved.name == "models/gemini-my-model"
+            assert resolved.retired == "2099-01-01"
+
+        listed = reloaded.list_models(include_retired=True)["google"]
+        assert "models/gemini-my-model" in listed
+        assert "models/Gemini-My-Model" not in listed
+
+    def test_a_capitalised_openai_name_keeps_its_registry_metadata(self, user_registry):
+        """OpenAI has no lowercasing resolver of its own, unlike the others.
+
+        Without the registry lookup itself being case-insensitive, this name
+        reaches the generic OpenAI builder, which invents an entry carrying no
+        retirement -- so a dead model would be counted and priced as a live one.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "GPT-Imaginary-9"
+            provider = "openai"
+            encoding = "o200k_base"
+            retired = "2099-01-01"
+        """)
+        for spelling in ("GPT-Imaginary-9", "gpt-imaginary-9"):
+            resolved = reloaded.get_model(spelling)
+            assert resolved.name == "gpt-imaginary-9"
+            assert resolved.retired == "2099-01-01"
+
+    def test_a_capitalised_anthropic_name_keeps_its_tokenizer(self, user_registry):
+        """Missing the registry entry would hand back a bare, untokenized model."""
+        reloaded = user_registry("""
+            [[model]]
+            name = "Claude-Imaginary-9-20260101"
+            provider = "anthropic"
+            tokenizer = "claude-opus-4-7"
+        """)
+        for spelling in (
+            "Claude-Imaginary-9-20260101",
+            "claude-imaginary-9-20260101",
+            "Claude-Imaginary-9",
+            "claude-imaginary-9",
+        ):
+            resolved = reloaded.get_model(spelling)
+            assert resolved.name == "claude-imaginary-9-20260101"
+            assert resolved.tokenizer == reloaded.CLAUDE_TOKENIZER_OPUS_4_7
 
     @pytest.mark.parametrize(
         "overlay",

@@ -244,13 +244,28 @@ alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
 only). `aliases` is the one field that accumulates rather than replaces: your
 list is appended to the shipped one, so adding a nickname cannot quietly
 unpublish the alternate names a model already answered to. The trade-off is that
-an alias can never be removed, only re-pointed by declaring it on another model —
-and because the last declaration in registry order wins, that only takes effect
-if the model you move it to is declared after its current owner. Declaring one
-alias on two models says on stderr which of them won. Alias names are matched
-case-insensitively. A malformed file — including one that is not valid UTF-8 — is
-reported on stderr and skipped, and Toko falls back to the registry it shipped
-with rather than failing to run.
+an alias can never be removed, only re-pointed by declaring it on another model,
+and the model declared last in the **merged** registry wins.
+
+Merged order is not the order of your file. An entry that overrides a shipped
+model keeps that model's position in the packaged registry, so reordering your
+own file changes nothing. To re-point an alias so that it always takes effect,
+declare it on a model name the packaged registry does not have — brand-new names
+are appended after everything else:
+
+```toml
+[[model]]
+name = "my-gemini"            # a new name, so this entry lands last and keeps the alias
+provider = "google"
+aliases = ["gemini-exp-1206"]
+```
+
+Toko says so on stderr when a declaration you made loses the alias to a model
+declared later, and when an alias repeats the name of a real model (model names
+are matched first, so such an alias could never fire). A re-point that works is
+silent. Model and alias names are both matched case-insensitively. A malformed
+file — including one that is not valid UTF-8 — is reported on stderr and skipped,
+and Toko falls back to the registry it shipped with rather than failing to run.
 
 `tokenizer` matters for Anthropic: Claude Opus 4.7 changed tokenizer, and the
 same text counts roughly 30% higher on 4.7-generation models. Toko refuses to

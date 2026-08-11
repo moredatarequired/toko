@@ -48,6 +48,43 @@ def _parse_output_format(value: object, config_path: Path) -> OutputFormat:
         ) from e
 
 
+_TYPE_NAMES: dict[type, str] = {
+    bool: "a boolean",
+    dict: "a table",
+    list: "a list",
+    str: "a string",
+}
+
+
+def _require_type[T](
+    value: object,
+    expected: type[T],
+    *,
+    key: str,
+    config_path: Path,
+    show_value: bool = True,
+) -> T:
+    if isinstance(value, expected):
+        return value
+    # show_value=False for secrets, and the message reaches the terminal. Callers pass
+    # a key that is already safe to print, so nothing here has to find the secret.
+    shown_value = f" {value!r}" if show_value else ""
+    raise ValueError(
+        f"Invalid {key}{shown_value} in {config_path}"
+        f" (expected {_TYPE_NAMES[expected]})"
+    )
+
+
+def _require_bool(value: object, *, key: str, config_path: Path) -> bool:
+    # The 1/0 spellings loaded and behaved correctly before these fields were
+    # validated, so they stay accepted; every other int is a mistake, not a boolean.
+    if isinstance(value, bool) or (isinstance(value, int) and value in (0, 1)):
+        return bool(value)
+    raise ValueError(
+        f"Invalid {key} {value!r} in {config_path} (expected {_TYPE_NAMES[bool]})"
+    )
+
+
 def load_config() -> Config:
     """Load configuration from file.
 
@@ -69,27 +106,75 @@ def load_config() -> Config:
         raise ValueError(f"Error reading config file {config_path}: {e}") from e
 
     # Extract toko section
-    toko_config = data.get("toko", {})
+    toko_config = _require_type(
+        data.get("toko", {}), dict, key="toko", config_path=config_path
+    )
 
     # Check for auto_update_prices from env var or config
-    auto_update = os.environ.get("TOKO_AUTO_UPDATE_PRICES", "").lower() in (
+    env_auto_update = os.environ.get("TOKO_AUTO_UPDATE_PRICES", "").lower() in (
         "true",
         "1",
         "yes",
     )
-    if not auto_update:
-        auto_update = toko_config.get("auto_update_prices", False)
+    config_auto_update = _require_bool(
+        toko_config.get("auto_update_prices", False),
+        key="auto_update_prices",
+        config_path=config_path,
+    )
+
+    exclude = _require_type(
+        toko_config.get("exclude", {}), dict, key="exclude", config_path=config_path
+    )
+    # A bare string here would be iterated character by character into pathspec, where
+    # the lone "*" silently excludes every file, so the element types matter too.
+    exclude_patterns = _require_type(
+        exclude.get("patterns", []),
+        list,
+        key="exclude.patterns",
+        config_path=config_path,
+    )
+    for index, pattern in enumerate(exclude_patterns):
+        _require_type(
+            pattern, str, key=f"exclude.patterns[{index}]", config_path=config_path
+        )
+
+    api_keys = _require_type(
+        toko_config.get("api_keys", {}),
+        dict,
+        key="api_keys",
+        config_path=config_path,
+        show_value=False,
+    )
+    # Under [toko.api_keys] the name is as secret as the value, and a key can contain
+    # dots, so the name never goes into the message at all.
+    for key_value in api_keys.values():
+        _require_type(
+            key_value,
+            str,
+            key="api_keys.<redacted>",
+            config_path=config_path,
+            show_value=False,
+        )
 
     # Build and return config
     return Config(
-        default_model=toko_config.get("default_model", "gpt-5"),
-        respect_gitignore=toko_config.get("respect_gitignore", True),
+        default_model=_require_type(
+            toko_config.get("default_model", "gpt-5"),
+            str,
+            key="default_model",
+            config_path=config_path,
+        ),
+        respect_gitignore=_require_bool(
+            toko_config.get("respect_gitignore", True),
+            key="respect_gitignore",
+            config_path=config_path,
+        ),
         default_format=_parse_output_format(
             toko_config.get("default_format", "text"), config_path
         ),
-        exclude_patterns=toko_config.get("exclude", {}).get("patterns", []),
-        api_keys=toko_config.get("api_keys", {}),
-        auto_update_prices=auto_update,
+        exclude_patterns=exclude_patterns,
+        api_keys=api_keys,
+        auto_update_prices=env_auto_update or config_auto_update,
     )
 
 

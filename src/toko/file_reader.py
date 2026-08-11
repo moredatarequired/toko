@@ -77,6 +77,10 @@ def _iter_recursive_files(
     discovered: list[Path] = []
     for root, dirs, filenames in os.walk(base_dir):
         root_path = Path(root)
+        # No .gitignore can exclude .git: git treats it as the repo boundary
+        # rather than an ignorable path, so prune it however we were configured.
+        if ".git" in dirs:
+            dirs.remove(".git")
         _prune_directories(
             dirs,
             current_root=root_path,

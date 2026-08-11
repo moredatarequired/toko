@@ -137,6 +137,22 @@ def test_find_files_gitignore_directories():
         assert files[0].name == "file.txt"
 
 
+@pytest.mark.parametrize("respect_gitignore", [True, False])
+def test_find_files_skips_dot_git(respect_gitignore):
+    """.git is the repo boundary, so no .gitignore setting can bring it back."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        (tmpdir_path / "file.txt").write_text("test")
+        git_dir = tmpdir_path / ".git" / "objects"
+        git_dir.mkdir(parents=True)
+        (tmpdir_path / ".git" / "config").write_text("[core]")
+        (git_dir / "abc").write_text("object")
+
+        files = find_files(tmpdir_path, respect_gitignore=respect_gitignore)
+        assert [f.name for f in files] == ["file.txt"]
+
+
 def test_find_files_exclude_patterns():
     """Test exclude patterns."""
     with tempfile.TemporaryDirectory() as tmpdir:

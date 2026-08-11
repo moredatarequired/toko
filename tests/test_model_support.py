@@ -44,7 +44,7 @@ def _provider_is_available(provider: str) -> bool:
 
 @pytest.mark.slow
 def test_every_listed_model_counts_tokens():
-    models_by_provider = list_models()
+    models_by_provider = list_models(include_retired=True)
     text = "integration smoke test"
 
     with skip_if_rate_limited() as hub:

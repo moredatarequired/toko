@@ -1,11 +1,13 @@
 """Token counting logic."""
 
+import contextlib
 import importlib
 import importlib.util
 import os
 import sys
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
+from urllib.parse import quote
 
 # Suppress transformers warning about missing PyTorch/TF/Flax
 # We only need tokenizers, not the full ML frameworks
@@ -67,11 +69,82 @@ def _warn_once(kind: str, model_name: str, message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr)
 
 
+# Below this length a "key" is more likely to be a common substring than a secret,
+# and blanking it out mangles the surrounding text without protecting anything.
+_MIN_REDACTABLE_KEY_LENGTH = 8
+
+
+def _redact_key(message: str, api_key: str | None) -> str:
+    """Strip an API key out of text that is about to be shown to the user.
+
+    Applied to anything derived from a provider response, since an error body can
+    echo the credential it rejected. The key is replaced in its verbatim,
+    percent-encoded and backslash-escaped forms -- the last because a key holding a
+    control character reaches the message as the two characters of an escape sequence.
+
+    Never raises, whatever the key contains: callers are already handling a failure,
+    and an exception here would both discard their message and carry the key in its
+    own payload.
+    """
+    if not api_key:
+        return message
+    needles = {api_key, api_key.strip()}
+    for needle in tuple(needles):
+        # A key holding a byte that is not valid UTF-8 reaches us as a surrogate,
+        # because that is how os.environ decodes one, and quote() cannot encode a
+        # surrogate as UTF-8. surrogateescape turns it back into the original byte;
+        # a value it still refuses simply contributes no encoded form, since a
+        # redaction helper that raises would destroy the message it was sanitising.
+        with contextlib.suppress(UnicodeError):
+            needles.add(quote(needle, safe="", errors="surrogateescape"))
+    needles |= {repr(needle)[1:-1] for needle in tuple(needles)}
+    for needle in sorted(needles, key=len, reverse=True):
+        if len(needle) >= _MIN_REDACTABLE_KEY_LENGTH:
+            message = message.replace(needle, "***")
+    return message
+
+
+def _describe_request_failure(
+    exc: Exception, url: str, api_key: str | None = None
+) -> str:
+    """Say what a failed request did without quoting the transport's own message.
+
+    httpx echoes back whatever it was handed -- the request URL for a key sent as a
+    query parameter, the raw header bytes for a key it refused to send -- and no
+    search-and-replace can reliably undo that, because a key holding one control
+    character appears in the message as the two characters of an escape sequence.
+    Reporting only the status code and the exception type removes the whole class,
+    bar the one carve-out below where the transport's message is provably an errno.
+    """
+    endpoint = url.split("?", 1)[0].split("#", 1)[0]
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        phrase = httpx.codes.get_reason_phrase(status) or "response"
+        return f"HTTP {status} {phrase} from {endpoint}"
+    if isinstance(exc, httpx.ConnectError):
+        # The one exception to the rule above: a ConnectError is raised before any
+        # request bytes exist, and its text is the OS-level cause behind the failed
+        # socket or name lookup, so it cannot hold the key. Without it a DNS failure
+        # and a refused connection read identically. Redacted regardless.
+        cause = _redact_key(str(exc), api_key).strip()
+        if cause:
+            return f"ConnectError contacting {endpoint}: {cause}"
+    return f"{type(exc).__name__} contacting {endpoint}"
+
+
+def _api_key_from_env(env_var: str) -> str | None:
+    # `export KEY=$(cat keyfile)` leaves a trailing newline, which httpx rejects
+    # outright as a header value rather than sending.
+    value = os.environ.get(env_var)
+    return value.strip() if value else value
+
+
 OPENAI_FALLBACK_ENCODING = "o200k_base"
 
 ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 ANTHROPIC_API_VERSION = "2023-06-01"
 GOOGLE_COUNT_URL_BASE = "https://generativelanguage.googleapis.com/v1beta"
+XAI_TOKENIZE_URL = "https://api.x.ai/v1/tokenize"
 
 
 class TokenizerProtocol(Protocol):
@@ -185,7 +258,7 @@ def _warn_approximate(model_name: str, reason: str) -> str:
 
 
 def _count_xai(text: str, model_info: ModelInfo) -> TokenCount:
-    api_key = os.environ.get("XAI_API_KEY")
+    api_key = _api_key_from_env("XAI_API_KEY")
     if api_key:
         try:
             return _exact(
@@ -205,11 +278,12 @@ def _count_xai(text: str, model_info: ModelInfo) -> TokenCount:
             "and ensure HF_TOKEN grants access to Xenova/grok-1-tokenizer."
         )
         if api_key and last_error is not None:
-            raise ValueError(f"{message} Last API error: {last_error}") from hf_error
+            detail = _redact_key(str(last_error), api_key)
+            raise ValueError(f"{message} Last API error: {detail}") from hf_error
         raise ValueError(message) from hf_error
 
     reason = (
-        f"the xAI token API was unavailable ({last_error})"
+        f"the xAI token API was unavailable ({_redact_key(str(last_error), api_key)})"
         if last_error is not None
         else "XAI_API_KEY is not set"
     )
@@ -220,7 +294,7 @@ def _count_xai(text: str, model_info: ModelInfo) -> TokenCount:
 def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
     try:
         response = httpx.post(
-            "https://api.x.ai/v1/tokenize",
+            XAI_TOKENIZE_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -231,10 +305,14 @@ def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise ValueError(f"xAI tokenization request failed: {exc}") from exc
+        raise ValueError(
+            f"xAI tokenization request failed: "
+            f"{_describe_request_failure(exc, XAI_TOKENIZE_URL, api_key)}"
+        ) from exc
 
     count = _extract_token_count(data)
     if count is None:
+        # The body can echo the key back; _count_xai redacts before displaying this.
         raise ValueError(f"Unexpected response from xAI token API: {data!r}")
     return count
 
@@ -286,7 +364,7 @@ def _count_xai_via_transformers(text: str) -> int:
 
 
 def _count_anthropic(text: str, model_info: ModelInfo) -> TokenCount:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = _api_key_from_env("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError(
             "ANTHROPIC_API_KEY environment variable not set. "
@@ -309,24 +387,28 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> TokenCount:
         data = response.json()
     except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Anthropic model {model_info.name}: {exc}. "
+            f"Failed to count tokens for Anthropic model {model_info.name}: "
+            f"{_describe_request_failure(exc, ANTHROPIC_COUNT_URL, api_key)}. "
             "The model may not exist or may not be available with your API key."
         ) from exc
 
-    input_tokens = data.get("input_tokens")
+    # A 200 whose body is a JSON list or string has no .get; the resulting
+    # AttributeError is not a ValueError, so it escapes the CLI's handler and
+    # renders as a traceback.
+    input_tokens = data.get("input_tokens") if isinstance(data, dict) else None
     if not isinstance(input_tokens, int):
         # TRY004 wants TypeError, but this is a malformed API payload rather than a
         # caller passing the wrong type, and callers (the CLI included) handle
         # ValueError — a TypeError here escapes as a traceback.
         raise ValueError(  # noqa: TRY004
             f"Unexpected response from Anthropic token API for {model_info.name}: "
-            f"no integer 'input_tokens' field in {data!r}"
+            f"no integer 'input_tokens' field in {_redact_key(repr(data), api_key)}"
         )
     return _exact(input_tokens, model_info)
 
 
 def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = _api_key_from_env("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError(
             "GOOGLE_API_KEY environment variable not set. "
@@ -335,21 +417,25 @@ def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
     url = f"{GOOGLE_COUNT_URL_BASE}/{model_info.name}:countTokens"
     payload = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
     try:
-        response = httpx.post(url, params={"key": api_key}, json=payload, timeout=10.0)
+        response = httpx.post(
+            url, headers={"x-goog-api-key": api_key}, json=payload, timeout=10.0
+        )
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Google model {model_info.name}: {exc}. "
+            f"Failed to count tokens for Google model {model_info.name}: "
+            f"{_describe_request_failure(exc, url, api_key)}. "
             "The model may not exist or may not support token counting."
         ) from exc
 
-    total_tokens = data.get("totalTokens")
+    total_tokens = data.get("totalTokens") if isinstance(data, dict) else None
     if not isinstance(total_tokens, int):
-        # See _count_anthropic: ValueError is the type callers are written to catch.
+        # See _count_anthropic: ValueError is the type callers are written to catch,
+        # and a non-dict body would otherwise raise AttributeError above.
         raise ValueError(  # noqa: TRY004
             f"Unexpected response from Google token API for {model_info.name}: "
-            f"no integer 'totalTokens' field in {data!r}"
+            f"no integer 'totalTokens' field in {_redact_key(repr(data), api_key)}"
         )
     return _exact(total_tokens, model_info)
 

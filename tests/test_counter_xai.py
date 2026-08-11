@@ -81,7 +81,8 @@ def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
     assert counted.caveat is not None
     assert "grok-4.5" in stderr
     assert "approximate" in stderr
-    assert "boom" in stderr
+    # The transport's own message is never quoted, only what kind of failure it was.
+    assert "HTTPError contacting https://api.x.ai/v1/tokenize" in stderr
 
 
 def test_xai_without_api_key_warns_that_count_is_approximate(monkeypatch, capsys):

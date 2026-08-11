@@ -1,5 +1,6 @@
 """Output formatters for token counts."""
 
+import csv
 import json
 import sys
 from dataclasses import replace
@@ -117,14 +118,14 @@ def _format_delimited(
     # exact keep the two-column shape every existing consumer parses.
     show_approximate = _any_approximate(results)
 
-    lines: list[str] = []
+    rows: list[list[str]] = []
     if include_header:
         header = ["model", "tokens"]
         if show_costs:
             header.append("cost")
         if show_approximate:
             header.append("approximate")
-        lines.append(separator.join(header))
+        rows.append(header)
 
     for model, counted in results.items():
         fields = [model, str(counted.count)]
@@ -132,12 +133,22 @@ def _format_delimited(
             fields.append(format_cost(counted.cost))
         if show_approximate:
             fields.append(_approximate_field(counted.approximate))
-        lines.append(separator.join(fields))
-    return "\n".join(lines)
+        rows.append(fields)
+    return _render_delimited(rows, separator)
 
 
 def _approximate_field(approximate: bool) -> str:
     return "true" if approximate else "false"
+
+
+def _render_delimited(rows: list[list[str]], separator: str) -> str:
+    # CSV goes through csv.writer so a comma, quote, or newline in a name stays
+    # inside one field. TSV has no quoting convention, so it stays a plain join.
+    if separator != ",":
+        return "\n".join(separator.join(row) for row in rows)
+    buffer = StringIO()
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    return buffer.getvalue().rstrip("\n")
 
 
 def format_csv(
@@ -232,7 +243,7 @@ def _format_file_table_delimited(
     show_costs: bool,
 ) -> str:
     show_approximate = any(_any_approximate(counts) for counts in file_results.values())
-    lines: list[str] = []
+    rows: list[list[str]] = []
     if show_costs or show_approximate:
         headers = ["file"]
         for model in models:
@@ -245,7 +256,7 @@ def _format_file_table_delimited(
         headers = ["file", *models]
 
     if include_header:
-        lines.append(separator.join(headers))
+        rows.append(headers)
 
     if total_only:
         totals = _compute_totals(file_results, models=models)
@@ -258,8 +269,8 @@ def _format_file_table_delimited(
                     show_approximate=show_approximate,
                 )
             )
-        lines.append(separator.join(total_row))
-        return "\n".join(lines)
+        rows.append(total_row)
+        return _render_delimited(rows, separator)
 
     per_model_columns = 1 + int(show_costs) + int(show_approximate)
     for filename, model_counts in file_results.items():
@@ -276,9 +287,9 @@ def _format_file_table_delimited(
                         show_approximate=show_approximate,
                     )
                 )
-        lines.append(separator.join(row))
+        rows.append(row)
 
-    return "\n".join(lines)
+    return _render_delimited(rows, separator)
 
 
 def _delimited_cells(

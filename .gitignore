@@ -31,5 +31,5 @@ htmlcov/
 
 # OS
 .DS_Store
-Thumbs.db.envrc
+Thumbs.db
 .env

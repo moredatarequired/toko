@@ -327,8 +327,15 @@ def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
     assert "loop.txt" in result.stderr
 
 
-def test_all_paths_bad_reports_no_files(tmp_path):
+def test_missing_path_reports_only_the_specific_error(tmp_path):
     result = _invoke_cli([str(tmp_path / "nope.txt")])
+    assert result.exit_code == 1
+    assert "Error: Path not found" in result.stderr
+    assert "No files found matching criteria" not in result.stderr
+
+
+def test_empty_directory_reports_no_files(tmp_path):
+    result = _invoke_cli([str(tmp_path)])
     assert result.exit_code == 1
     assert "Error: No files found matching criteria" in result.stderr
 

@@ -219,7 +219,9 @@ def _collect_inputs(
             exclude_patterns=exclude_patterns,
         )
         if not files:
-            typer.echo("Error: No files found matching criteria", err=True)
+            # A per-path error was already reported; don't pile a vague one on top.
+            if not had_failures:
+                typer.echo("Error: No files found matching criteria", err=True)
             raise typer.Exit(1)
         return InputSelection(text=None, files=files, had_failures=had_failures)
 

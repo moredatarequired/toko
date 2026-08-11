@@ -372,10 +372,17 @@ def _compute_totals(
     totals: dict[str, TokenCount] = {}
 
     for model in models:
+        # Distinct caveats in one column all survive, in encounter order: files can
+        # fail differently (the xAI caveat names the error it saw), and dropping the
+        # later ones would hide a failure the total is built from. Repeats collapse,
+        # so the usual column-wide identical caveat reads exactly as one file's does.
+        caveats: list[str] = []
         for model_counts in file_results.values():
             counted = model_counts.get(model)
             if counted is None:
                 continue
+            if counted.caveat is not None and counted.caveat not in caveats:
+                caveats.append(counted.caveat)
             running = totals.get(model)
             if running is None:
                 totals[model] = counted
@@ -385,8 +392,10 @@ def _compute_totals(
                 count=running.count + counted.count,
                 cost=_sum_costs(running.cost, counted.cost),
                 approximate=running.approximate or counted.approximate,
-                caveat=running.caveat or counted.caveat,
             )
+        merged_caveat = "; ".join(caveats) if caveats else None
+        if model in totals and totals[model].caveat != merged_caveat:
+            totals[model] = replace(totals[model], caveat=merged_caveat)
 
     return totals
 

@@ -74,6 +74,59 @@ def test_file_json_keeps_one_shape_when_only_one_file_has_a_caveat():
     }
 
 
+def _caveated_column(count: int, caveat: str):
+    return {
+        "grok-4.5": TokenCount(
+            count=count,
+            model="grok-4.5",
+            provider="xai",
+            approximate=True,
+            caveat=caveat,
+        )
+    }
+
+
+def test_total_only_json_keeps_every_distinct_caveat():
+    """Files can fail differently, and the total must not hide the later failures."""
+    payload = json.loads(
+        format_file_table(
+            {
+                "a.txt": _caveated_column(
+                    3, "the xAI token API was unavailable (timeout)"
+                ),
+                "b.txt": _caveated_column(4, "the xAI token API was unavailable (503)"),
+            },
+            output_format="json",
+            total_only=True,
+        )
+    )
+    assert payload == {
+        "grok-4.5": {
+            "tokens": 7,
+            "approximate": True,
+            "caveat": (
+                "the xAI token API was unavailable (timeout); "
+                "the xAI token API was unavailable (503)"
+            ),
+        }
+    }
+
+
+def test_total_only_json_reports_a_column_wide_caveat_once():
+    caveat = "counted with the Grok-1 tokenizer"
+    payload = json.loads(
+        format_file_table(
+            {
+                "a.txt": _caveated_column(3, caveat),
+                "b.txt": _caveated_column(4, caveat),
+            },
+            output_format="json",
+            total_only=True,
+        )
+    )
+    assert payload == {"grok-4.5": {"tokens": 7, "approximate": True, "caveat": caveat}}
+
+
 def test_file_json_matches_plain_mapping_without_costs():
     payload = json.loads(
         format_file_table({"a.txt": {"gpt-5": _counted(4)}}, output_format="json")

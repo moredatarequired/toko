@@ -177,10 +177,25 @@ anthropic/claude-opus-4-6
 anthropic/claude-opus-4-7
 ```
 
-Retired models are hidden from that listing: both the dead OpenAI engines tiktoken still carries (`text-davinci-003`, `code-cushman-001`, and friends) and the Anthropic, Google and xAI models their providers have shut down. Add `--include-retired` to see them; it affects `--list-models` only, and the OpenAI names still count exactly as before.
+Retired models are hidden from that listing: both the dead OpenAI engines tiktoken still carries (`text-davinci-003`, `code-cushman-001`, and friends) and the Anthropic, Google and xAI models their providers have shut down. Add `--include-retired` to see them. It affects `--list-models` and nothing else: on any other command it is accepted and ignored, and the retired names still count exactly as before.
 
 ```sh
 toko --list-models --include-retired | grep davinci
+```
+
+```txt
+openai/code-davinci-001
+openai/code-davinci-002
+openai/code-davinci-edit-001
+openai/davinci
+openai/davinci-002
+openai/davinci-codex
+openai/text-davinci-001
+openai/text-davinci-002
+openai/text-davinci-003
+openai/text-davinci-edit-001
+openai/text-search-davinci-doc-001
+openai/text-similarity-davinci-001
 ```
 
 ## API keys and optional providers

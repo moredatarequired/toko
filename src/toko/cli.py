@@ -179,7 +179,8 @@ def main(
     include_retired: Annotated[
         bool,
         typer.Option(
-            "--include-retired", help="Include retired models in --list-models output"
+            "--include-retired",
+            help="Include retired models in --list-models output (no other effect)",
         ),
     ] = False,
 ) -> None:

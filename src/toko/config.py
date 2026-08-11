@@ -5,6 +5,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from toko.output_format import OutputFormat
+
 
 @dataclass
 class Config:
@@ -12,9 +14,10 @@ class Config:
 
     default_model: str = "gpt-5"
     respect_gitignore: bool = True
-    default_format: str = "text"
+    default_format: OutputFormat = OutputFormat.TEXT
     exclude_patterns: list[str] = field(default_factory=list)
-    api_keys: dict[str, str] = field(default_factory=dict)
+    # repr=False so a crash traceback rendering a Config never echoes secrets.
+    api_keys: dict[str, str] = field(default_factory=dict, repr=False)
     auto_update_prices: bool = False
 
 
@@ -32,6 +35,17 @@ def get_config_path() -> Path:
 def get_models_path() -> Path:
     """User overlay for the model registry, merged over the packaged one."""
     return get_config_dir() / "models.toml"
+
+
+def _parse_output_format(value: object, config_path: Path) -> OutputFormat:
+    try:
+        return OutputFormat(value)
+    except ValueError as e:
+        valid = ", ".join(fmt.value for fmt in OutputFormat)
+        raise ValueError(
+            f"Invalid default_format {value!r} in {config_path}"
+            f" (expected one of: {valid})"
+        ) from e
 
 
 def load_config() -> Config:
@@ -70,7 +84,9 @@ def load_config() -> Config:
     return Config(
         default_model=toko_config.get("default_model", "gpt-5"),
         respect_gitignore=toko_config.get("respect_gitignore", True),
-        default_format=toko_config.get("default_format", "text"),
+        default_format=_parse_output_format(
+            toko_config.get("default_format", "text"), config_path
+        ),
         exclude_patterns=toko_config.get("exclude", {}).get("patterns", []),
         api_keys=toko_config.get("api_keys", {}),
         auto_update_prices=auto_update,

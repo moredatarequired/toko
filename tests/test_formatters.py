@@ -55,3 +55,58 @@ def test_file_json_includes_costs_when_requested():
         "a.txt": {"gpt-5": {"tokens": 4, "cost": 0.0002}},
         "b.txt": {"gpt-5": {"tokens": 9, "cost": None}},
     }
+
+
+def test_total_only_json_reports_wholly_unpriced_model_as_null():
+    payload = json.loads(
+        format_file_table(
+            {"a.txt": {"mystery-model": 4}, "b.txt": {"mystery-model": 9}},
+            output_format="json",
+            total_only=True,
+            costs={"a.txt": {"mystery-model": None}, "b.txt": {"mystery-model": None}},
+        )
+    )
+    assert payload == {"mystery-model": {"tokens": 13, "cost": None}}
+
+
+def test_total_only_json_sums_only_the_files_it_could_price():
+    payload = json.loads(
+        format_file_table(
+            {"a.txt": {"gpt-5": 4}, "b.txt": {"gpt-5": 9}},
+            output_format="json",
+            total_only=True,
+            costs={"a.txt": {"gpt-5": 0.0002}, "b.txt": {"gpt-5": None}},
+        )
+    )
+    assert payload == {"gpt-5": {"tokens": 13, "cost": 0.0002}}
+
+
+def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
+    output = format_file_table(
+        {"a.txt": {"gpt-5": 4, "mystery-model": 5}},
+        output_format="csv",
+        total_only=True,
+        costs={"a.txt": {"gpt-5": 0.0002, "mystery-model": None}},
+        include_header=False,
+    )
+    assert output == "TOTAL,4,$0.0002,5,N/A"
+
+
+def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
+    file_results = {"a.txt": {"mystery-model": 4}, "b.txt": {"mystery-model": 9}}
+    costs: dict[str, dict[str, float | None]] = {
+        "a.txt": {"mystery-model": None},
+        "b.txt": {"mystery-model": None},
+    }
+    per_file = format_file_table(
+        file_results, output_format="tsv", costs=costs, include_header=False
+    ).splitlines()
+    total = format_file_table(
+        file_results,
+        output_format="tsv",
+        total_only=True,
+        costs=costs,
+        include_header=False,
+    )
+    assert per_file == ["a.txt\t4\tN/A", "b.txt\t9\tN/A"]
+    assert total == "TOTAL\t13\tN/A"

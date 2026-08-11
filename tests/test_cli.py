@@ -11,6 +11,7 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
+from tests.hf_hub import skip_if_rate_limited
 from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
@@ -621,9 +622,10 @@ def test_partial_success_missing_hf_token(monkeypatch):
     assert not os.environ.get("HF_TOKEN")
 
     text = "test-missing-hf-token-partial"
-    result = _invoke_cli(
-        ["--model", "gpt-5", "--model", "meta-llama/Llama-3.2-1B", "--text", text]
-    )
+    with skip_if_rate_limited():
+        result = _invoke_cli(
+            ["--model", "gpt-5", "--model", "meta-llama/Llama-3.2-1B", "--text", text]
+        )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
     assert result.stdout.strip() == str(expected)

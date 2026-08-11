@@ -241,7 +241,9 @@ alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
 `retired`, `redirects_to`, `tokenizer`, `listed`, and `aliases` (Google and xAI
 only). `aliases` is the one field that accumulates rather than replaces: your
 list is appended to the shipped one, so adding a nickname cannot quietly
-unpublish the alternate names a model already answered to. A malformed file —
+unpublish the alternate names a model already answered to. The trade-off is that
+an alias can never be removed, only re-pointed — declare it on another model to
+move it. A malformed file —
 including one that is not valid UTF-8 — is reported on stderr and skipped, and
 Toko falls back to the registry it shipped with rather than failing to run.
 

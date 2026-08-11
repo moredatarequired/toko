@@ -362,6 +362,16 @@ class TestGoogleAliasPrefixes:
         resolved = models.get_model("gemini-2.0-flash-litex")
         assert resolved.name == "models/gemini-2.0-flash-001"
 
+    def test_a_glued_character_falls_through_to_the_api(self):
+        """With no shorter alias to catch it, the name goes to Google verbatim.
+
+        gemini-exp-1206 is an alias of gemini-2.5-pro, but nothing may claim
+        gemini-exp-1206x on its behalf -- a made-up name must reach the API and
+        be rejected there rather than be counted as a real, different model.
+        """
+        assert models.get_model("gemini-exp-1206").name == "models/gemini-2.5-pro"
+        assert models.get_model("gemini-exp-1206x").name == "models/gemini-exp-1206x"
+
     def test_resolution_does_not_depend_on_registry_order(self, user_registry):
         """Appending an alias must not re-route names that already resolved."""
         before = models.get_model("gemini-2.0-flash-lite-preview-11-11").name

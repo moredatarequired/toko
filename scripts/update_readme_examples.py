@@ -8,8 +8,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README_PATH = REPO_ROOT / "README.md"
+# Pinned rather than taken from $SHELL: a different shell can print different prompts
+# and startup noise, which would churn every regenerated block.
+SHELL = "/bin/zsh"
 ALLOWED_LANGUAGES = {"txt", "json", "csv", "tsv"}
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])")
+# toko reports a skipped file, an unusable provider or a bad config on stderr and still
+# exits 0, and pty.spawn folds stderr into the captured output. Pasting that into the
+# README would document a failure as though it were the command's real result.
+FAILURE_PREFIXES = ("Warning:", "Error", "Traceback (most recent call last):")
 
 
 def _prepare_command(command: str) -> str:
@@ -30,14 +37,20 @@ def run_command(command: str) -> str:
     chunks: list[str] = []
 
     def reader(fd: int) -> bytes:
+        # pty._copy treats an empty return as EOF and stops copying, so returning b"" to
+        # suppress the echo truncated the capture to whatever arrived in the first read.
         data = os.read(fd, 1024)
         chunks.append(data.decode("utf-8", "ignore"))
-        return b""
+        return data
 
-    pty.spawn(["/bin/zsh", "-lc", shell_command], reader)
+    pty.spawn([SHELL, "-lc", shell_command], reader)
     output = "".join(chunks)
     output = ANSI_RE.sub("", output)
     return output.rstrip("\r\n")
+
+
+def failure_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line.startswith(FAILURE_PREFIXES)]
 
 
 def iter_code_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
@@ -57,6 +70,11 @@ def iter_code_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
 
 
 def update_readme() -> None:
+    # pty.spawn reports a missing shell as a traceback written to the pty, which would be
+    # captured and pasted into the tracked README as if it were command output.
+    if not os.access(SHELL, os.X_OK):
+        raise RuntimeError(f"{SHELL} is required to regenerate the README examples")
+
     lines = README_PATH.read_text().splitlines()
     code_blocks = list(iter_code_blocks(lines))
 
@@ -67,6 +85,8 @@ def update_readme() -> None:
     line_index_to_block = {
         start: (start, end, lang) for start, end, lang in code_blocks
     }
+
+    failures: list[str] = []
 
     for start, end, _lang in command_blocks:
         command = "\n".join(lines[start + 1 : end])
@@ -88,8 +108,17 @@ def update_readme() -> None:
             continue
 
         output = run_command(_prepare_command(command))
-        output_lines = output.splitlines()
-        lines[nb_start + 1 : nb_end] = output_lines
+        problems = failure_lines(output)
+        if problems:
+            failures.append("\n".join([f"$ {command}", *problems]))
+            continue
+        lines[nb_start + 1 : nb_end] = output.splitlines()
+
+    if failures:
+        raise RuntimeError(
+            "Refusing to rewrite the README: these examples reported a failure instead "
+            "of the output they document.\n\n" + "\n\n".join(failures)
+        )
 
     README_PATH.write_text("\n".join(lines) + "\n")
 

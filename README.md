@@ -170,14 +170,14 @@ toko --list-models | head -n 5
 ```
 
 ```txt
-anthropic/claude-3-5-haiku-20241022
-anthropic/claude-3-5-sonnet-20240620
-anthropic/claude-3-5-sonnet-20241022
-anthropic/claude-3-7-sonnet-20250219
-anthropic/claude-3-haiku-20240307
+anthropic/claude-fable-5
+anthropic/claude-haiku-4-5-20251001
+anthropic/claude-opus-4-5-20251101
+anthropic/claude-opus-4-6
+anthropic/claude-opus-4-7
 ```
 
-Retired OpenAI engines (`text-davinci-003`, `code-cushman-001`, and friends) are hidden from that listing. Add `--include-retired` to see them; it affects `--list-models` only, and those names still count exactly as before.
+Retired models are hidden from that listing: both the dead OpenAI engines tiktoken still carries (`text-davinci-003`, `code-cushman-001`, and friends) and the Anthropic, Google and xAI models their providers have shut down. Add `--include-retired` to see them; it affects `--list-models` only, and the OpenAI names still count exactly as before.
 
 ```sh
 toko --list-models --include-retired | grep davinci

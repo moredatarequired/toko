@@ -179,8 +179,7 @@ def main(
     include_retired: Annotated[
         bool,
         typer.Option(
-            "--include-retired",
-            help="Include retired OpenAI engines in --list-models output",
+            "--include-retired", help="Include retired models in --list-models output"
         ),
     ] = False,
 ) -> None:

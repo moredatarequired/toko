@@ -242,10 +242,13 @@ alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
 only). `aliases` is the one field that accumulates rather than replaces: your
 list is appended to the shipped one, so adding a nickname cannot quietly
 unpublish the alternate names a model already answered to. The trade-off is that
-an alias can never be removed, only re-pointed — declare it on another model to
-move it. A malformed file —
-including one that is not valid UTF-8 — is reported on stderr and skipped, and
-Toko falls back to the registry it shipped with rather than failing to run.
+an alias can never be removed, only re-pointed by declaring it on another model —
+and because the last declaration in registry order wins, that only takes effect
+if the model you move it to is declared after its current owner. Declaring one
+alias on two models says on stderr which of them won. Alias names are matched
+case-insensitively. A malformed file — including one that is not valid UTF-8 — is
+reported on stderr and skipped, and Toko falls back to the registry it shipped
+with rather than failing to run.
 
 `tokenizer` matters for Anthropic: Claude Opus 4.7 changed tokenizer, and the
 same text counts roughly 30% higher on 4.7-generation models. Toko refuses to

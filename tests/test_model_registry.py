@@ -327,6 +327,45 @@ class TestRegistryParsing:
             "grok-c": "grok-imaginary-9",
         }
 
+    def test_an_alias_key_is_registered_lowercased(self):
+        """Every lookup lowercases, so a capitalised key would never match."""
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["Grok-Nickname"]
+        """)
+        assert registry.aliases["xai"] == {"grok-nickname": "grok-imaginary-9"}
+
+    def test_declaring_one_alias_on_two_models_says_which_won(self, capsys):
+        """Registry order decides, so the loser must not lose silently."""
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-8"
+            provider = "xai"
+            aliases = ["grok-shared"]
+
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["grok-shared"]
+        """)
+        assert registry.aliases["xai"]["grok-shared"] == "grok-imaginary-9"
+
+        err = capsys.readouterr().err
+        assert "grok-shared" in err
+        assert "grok-imaginary-8" in err
+        assert "grok-imaginary-9" in err
+
+    def test_a_single_owner_alias_is_not_warned_about(self, capsys):
+        _registry("""
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["grok-solo"]
+        """)
+        assert "grok-solo" not in capsys.readouterr().err
+
     def test_only_aliasable_providers_may_declare_aliases(self, capsys):
         registry = _registry("""
             [[model]]
@@ -420,6 +459,50 @@ class TestUserOverlay:
         # generic Google builder and is sent to the API under an ID it does not
         # serve, so nothing but this assertion would notice.
         assert reloaded.get_model("gemini-exp-1206").name == "models/gemini-2.5-pro"
+
+    def test_a_capitalised_user_alias_is_reachable(self, user_registry):
+        """A nickname typed with capitals must resolve, under either casing."""
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-2.5-pro"
+            provider = "google"
+            aliases = ["Gemini-Pro-Nick"]
+        """)
+        assert reloaded.get_model("Gemini-Pro-Nick").name == "models/gemini-2.5-pro"
+        assert reloaded.get_model("gemini-pro-nick").name == "models/gemini-2.5-pro"
+
+    def test_re_pointing_a_shipped_alias_backwards_is_not_silent(
+        self, user_registry, capsys
+    ):
+        """Re-pointing only works forwards, so the failing direction must say so.
+
+        gemini-exp-1206 ships on gemini-2.5-pro. gemini-3.1-pro-preview is
+        declared earlier in the packaged registry, so claiming the alias there
+        loses on order -- which the user must be told, not left to discover
+        through a wrong count.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-3.1-pro-preview"
+            provider = "google"
+            aliases = ["gemini-exp-1206"]
+        """)
+        assert reloaded.get_model("gemini-exp-1206").name == "models/gemini-2.5-pro"
+
+        err = capsys.readouterr().err
+        assert "gemini-exp-1206" in err
+        assert "gemini-3.1-pro-preview" in err
+        assert "gemini-2.5-pro" in err
+
+    def test_re_pointing_a_shipped_alias_forwards_takes_effect(self, user_registry):
+        """gemini-2.5-flash is declared after gemini-2.5-pro, so it wins."""
+        reloaded = user_registry("""
+            [[model]]
+            name = "gemini-2.5-flash"
+            provider = "google"
+            aliases = ["gemini-exp-1206"]
+        """)
+        assert reloaded.get_model("gemini-exp-1206").name == "models/gemini-2.5-flash"
 
     @pytest.mark.parametrize(
         "overlay",

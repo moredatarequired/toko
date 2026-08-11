@@ -181,8 +181,20 @@ def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
             )
             continue
         for alias in declared:
-            if isinstance(alias, str):
-                aliases[provider][alias] = name
+            if not isinstance(alias, str):
+                continue
+            # Every lookup goes through a lowercased name, so an alias key that
+            # kept its capitals would be registered and then never match.
+            key = alias.lower()
+            previous = aliases[provider].get(key)
+            if previous is not None and previous != name:
+                _warn(
+                    f"alias '{alias}' is declared on both '{previous}' and "
+                    f"'{name}'; '{name}' wins because it is declared later. "
+                    "Aliases accumulate, so re-pointing one only takes effect "
+                    "if the intended model is declared after the original."
+                )
+            aliases[provider][key] = name
 
     return Registry(models=dict(models), aliases=dict(aliases))
 

@@ -2,11 +2,14 @@
 
 import os
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from scripts import update_readme_examples
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 REPO_README = update_readme_examples.README_PATH
 # The pinned /bin/zsh is not present everywhere; these tests only need a login shell.
@@ -42,7 +45,7 @@ def _point_script_at(monkeypatch, tmp_path, readme: Path, shell: str) -> None:
 
 
 def _output_block(readme: Path) -> str:
-    """The txt block only. Asserting over the whole file also matches the command."""
+    # The txt block alone: asserting over the whole file also matches the command block.
     lines = readme.read_text().splitlines()
     start, end, _lang = next(
         block
@@ -56,7 +59,9 @@ def test_missing_shell_is_refused(tmp_path, monkeypatch):
     readme, original = _write_example(tmp_path, "echo hello")
     _point_script_at(monkeypatch, tmp_path, readme, str(tmp_path / "no-such-shell"))
 
-    with pytest.raises(RuntimeError, match="required to regenerate the README examples"):
+    with pytest.raises(
+        RuntimeError, match="required to regenerate the README examples"
+    ):
         update_readme_examples.update_readme()
 
     assert readme.read_text() == original
@@ -82,8 +87,11 @@ def test_readme_cost_example_is_refused_without_an_api_key(tmp_path, monkeypatch
     assert "claude-opus-4-5" in command
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    inherits_key = subprocess.run(
-        [TEST_SHELL, "-lc", 'test -n "$ANTHROPIC_API_KEY"'], capture_output=True
+    # A login shell can put the key back from a profile, which would let the example run.
+    inherits_key = subprocess.run(  # noqa: S603
+        [TEST_SHELL, "-lc", 'test -n "$ANTHROPIC_API_KEY"'],
+        check=False,
+        capture_output=True,
     )
     if inherits_key.returncode == 0:
         pytest.skip("the login shell supplies ANTHROPIC_API_KEY, so this example runs")

@@ -18,7 +18,11 @@ from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
-from toko.price_update import refresh_prices, update_prices_if_stale
+from toko.price_update import (
+    apply_cached_prices,
+    refresh_prices,
+    update_prices_if_stale,
+)
 
 if TYPE_CHECKING:
     import click
@@ -187,7 +191,11 @@ def _load_runtime_config() -> Config:
     return config
 
 
-def _maybe_update_prices(config: Config) -> None:
+def _prepare_prices(config: Config) -> None:
+    # Prices previously fetched by `toko update-prices` are installed on every run;
+    # only the download itself is opt-in, otherwise the manual command would have no
+    # effect for anyone who has not enabled auto-updates.
+    apply_cached_prices()
     if not config.auto_update_prices:
         return
     with contextlib.suppress(Exception):
@@ -499,7 +507,7 @@ def _do_count(
     list_models: bool,
 ) -> None:
     config = _load_runtime_config()
-    _maybe_update_prices(config)
+    _prepare_prices(config)
     if list_models:
         _show_model_list()
     models = _resolve_models(config, model)

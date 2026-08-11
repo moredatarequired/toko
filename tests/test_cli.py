@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import respx
+from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
 from toko.cli import app
@@ -71,6 +72,59 @@ def test_clear_cache_subcommand_is_reached():
     result = runner.invoke(app, ["clear-cache"])
     assert result.exit_code == 0
     assert "Cache cleared" in result.stdout
+
+
+# One provider priced far away from anything genai-prices bundles, so a cost that
+# matches it can only have come from the payload this test served.
+_SENTINEL_PRICES = [
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "api_pattern": r"api\.openai\.com",
+        "models": [
+            {
+                "id": "gpt-5",
+                "name": "GPT-5",
+                "match": {"equals": "gpt-5"},
+                "prices": {"input_mtok": 999.0, "output_mtok": 999.0},
+            }
+        ],
+    }
+]
+
+
+@respx.mock
+def test_counting_run_uses_prices_from_an_earlier_update():
+    """`update-prices` must reach later runs even with auto-update off (the default)."""
+    respx.get(PRICE_DATA_URL).mock(
+        return_value=httpx.Response(200, json=_SENTINEL_PRICES)
+    )
+    env = {"TOKO_AUTO_UPDATE_PRICES": "false"}
+
+    assert _invoke_cli(["update-prices"], env).exit_code == 0
+
+    # Drop the in-process snapshot so the count below starts where a fresh process
+    # would: on the bundled prices, with only prices.json to recover the update from.
+    set_custom_snapshot(None)
+
+    result = _invoke_cli(
+        [
+            "--cost",
+            "--header",
+            "--format",
+            "tsv",
+            "-m",
+            "gpt-5",
+            "--text",
+            "hello world",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    # 2 tokens at the sentinel $999/Mtok; the bundled price would round to $0.000003.
+    assert "$0.0020" in result.stdout
+    assert respx.calls.call_count == 1
 
 
 def test_count_with_text():

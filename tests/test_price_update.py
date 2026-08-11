@@ -10,6 +10,7 @@ from genai_prices.data_snapshot import get_snapshot, set_custom_snapshot
 
 from toko.price_update import (
     PRICE_DATA_URL,
+    apply_cached_prices,
     get_price_cache_path,
     get_price_data_path,
     refresh_prices,
@@ -103,8 +104,9 @@ def test_cached_prices_survive_into_a_fresh_process():
     set_custom_snapshot(None)
     assert get_snapshot().from_auto_update is False
 
-    assert update_prices_if_stale() is False
+    assert apply_cached_prices() is True
     assert get_snapshot().from_auto_update is True
+    assert update_prices_if_stale() is False
 
 
 @respx.mock

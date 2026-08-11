@@ -109,16 +109,22 @@ def refresh_prices() -> int:
 
 
 def update_prices_if_stale(max_age_seconds: int = 86400) -> bool:
-    """Update prices if they are stale, otherwise reuse the cached copy.
+    """Fetch and apply the latest prices if the cached copy has gone stale.
+
+    Callers are expected to have already run apply_cached_prices(); this only decides
+    whether a fresh download is due.
 
     Args:
         max_age_seconds: Maximum age in seconds (default 86400 = 1 day)
 
     Returns:
         True if prices were fetched, False if the cached data was still fresh
+
+    Raises:
+        httpx.HTTPError: If the price data could not be downloaded.
+        ValueError: If the downloaded data is unusable.
     """
     if not should_update_prices(max_age_seconds):
-        apply_cached_prices()
         return False
 
     refresh_prices()

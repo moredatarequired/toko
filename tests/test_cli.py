@@ -297,6 +297,18 @@ def test_bad_path_does_not_abort_good_paths(tmp_path):
     assert "nope.txt" in result.stderr
 
 
+def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
+    (tmp_path / "sample.txt").write_text("hello world")
+    # A self-referential symlink is unreadable for every user, including root.
+    (tmp_path / "loop.txt").symlink_to("loop.txt")
+
+    result = runner.invoke(app, ["--format", "csv", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "Error reading" in result.stderr
+    assert "loop.txt" in result.stderr
+
+
 def test_all_paths_bad_reports_no_files(tmp_path):
     result = runner.invoke(app, [str(tmp_path / "nope.txt")])
     assert result.exit_code == 1

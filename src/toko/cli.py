@@ -298,6 +298,7 @@ def _collect_from_filesystem(
         typer.echo(f"Error: {e}", err=True)
         return False
 
+    ok = True
     for file_path in files:
         try:
             content = read_file(file_path)
@@ -306,7 +307,8 @@ def _collect_from_filesystem(
             continue
         except Exception as e:
             typer.echo(f"Error reading {file_path}: {e}", err=True)
-            raise typer.Exit(1) from e
+            ok = False
+            continue
 
         try:
             display_name = str(file_path.relative_to(Path.cwd()))
@@ -315,7 +317,7 @@ def _collect_from_filesystem(
 
         collected.append((display_name, content))
 
-    return True
+    return ok
 
 
 def _handle_text_input(

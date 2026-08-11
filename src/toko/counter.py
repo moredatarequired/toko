@@ -68,21 +68,45 @@ def _warn_once(kind: str, model_name: str, message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr)
 
 
+# Below this length a "key" is more likely to be a common substring than a secret,
+# and blanking it out mangles the surrounding text without protecting anything.
+_MIN_REDACTABLE_KEY_LENGTH = 8
+
+
 def _redact_key(message: str, api_key: str | None) -> str:
     """Strip an API key out of text that is about to be shown to the user.
 
-    Transport errors embed whatever they were given: the request URL for a key sent
-    as a query parameter, the raw header bytes for a key httpx rejected. Both the
-    verbatim key and its percent-encoded form are replaced.
+    Applied to anything derived from a provider response, since an error body can
+    echo the credential it rejected. The key is replaced in its verbatim,
+    percent-encoded and backslash-escaped forms -- the last because a key holding a
+    control character reaches the message as the two characters of an escape sequence.
     """
     if not api_key:
         return message
     needles = {api_key, api_key.strip()}
     needles |= {quote(needle, safe="") for needle in tuple(needles)}
+    needles |= {repr(needle)[1:-1] for needle in tuple(needles)}
     for needle in sorted(needles, key=len, reverse=True):
-        if needle:
+        if len(needle) >= _MIN_REDACTABLE_KEY_LENGTH:
             message = message.replace(needle, "***")
     return message
+
+
+def _describe_request_failure(exc: Exception, url: str) -> str:
+    """Say what a failed request did without quoting the transport's own message.
+
+    httpx echoes back whatever it was handed -- the request URL for a key sent as a
+    query parameter, the raw header bytes for a key it refused to send -- and no
+    search-and-replace can reliably undo that, because a key holding one control
+    character appears in the message as the two characters of an escape sequence.
+    Reporting only the status code and the exception type removes the whole class.
+    """
+    endpoint = url.split("?", 1)[0].split("#", 1)[0]
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        phrase = httpx.codes.get_reason_phrase(status) or "response"
+        return f"HTTP {status} {phrase} from {endpoint}"
+    return f"{type(exc).__name__} contacting {endpoint}"
 
 
 def _api_key_from_env(env_var: str) -> str | None:
@@ -97,6 +121,7 @@ OPENAI_FALLBACK_ENCODING = "o200k_base"
 ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 ANTHROPIC_API_VERSION = "2023-06-01"
 GOOGLE_COUNT_URL_BASE = "https://generativelanguage.googleapis.com/v1beta"
+XAI_TOKENIZE_URL = "https://api.x.ai/v1/tokenize"
 
 
 class TokenizerProtocol(Protocol):
@@ -238,7 +263,7 @@ def _count_xai(text: str, model_info: ModelInfo) -> CountResult:
 def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
     try:
         response = httpx.post(
-            "https://api.x.ai/v1/tokenize",
+            XAI_TOKENIZE_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -250,11 +275,13 @@ def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise ValueError(
-            f"xAI tokenization request failed: {_redact_key(str(exc), api_key)}"
+            f"xAI tokenization request failed: "
+            f"{_describe_request_failure(exc, XAI_TOKENIZE_URL)}"
         ) from exc
 
     count = _extract_token_count(data)
     if count is None:
+        # The body can echo the key back; _count_xai redacts before displaying this.
         raise ValueError(f"Unexpected response from xAI token API: {data!r}")
     return count
 
@@ -330,18 +357,21 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
     except httpx.HTTPError as exc:
         raise ValueError(
             f"Failed to count tokens for Anthropic model {model_info.name}: "
-            f"{_redact_key(str(exc), api_key)}. "
+            f"{_describe_request_failure(exc, ANTHROPIC_COUNT_URL)}. "
             "The model may not exist or may not be available with your API key."
         ) from exc
 
-    input_tokens = data.get("input_tokens")
+    # A 200 whose body is a JSON list or string has no .get; the resulting
+    # AttributeError is not a ValueError, so it escapes the CLI's handler and
+    # renders as a traceback.
+    input_tokens = data.get("input_tokens") if isinstance(data, dict) else None
     if not isinstance(input_tokens, int):
         # TRY004 wants TypeError, but this is a malformed API payload rather than a
         # caller passing the wrong type, and callers (the CLI included) handle
         # ValueError — a TypeError here escapes as a traceback.
         raise ValueError(  # noqa: TRY004
             f"Unexpected response from Anthropic token API for {model_info.name}: "
-            f"no integer 'input_tokens' field in {data!r}"
+            f"no integer 'input_tokens' field in {_redact_key(repr(data), api_key)}"
         )
     return CountResult(input_tokens)
 
@@ -364,16 +394,17 @@ def _count_google(text: str, model_info: ModelInfo) -> CountResult:
     except httpx.HTTPError as exc:
         raise ValueError(
             f"Failed to count tokens for Google model {model_info.name}: "
-            f"{_redact_key(str(exc), api_key)}. "
+            f"{_describe_request_failure(exc, url)}. "
             "The model may not exist or may not support token counting."
         ) from exc
 
-    total_tokens = data.get("totalTokens")
+    total_tokens = data.get("totalTokens") if isinstance(data, dict) else None
     if not isinstance(total_tokens, int):
-        # See _count_anthropic: ValueError is the type callers are written to catch.
+        # See _count_anthropic: ValueError is the type callers are written to catch,
+        # and a non-dict body would otherwise raise AttributeError above.
         raise ValueError(  # noqa: TRY004
             f"Unexpected response from Google token API for {model_info.name}: "
-            f"no integer 'totalTokens' field in {data!r}"
+            f"no integer 'totalTokens' field in {_redact_key(repr(data), api_key)}"
         )
     return CountResult(total_tokens)
 

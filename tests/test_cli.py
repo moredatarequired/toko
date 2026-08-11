@@ -154,6 +154,15 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
     assert entry["tokens"] == 2
 
 
+def test_unknown_openai_model_keeps_tsv_output_clean():
+    result = _invoke_cli(
+        ["--format", "tsv", "--model", "gpt-6", "--text", "hello world"]
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "2"
+    assert "unknown OpenAI model 'gpt-6'" in result.stderr
+
+
 def test_default_no_header_when_not_tty(monkeypatch):
     monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: False)
     text = "header-default-pipe"

@@ -1,0 +1,61 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Without these, tiktoken and Hugging Face cache into a tempdir and every
+      # run re-downloads ~118 MB of encodings and tokenizers.
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync dependencies (all groups)
+        run: uv sync --all-groups --all-extras
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # Keyed on a manual version suffix, not on uv.lock: the tokenizers are
+      # pinned by model id in the tests, not by any dependency. actions/cache
+      # skips the save on an exact key hit, so bump the suffix when a test
+      # starts pulling a tokenizer that isn't in the cache yet.
+      - name: Cache tokenizer downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/tiktoken
+            ${{ github.workspace }}/.cache/huggingface
+          key: tokenizers-${{ runner.os }}-v1
+          restore-keys: tokenizers-${{ runner.os }}-
+
+      # Tests that need API keys skip cleanly, so no secrets are required.
+      - name: Run tests
+        run: just test-all
+        env:
+          UV_NO_SYNC: "1"

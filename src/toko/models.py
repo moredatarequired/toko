@@ -3,6 +3,7 @@
 import json
 import re
 import sys
+import tomllib
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from functools import lru_cache
 from importlib import resources, util
 
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
+
+from toko.config import get_models_path
 
 
 @dataclass
@@ -30,10 +33,200 @@ class ModelInfo:
     # Tokenizer generation. Counts are only comparable within one generation, so
     # alias resolution must never map a name across two of these.
     tokenizer: str | None = None
+    # Whether --list-models advertises the model.
+    listed: bool = True
 
 
 RETIREMENT_DATE_UNKNOWN = "unknown"
 
+REGISTRY_FILENAME = "models.toml"
+
+_STRING_FIELDS = (
+    "provider",
+    "encoding",
+    "api_endpoint",
+    "retired",
+    "redirects_to",
+    "tokenizer",
+)
+
+# Providers whose aliases are declared in the registry. Anthropic is absent on
+# purpose: its aliases are derived under the Opus 4.7 tokenizer guard (see
+# _build_anthropic_alias_map), and a declared alias could route a name to the
+# other tokenizer generation, which is the one thing that must never happen.
+_ALIASABLE_PROVIDERS = frozenset({"google", "xai"})
+
+_PACKAGED_REGISTRY_SOURCE = "toko's packaged model registry"
+
+
+@dataclass(frozen=True)
+class Registry:
+    models: dict[str, dict[str, ModelInfo]]
+    aliases: dict[str, dict[str, str]]
+
+
+def _warn(message: str) -> None:
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _clean_entry(entry: object, source: str) -> tuple[str, dict[str, object]] | None:
+    if not isinstance(entry, dict):
+        _warn(f"{source}: ignoring a [[model]] entry that is not a table")
+        return None
+    table = typing.cast("dict[str, object]", entry)
+    name = table.get("name")
+    if not isinstance(name, str) or not name:
+        _warn(f"{source}: ignoring a [[model]] entry with no 'name'")
+        return None
+
+    fields: dict[str, object] = {}
+    for key, value in table.items():
+        if key == "name":
+            continue
+        if key in _STRING_FIELDS:
+            valid = isinstance(value, str)
+        elif key == "listed":
+            valid = isinstance(value, bool)
+        elif key == "aliases":
+            valid = isinstance(value, list) and all(
+                isinstance(alias, str) for alias in value
+            )
+        else:
+            _warn(f"{source}: ignoring unknown field '{key}' on {name}")
+            continue
+        if not valid:
+            _warn(f"{source}: ignoring malformed field '{key}' on {name}")
+            continue
+        fields[key] = value
+    return name, fields
+
+
+def _merge_entries(
+    documents: list[tuple[str, dict[str, object]]],
+) -> dict[str, dict[str, object]]:
+    """Merge registry documents field by field, later documents winning.
+
+    A user entry that names an existing model updates only the fields it
+    declares, so overriding one field cannot silently drop the others.
+    """
+    merged: dict[str, dict[str, object]] = {}
+    for source, document in documents:
+        entries = document.get("model", [])
+        if not isinstance(entries, list):
+            _warn(f"{source}: 'model' must be an array of tables")
+            continue
+        for entry in entries:
+            cleaned = _clean_entry(entry, source)
+            if cleaned is None:
+                continue
+            name, fields = cleaned
+            merged.setdefault(name, {}).update(fields)
+    return merged
+
+
+def _string_field(fields: dict[str, object], key: str) -> str | None:
+    value = fields.get(key)
+    return value if isinstance(value, str) else None
+
+
+def build_registry(documents: list[tuple[str, dict[str, object]]]) -> Registry:
+    models: dict[str, dict[str, ModelInfo]] = defaultdict(dict)
+    aliases: dict[str, dict[str, str]] = defaultdict(dict)
+
+    for name, fields in _merge_entries(documents).items():
+        provider = _string_field(fields, "provider")
+        if not provider:
+            _warn(f"ignoring model '{name}', which names no provider")
+            continue
+        listed = fields.get("listed")
+        models[provider][name] = ModelInfo(
+            # Google's CountTokens endpoint addresses models as "models/<name>".
+            name=f"models/{name}" if provider == "google" else name,
+            provider=provider,
+            encoding=_string_field(fields, "encoding"),
+            api_endpoint=_string_field(fields, "api_endpoint"),
+            retired=_string_field(fields, "retired"),
+            redirects_to=_string_field(fields, "redirects_to"),
+            tokenizer=_string_field(fields, "tokenizer"),
+            listed=listed if isinstance(listed, bool) else True,
+        )
+
+        declared = fields.get("aliases")
+        if not isinstance(declared, list) or not declared:
+            continue
+        if provider not in _ALIASABLE_PROVIDERS:
+            _warn(
+                f"ignoring aliases on '{name}': {provider} models cannot declare them"
+            )
+            continue
+        for alias in declared:
+            if isinstance(alias, str):
+                aliases[provider][alias] = name
+
+    return Registry(models=dict(models), aliases=dict(aliases))
+
+
+def _load_packaged_document() -> tuple[str, dict[str, object]]:
+    resource = resources.files("toko.data").joinpath(REGISTRY_FILENAME)
+    try:
+        text = resource.read_text(encoding="utf-8")
+    except OSError as e:
+        raise RuntimeError(
+            f"{REGISTRY_FILENAME} is missing from the toko installation, so no "
+            "models are known. Reinstall toko."
+        ) from e
+    try:
+        return _PACKAGED_REGISTRY_SOURCE, tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise RuntimeError(f"{_PACKAGED_REGISTRY_SOURCE} is corrupt: {e}") from e
+
+
+def _load_user_document() -> tuple[str, dict[str, object]] | None:
+    """Read ~/.config/toko/models.toml, or nothing at all if it is unusable."""
+    path = get_models_path()
+    if not path.is_file():
+        return None
+    try:
+        with path.open("rb") as f:
+            return str(path), tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        _warn(f"ignoring {path}: {e}")
+        return None
+
+
+@lru_cache
+def load_registry() -> Registry:
+    documents = [_load_packaged_document()]
+    user_document = _load_user_document()
+    if user_document is not None:
+        documents.append(user_document)
+    return build_registry(documents)
+
+
+_REGISTRY = load_registry()
+
+ANTHROPIC_MODELS = _REGISTRY.models.get("anthropic", {})
+GOOGLE_MODELS = _REGISTRY.models.get("google", {})
+XAI_MODELS = _REGISTRY.models.get("xai", {})
+OPENAI_MODELS = _REGISTRY.models.get("openai", {})
+
+_GOOGLE_ALIAS_MAP = _REGISTRY.aliases.get("google", {})
+_XAI_ALIAS_MAP = _REGISTRY.aliases.get("xai", {})
+
+# Anthropic replaced its tokenizer at Claude Opus 4.7: the same text produces
+# roughly 30% more tokens on 4.7-generation models than on everything before
+# them. Counting and cost therefore differ per generation, and the two must
+# never be conflated -- see _build_anthropic_alias_map.
+CLAUDE_TOKENIZER_OPUS_4_7 = "claude-opus-4-7"
+CLAUDE_TOKENIZER_LEGACY = "claude-legacy"
+
+# tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
+# table only grows on release. An encoding in the registry marks that name as
+# verified, so counting stays exact and warning-free; anything absent is
+# estimated with o200k_base and says so on stderr.
+OPENAI_MODEL_ENCODINGS = {
+    name: info.encoding for name, info in OPENAI_MODELS.items() if info.encoding
+}
 
 _OPENAI_NAME_PATTERN = re.compile(r"(gpt-|o\d)")
 
@@ -93,46 +286,6 @@ def detect_provider(model: str) -> str | None:
     return None
 
 
-# Anthropic models (API-based counting)
-#
-# Anthropic replaced its tokenizer at Claude Opus 4.7: the same text produces
-# roughly 30% more tokens on 4.7-generation models than on everything before
-# them. Counting and cost therefore differ per generation, and the two must
-# never be conflated -- see _build_anthropic_alias_map.
-CLAUDE_TOKENIZER_OPUS_4_7 = "claude-opus-4-7"
-CLAUDE_TOKENIZER_LEGACY = "claude-legacy"
-
-# (name, tokenizer, retired date)
-_ANTHROPIC_MODEL_SPECS: tuple[tuple[str, str, str | None], ...] = (
-    ("claude-fable-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
-    ("claude-opus-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
-    ("claude-opus-4-8", CLAUDE_TOKENIZER_OPUS_4_7, None),
-    ("claude-opus-4-7", CLAUDE_TOKENIZER_OPUS_4_7, None),
-    ("claude-sonnet-5", CLAUDE_TOKENIZER_OPUS_4_7, None),
-    ("claude-opus-4-6", CLAUDE_TOKENIZER_LEGACY, None),
-    ("claude-sonnet-4-6", CLAUDE_TOKENIZER_LEGACY, None),
-    ("claude-opus-4-5-20251101", CLAUDE_TOKENIZER_LEGACY, None),
-    ("claude-sonnet-4-5-20250929", CLAUDE_TOKENIZER_LEGACY, None),
-    ("claude-haiku-4-5-20251001", CLAUDE_TOKENIZER_LEGACY, None),
-    ("claude-opus-4-1-20250805", CLAUDE_TOKENIZER_LEGACY, "2026-08-05"),
-    ("claude-opus-4-20250514", CLAUDE_TOKENIZER_LEGACY, "2026-06-15"),
-    ("claude-sonnet-4-20250514", CLAUDE_TOKENIZER_LEGACY, "2026-06-15"),
-    ("claude-3-haiku-20240307", CLAUDE_TOKENIZER_LEGACY, "2026-04-20"),
-    ("claude-3-7-sonnet-20250219", CLAUDE_TOKENIZER_LEGACY, "2026-02-19"),
-    ("claude-3-5-haiku-20241022", CLAUDE_TOKENIZER_LEGACY, "2026-02-19"),
-    ("claude-3-opus-20240229", CLAUDE_TOKENIZER_LEGACY, "2026-01-05"),
-    ("claude-3-5-sonnet-20241022", CLAUDE_TOKENIZER_LEGACY, "2025-10-28"),
-    ("claude-3-5-sonnet-20240620", CLAUDE_TOKENIZER_LEGACY, "2025-10-28"),
-)
-
-ANTHROPIC_MODELS = {
-    name: ModelInfo(
-        name=name, provider="anthropic", tokenizer=tokenizer, retired=retired
-    )
-    for name, tokenizer, retired in _ANTHROPIC_MODEL_SPECS
-}
-
-
 def _strip_anthropic_version(name: str) -> str:
     if len(name) > 9 and name[-9] == "-" and name[-8:].isdigit():
         return name[:-9]
@@ -174,65 +327,6 @@ def _resolve_anthropic_model(name: str) -> ModelInfo | None:
     return None
 
 
-# Google models (API-based counting)
-# Note: Google API requires "models/" prefix
-# Only models with documented CountTokens support are included
-# (name, retired date)
-_GOOGLE_MODEL_SPECS: tuple[tuple[str, str | None], ...] = (
-    ("gemini-3.1-pro-preview", None),
-    ("gemini-3.6-flash", None),
-    ("gemini-3.5-flash", None),
-    ("gemini-3.5-flash-lite", None),
-    ("gemini-3.1-flash-lite", None),
-    ("gemini-2.5-pro", None),
-    ("gemini-2.5-flash", None),
-    ("gemini-2.5-flash-lite", None),
-    ("gemini-2.5-flash-image", None),
-    ("gemini-3.1-flash-lite-preview", "2026-05-25"),
-    ("gemini-3-pro-preview", "2026-03-09"),
-    ("gemini-2.0-flash-001", "2026-06-01"),
-    ("gemini-2.0-flash-lite-001", "2026-06-01"),
-    ("gemini-2.0-flash-preview-image-generation", "2025-11-14"),
-)
-
-_GOOGLE_ALIAS_MAP: dict[str, str] = {
-    "gemini-2.0-flash": "gemini-2.0-flash-001",
-    "gemini-2.0-flash-lite": "gemini-2.0-flash-lite-001",
-    "gemini-2.0-flash-exp": "gemini-2.0-flash-001",
-    "gemini-2.0-flash-exp-02-05": "gemini-2.0-flash-001",
-    "gemini-2.0-flash-exp-image-generation": "gemini-2.0-flash-preview-image-generation",
-    "gemini-2.0-flash-lite-preview": "gemini-2.0-flash-lite-001",
-    "gemini-2.0-flash-lite-preview-02-05": "gemini-2.0-flash-lite-001",
-    "gemini-2.0-flash-lite-preview-image-generation": "gemini-2.0-flash-preview-image-generation",
-    "gemini-2.0-pro-exp": "gemini-2.5-pro",
-    "gemini-2.0-pro-exp-02-05": "gemini-2.5-pro",
-    "gemini-2.5-pro-preview-03-25": "gemini-2.5-pro",
-    "gemini-2.5-pro-preview-05-06": "gemini-2.5-pro",
-    "gemini-2.5-pro-preview-06-05": "gemini-2.5-pro",
-    "gemini-2.5-pro-preview-tts": "gemini-2.5-pro",
-    "gemini-2.5-flash-preview-05-20": "gemini-2.5-flash",
-    "gemini-2.5-flash-preview-09-2025": "gemini-2.5-flash",
-    "gemini-2.5-flash-preview-tts": "gemini-2.5-flash",
-    "gemini-2.5-flash-lite-preview": "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-lite-preview-06-17": "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-lite-preview-09-2025": "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
-    "gemini-2.5-flash-image-preview-09-2025": "gemini-2.5-flash-image",
-    "gemini-2.5-flash-lite-native-audio-preview-09-2025": "gemini-2.5-flash-lite",
-    "gemini-2.5-flash-native-audio-preview-09-2025": "gemini-2.5-flash",
-    "gemini-2.5-flash-native-audio-latest": "gemini-2.5-flash",
-    "gemini-exp-1206": "gemini-2.5-pro",
-    "gemini-flash-latest": "gemini-3.6-flash",
-    "gemini-flash-lite-latest": "gemini-3.5-flash-lite",
-    "gemini-pro-latest": "gemini-3.1-pro-preview",
-}
-
-GOOGLE_MODELS = {
-    name: ModelInfo(name=f"models/{name}", provider="google", retired=retired)
-    for name, retired in _GOOGLE_MODEL_SPECS
-}
-
-
 def _normalize_google_model_name(name: str) -> str:
     if name.startswith("models/"):
         name = name.split("/", 1)[1]
@@ -251,46 +345,6 @@ def _normalize_google_model_name(name: str) -> str:
 def _resolve_google_model(name: str) -> ModelInfo | None:
     normalized = _normalize_google_model_name(name)
     return GOOGLE_MODELS.get(normalized)
-
-
-# xAI models (using tiktoken for estimation)
-# xAI uses OpenAI-compatible API, use o200k_base as approximation
-#
-# xAI retired eight slugs on 2026-05-15 but kept them resolving: the API answers
-# with a different model instead of 404ing, so a count taken under a retired name
-# silently belongs to whatever now serves it. redirects_to records that.
-#
-# (name, retired date, model served instead)
-_XAI_MODEL_SPECS: tuple[tuple[str, str | None, str | None], ...] = (
-    ("grok-4.5", None, None),
-    ("grok-4.3", None, None),
-    ("grok-build-0.1", None, None),
-    ("grok-4", "2026-05-15", "grok-4.3"),
-    ("grok-4-0709", "2026-05-15", "grok-4.3"),
-    ("grok-4-fast-reasoning", "2026-05-15", "grok-4.3"),
-    ("grok-4-fast-non-reasoning", "2026-05-15", "grok-4.3"),
-    ("grok-4-1-fast-reasoning", "2026-05-15", "grok-4.3"),
-    ("grok-4-1-fast-non-reasoning", "2026-05-15", "grok-4.3"),
-    ("grok-3", "2026-05-15", "grok-4.3"),
-    ("grok-code-fast-1", "2026-05-15", "grok-build-0.1"),
-    # Dropped from xAI's model list without a published retirement date.
-    ("grok-3-mini", RETIREMENT_DATE_UNKNOWN, None),
-    ("grok-2-1212", RETIREMENT_DATE_UNKNOWN, None),
-    ("grok-2-vision-1212", RETIREMENT_DATE_UNKNOWN, None),
-)
-
-_XAI_ALIAS_MAP = {"grok-2-image-1212": "grok-2-1212"}
-
-XAI_MODELS = {
-    name: ModelInfo(
-        name=name,
-        provider="xai",
-        encoding="o200k_base",
-        retired=retired,
-        redirects_to=redirects_to,
-    )
-    for name, retired, redirects_to in _XAI_MODEL_SPECS
-}
 
 
 def _resolve_xai_model(name: str) -> ModelInfo | None:
@@ -338,30 +392,7 @@ TRANSFORMERS_MODELS: tuple[str, ...] = (
     "NousResearch/Hermes-3-Llama-3.1-8B",
 )
 
-# tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
-# table only grows on release. Naming an encoding here marks it as verified, so
-# counting stays exact and warning-free; anything absent is estimated with
-# o200k_base and says so on stderr.
-OPENAI_MODEL_ENCODINGS = {
-    "gpt-5.1": "o200k_base",
-    "gpt-5.1-pro": "o200k_base",
-    "gpt-5.2": "o200k_base",
-    "gpt-5.2-pro": "o200k_base",
-}
-
-# Listed by --list-models on top of tiktoken's own table. gpt-5.1-pro is omitted
-# because genai-prices has no entry for it.
-POPULAR_OPENAI_MODELS = (
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-5.1",
-    "gpt-5.2",
-    "gpt-5.2-pro",
-)
-
-MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
+MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS, **OPENAI_MODELS}
 
 
 def _has_module(module: str) -> bool:
@@ -566,6 +597,8 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
     providers: dict[str, set[str]] = defaultdict(set)
 
     for model in MODELS.values():
+        if not model.listed:
+            continue
         if model.retired is not None and not include_retired:
             continue
         providers[model.provider].add(model.name)
@@ -580,9 +613,6 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
         for model_name in TRANSFORMERS_MODELS:
             provider = detect_provider(model_name) or "huggingface"
             providers[provider].add(model_name)
-
-    for alias in POPULAR_OPENAI_MODELS:
-        providers["openai"].add(alias)
 
     return {
         provider: sorted(models, key=str.lower)

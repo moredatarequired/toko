@@ -216,6 +216,36 @@ openai = "sk-..."
 
 Config values act as defaults; command-line flags always win.
 
+## Teaching Toko about a new model
+
+The model registry is data, not code. Toko ships it as `models.toml` inside the
+package and merges `$XDG_CONFIG_HOME/toko/models.toml` (defaults to
+`~/.config/toko/models.toml`) over the top, so a model that launches today can
+be counted today:
+
+```toml
+[[model]]
+name = "claude-fable-6"
+provider = "anthropic"
+tokenizer = "claude-opus-4-7" # which Anthropic tokenizer generation it uses
+
+[[model]]
+name = "gpt-6.1"
+provider = "openai"
+encoding = "o200k_base" # optional; unknown OpenAI models are estimated
+```
+
+Entries merge field by field and yours win, so naming an existing model
+overrides just the fields you list and leaves the rest of the shipped entry
+alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
+`retired`, `redirects_to`, `tokenizer`, `listed`, and `aliases` (Google and xAI
+only). A malformed file is reported on stderr and skipped — Toko falls back to
+the registry it shipped with rather than failing to run.
+
+`tokenizer` matters for Anthropic: Claude Opus 4.7 changed tokenizer, and the
+same text counts roughly 30% higher on 4.7-generation models. Toko refuses to
+resolve a shorthand name that would span the two, so set it correctly.
+
 ## Caching and pricing data
 
 - Counts are cached in `$XDG_CACHE_HOME/toko/token_cache.db`.

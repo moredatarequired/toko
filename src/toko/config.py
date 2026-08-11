@@ -18,14 +18,20 @@ class Config:
     auto_update_prices: bool = False
 
 
-def get_config_path() -> Path:
+def get_config_dir() -> Path:
     config_home = os.environ.get("XDG_CONFIG_HOME")
     if config_home:
-        config_dir = Path(config_home) / "toko"
-    else:
-        config_dir = Path.home() / ".config" / "toko"
+        return Path(config_home) / "toko"
+    return Path.home() / ".config" / "toko"
 
-    return config_dir / "config.toml"
+
+def get_config_path() -> Path:
+    return get_config_dir() / "config.toml"
+
+
+def get_models_path() -> Path:
+    """User overlay for the model registry, merged over the packaged one."""
+    return get_config_dir() / "models.toml"
 
 
 def load_config() -> Config:

@@ -1,6 +1,7 @@
 """Model registry and definitions."""
 
 import json
+import re
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ class ModelInfo:
     provider: str
     encoding: str | None = None  # For tiktoken models
     api_endpoint: str | None = None  # For API-based counting
+
+
+_OPENAI_NAME_PATTERN = re.compile(r"(gpt-|o\d)")
 
 
 def detect_provider(model: str) -> str | None:
@@ -66,6 +70,11 @@ def detect_provider(model: str) -> str | None:
 
     if "/" in model_lower and not model_lower.startswith("models/"):
         return "huggingface"
+
+    # Newer OpenAI names tiktoken has never heard of (gpt-6, gpt-5.6, o5). Checked
+    # last so gpt-oss and org-prefixed names keep their more specific providers.
+    if _OPENAI_NAME_PATTERN.match(model_lower):
+        return "openai"
 
     return None
 
@@ -256,18 +265,28 @@ TRANSFORMERS_MODELS: tuple[str, ...] = (
     "NousResearch/Hermes-3-Llama-3.1-8B",
 )
 
-OPENAI_MODEL_FALLBACKS = {
-    "gpt-4.1-mini": "gpt-4.1",
-    "gpt-4.1-nano": "gpt-4.1",
-    "gpt-5-mini": "gpt-5",
-    "gpt-5-nano": "gpt-5",
-    "gpt-5.1": "gpt-5",
-    "gpt-5.1-pro": "gpt-5",
-    "gpt-5.2": "gpt-5",
-    "gpt-5.2-pro": "gpt-5",
+# tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
+# table only grows on release. Naming an encoding here marks it as verified, so
+# counting stays exact and warning-free; anything absent is estimated with
+# o200k_base and says so on stderr.
+OPENAI_MODEL_ENCODINGS = {
+    "gpt-5.1": "o200k_base",
+    "gpt-5.1-pro": "o200k_base",
+    "gpt-5.2": "o200k_base",
+    "gpt-5.2-pro": "o200k_base",
 }
 
-POPULAR_OPENAI_MODELS = tuple(sorted(OPENAI_MODEL_FALLBACKS))
+# Listed by --list-models on top of tiktoken's own table. gpt-5.1-pro is omitted
+# because genai-prices has no entry for it.
+POPULAR_OPENAI_MODELS = (
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-5.1",
+    "gpt-5.2",
+    "gpt-5.2-pro",
+)
 
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
 
@@ -348,6 +367,12 @@ def _make_basic_builder(provider: str) -> typing.Callable[[str], ModelInfo]:
     return builder
 
 
+def _build_openai_model(name: str) -> ModelInfo:
+    return ModelInfo(
+        name=name, provider="openai", encoding=OPENAI_MODEL_ENCODINGS.get(name.lower())
+    )
+
+
 def _build_google_model(name: str) -> ModelInfo:
     if name.startswith("models/"):
         model_name = name
@@ -361,7 +386,7 @@ def _build_google_model(name: str) -> ModelInfo:
 _PROVIDER_BUILDERS: dict[str, typing.Callable[[str], ModelInfo]] = {
     "anthropic": _make_basic_builder("anthropic"),
     "google": _build_google_model,
-    "openai": _make_basic_builder("openai"),
+    "openai": _build_openai_model,
     "xai": _make_basic_builder("xai"),
     "mistral": _make_basic_builder("mistral"),
     "llama": _make_basic_builder("llama"),
@@ -407,11 +432,6 @@ def get_model(name: str) -> ModelInfo:
         canonical_name = TOKENIZER_ALIASES[name.lower()]
         provider = detect_provider(canonical_name) or "openai"
         return ModelInfo(name=canonical_name, provider=provider)
-
-    lower_name = name.lower()
-    if lower_name in OPENAI_MODEL_FALLBACKS:
-        canonical_name = OPENAI_MODEL_FALLBACKS[lower_name]
-        return ModelInfo(name=canonical_name, provider="openai")
 
     # Fall back to dynamic detection
     provider = detect_provider(name)

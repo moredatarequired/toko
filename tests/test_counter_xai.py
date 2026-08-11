@@ -26,9 +26,9 @@ class StubTokenizer:
 
 @pytest.fixture(autouse=True)
 def _reset_approximation_warnings():
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
     yield
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
 
 
 def _install_stub_tokenizer(monkeypatch):
@@ -118,7 +118,7 @@ def test_xai_approximate_count_warns_again_on_a_repeat_run(monkeypatch, capsys):
     assert "approximate" in capsys.readouterr().err
 
     # A later invocation is a fresh process, which remembers no warnings.
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
 
     second = counter.count_tokens("hi", "grok-3")
 

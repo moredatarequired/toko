@@ -93,13 +93,24 @@ def test_openai_estimate_warns_again_on_a_repeat_run(capsys):
     assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
 
     # A later invocation is a fresh process, which remembers no warnings.
-    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
 
     second = count_tokens(text, model="gpt-6")
 
     assert second == first
     assert "unknown OpenAI model 'gpt-6'" in capsys.readouterr().err
     assert get_cached_count(text, "gpt-6") is None
+
+
+def test_warn_once_dedupes_per_kind_not_only_per_model(capsys):
+    counter._warn_once("alpha", "some-model", "first notice")  # noqa: SLF001
+    counter._warn_once("alpha", "some-model", "first notice")  # noqa: SLF001
+    counter._warn_once("beta", "some-model", "second notice")  # noqa: SLF001
+
+    err = capsys.readouterr().err
+    assert err.count("Warning:") == 2
+    assert "first notice" in err
+    assert "second notice" in err
 
 
 def test_exact_openai_count_is_cached(capsys):

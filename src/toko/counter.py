@@ -53,9 +53,19 @@ def _configure_transformers_logging() -> None:
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
 
-# Models already warned about, so counting a directory does not repeat the same
-# approximation notice once per file.
-_APPROXIMATE_WARNED: set[str] = set()
+# (warning kind, model name) pairs already emitted, so counting a directory does not
+# repeat the same notice once per file. The kind is part of the key so that two
+# different warnings about one model cannot suppress each other.
+_WARNED_ONCE: set[tuple[str, str]] = set()
+
+
+def _warn_once(kind: str, model_name: str, message: str) -> None:
+    key = (kind, model_name)
+    if key in _WARNED_ONCE:
+        return
+    _WARNED_ONCE.add(key)
+    print(f"Warning: {message}", file=sys.stderr)
+
 
 OPENAI_FALLBACK_ENCODING = "o200k_base"
 
@@ -123,12 +133,10 @@ def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
 
 
 def _warn_openai_estimate(model_name: str, encoding_name: str) -> None:
-    if model_name in _APPROXIMATE_WARNED:
-        return
-    _APPROXIMATE_WARNED.add(model_name)
-    print(
-        f"Warning: unknown OpenAI model '{model_name}'; estimating with {encoding_name}",
-        file=sys.stderr,
+    _warn_once(
+        "openai-estimate",
+        model_name,
+        f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}",
     )
 
 
@@ -154,14 +162,11 @@ def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
 
 
 def _warn_approximate(model_name: str, reason: str) -> None:
-    """Tell the user on stderr that a count is an approximation, once per model."""
-    if model_name in _APPROXIMATE_WARNED:
-        return
-    _APPROXIMATE_WARNED.add(model_name)
-    print(
-        f"Warning: {reason}, so {model_name} was counted with the Grok-1 Hugging Face "
+    _warn_once(
+        "xai-approximate",
+        model_name,
+        f"{reason}, so {model_name} was counted with the Grok-1 Hugging Face "
         "tokenizer. This count is approximate, not exact.",
-        file=sys.stderr,
     )
 
 

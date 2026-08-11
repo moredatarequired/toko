@@ -20,6 +20,11 @@ requires_current_prices = pytest.mark.skipif(
     ),
 )
 
+# genai-prices has no entry for this preview image-generation model. Up to
+# 0.0.48 its prefix matcher silently answered with plain gemini-2.0-flash's
+# text price; 0.1.1 stopped matching it at all, which is the honest answer.
+_UNPRICED_GOOGLE_MODEL = "gemini-2.0-flash-preview-image-generation"
+
 # Anthropic and xAI aliases resolve to a canonical name genai-prices already knows,
 # so trying the user's name first must stay invisible for them. Enumerated rather
 # than listed so a newly added alias is covered without touching this file.
@@ -94,14 +99,9 @@ class TestPricingCoverage:
 
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
-        # genai-prices has no entry for this preview image-generation model. Up to
-        # 0.0.48 its prefix matcher silently answered with plain gemini-2.0-flash's
-        # text price; 0.1.1 stopped matching it at all, which is the honest answer.
-        expected_missing = {"gemini-2.0-flash-preview-image-generation"}
-
         failures = []
         for model_name in GOOGLE_MODELS:
-            if model_name in expected_missing:
+            if model_name == _UNPRICED_GOOGLE_MODEL:
                 continue
             cost = estimate_cost(100, model_name)
             if cost is None:
@@ -111,6 +111,15 @@ class TestPricingCoverage:
             pytest.fail(
                 f"The following Google models lack pricing data: {', '.join(failures)}"
             )
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=f"genai-prices has no price for {_UNPRICED_GOOGLE_MODEL}; when it "
+        "gains one this xpasses and fails, so delete _UNPRICED_GOOGLE_MODEL and "
+        "this test rather than carrying a stale exemption",
+    )
+    def test_google_exemption_is_still_earned(self):
+        assert estimate_cost(100, _UNPRICED_GOOGLE_MODEL) is not None
 
     @requires_current_prices
     def test_xai_models_have_pricing(self):

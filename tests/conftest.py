@@ -4,6 +4,7 @@ import warnings
 
 import pytest
 
+import toko.counter as counter
 from toko.cache import clear_cache, set_cache_dir
 
 # Suppress noisy DeprecationWarnings emitted by optional tokenizer backends.
@@ -43,3 +44,10 @@ def _cache_root(tmp_path):
 @pytest.fixture
 def cache_dir(_cache_root):
     return _cache_root
+
+
+@pytest.fixture(autouse=True)
+def _reset_approximation_warnings():
+    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001
+    yield
+    counter._APPROXIMATE_WARNED.clear()  # noqa: SLF001

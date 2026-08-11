@@ -60,7 +60,9 @@ def should_update_prices(max_age_seconds: int = 86400) -> bool:
 
 def _build_snapshot(payload: bytes) -> data_snapshot.DataSnapshot:
     # genai-prices only parses price payloads inside UpdatePrices.fetch(), which always
-    # downloads them, so reuse its parser directly to rebuild a snapshot from disk.
+    # downloads them and hands back a snapshot rather than the bytes we need to cache.
+    # fetch() reaches for this same private parser, so there is no public alternative;
+    # pyproject caps genai-prices below 0.2 to keep the symbol from moving under us.
     from genai_prices.types import _providers_from_raw  # noqa: PLC0415
 
     providers = _providers_from_raw(json.loads(payload))

@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "genai-prices>=0.1.1",
+    # Upper bound because toko::price_update reuses genai-prices' private payload
+    # parser; revisit the parser when relaxing this.
+    "genai-prices>=0.1.1,<0.2",
     "httpx>=0.28.1",
     "pathspec>=0.12.1",
     "rich>=14.2.0",

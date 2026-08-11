@@ -129,12 +129,12 @@ def test_clear_cache_removes_the_price_cache():
 
 
 # Each subcommand echoes its marker before doing any work, so the marker proves the
-# name was dispatched even when the work behind it fails (update-prices needs network).
+# name was dispatched even when the work behind it fails.
 @pytest.mark.parametrize(
     ("args", "marker"),
     [
         (["--total-only", "clear-cache"], "Cache cleared"),
-        (["-m", "gpt-5", "update-prices"], "Fetching latest pricing data"),
+        (["-m", "gpt-5", "clear-cache"], "Cache cleared"),
         (["--format", "csv", "clear-cache"], "Cache cleared"),
         (["--format=csv", "clear-cache"], "Cache cleared"),
         (["-mgpt-5", "clear-cache"], "Cache cleared"),
@@ -147,6 +147,17 @@ def test_global_option_before_a_subcommand_still_dispatches(args, marker):
     output = _strip_ansi(result.stdout)
     assert "Path not found" not in output + _strip_ansi(result.stderr)
     assert marker in output
+
+
+@respx.mock
+def test_global_option_before_update_prices_still_dispatches():
+    """The other subcommand, dispatched behind a global option without the network."""
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(503))
+
+    result = _invoke_cli(["-m", "gpt-5", "update-prices"])
+
+    assert "Path not found" not in _strip_ansi(result.stdout + result.stderr)
+    assert "Fetching latest pricing data" in _strip_ansi(result.stdout)
 
 
 def test_subcommand_name_as_an_option_value_is_not_dispatched(tmp_path):

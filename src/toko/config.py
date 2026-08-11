@@ -42,6 +42,27 @@ def _parse_output_format(value: object, config_path: Path) -> OutputFormat:
         ) from e
 
 
+_TYPE_NAMES: dict[type, str] = {bool: "a boolean", dict: "a table", str: "a string"}
+
+
+def _require_type[T](
+    value: object,
+    expected: type[T],
+    *,
+    key: str,
+    config_path: Path,
+    show_value: bool = True,
+) -> T:
+    if isinstance(value, expected):
+        return value
+    # show_value=False for secrets: naming the offending key is enough, and the
+    # message reaches the terminal.
+    found = f" {value!r}" if show_value else ""
+    raise ValueError(
+        f"Invalid {key}{found} in {config_path} (expected {_TYPE_NAMES[expected]})"
+    )
+
+
 def load_config() -> Config:
     """Load configuration from file.
 
@@ -63,27 +84,58 @@ def load_config() -> Config:
         raise ValueError(f"Error reading config file {config_path}: {e}") from e
 
     # Extract toko section
-    toko_config = data.get("toko", {})
+    toko_config = _require_type(
+        data.get("toko", {}), dict, key="toko", config_path=config_path
+    )
 
     # Check for auto_update_prices from env var or config
-    auto_update = os.environ.get("TOKO_AUTO_UPDATE_PRICES", "").lower() in (
+    env_auto_update = os.environ.get("TOKO_AUTO_UPDATE_PRICES", "").lower() in (
         "true",
         "1",
         "yes",
     )
-    if not auto_update:
-        auto_update = toko_config.get("auto_update_prices", False)
+    config_auto_update = _require_type(
+        toko_config.get("auto_update_prices", False),
+        bool,
+        key="auto_update_prices",
+        config_path=config_path,
+    )
+
+    exclude = _require_type(
+        toko_config.get("exclude", {}), dict, key="exclude", config_path=config_path
+    )
+    api_keys = _require_type(
+        toko_config.get("api_keys", {}), dict, key="api_keys", config_path=config_path
+    )
+    for name, key_value in api_keys.items():
+        _require_type(
+            key_value,
+            str,
+            key=f"api_keys.{name}",
+            config_path=config_path,
+            show_value=False,
+        )
 
     # Build and return config
     return Config(
-        default_model=toko_config.get("default_model", "gpt-5"),
-        respect_gitignore=toko_config.get("respect_gitignore", True),
+        default_model=_require_type(
+            toko_config.get("default_model", "gpt-5"),
+            str,
+            key="default_model",
+            config_path=config_path,
+        ),
+        respect_gitignore=_require_type(
+            toko_config.get("respect_gitignore", True),
+            bool,
+            key="respect_gitignore",
+            config_path=config_path,
+        ),
         default_format=_parse_output_format(
             toko_config.get("default_format", "text"), config_path
         ),
-        exclude_patterns=toko_config.get("exclude", {}).get("patterns", []),
-        api_keys=toko_config.get("api_keys", {}),
-        auto_update_prices=auto_update,
+        exclude_patterns=exclude.get("patterns", []),
+        api_keys=api_keys,
+        auto_update_prices=env_auto_update or config_auto_update,
     )
 
 

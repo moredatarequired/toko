@@ -3,7 +3,6 @@
 import json
 import sys
 from io import StringIO
-from typing import cast
 
 from rich.console import Console
 from rich.table import Table
@@ -49,7 +48,6 @@ def format_table(
 
 def format_text(
     results: dict[str, int],
-    total_only: bool = False,
     *,
     costs: dict[str, float | None] | None = None,
     include_header: bool = True,
@@ -58,7 +56,6 @@ def format_text(
 
     Args:
         results: Dictionary mapping model names to token counts
-        total_only: If True, only show total count
         costs: Optional dictionary mapping model names to costs
 
     Returns:
@@ -66,10 +63,7 @@ def format_text(
     """
     if len(results) == 1 and not costs:
         # Single model without costs - just show the count
-        count = next(iter(results.values()))
-        if total_only:
-            return str(count)
-        return str(count)
+        return str(next(iter(results.values())))
 
     # Multiple models or costs requested - use table format
     return format_table(results, costs=costs, include_header=include_header)
@@ -157,7 +151,6 @@ def format_tsv(
 def format_output(
     results: dict[str, int],
     output_format: str = "text",
-    total_only: bool = False,
     *,
     costs: dict[str, float | None] | None = None,
     include_header: bool = True,
@@ -167,7 +160,6 @@ def format_output(
     Args:
         results: Dictionary mapping model names to token counts
         output_format: Output format (text, json, csv, tsv)
-        total_only: If True, only show total count (text format only)
         costs: Optional dictionary mapping model names to costs
 
     Returns:
@@ -177,9 +169,7 @@ def format_output(
         ValueError: If format is not supported
     """
     if output_format == "text":
-        return format_text(
-            results, total_only, costs=costs, include_header=include_header
-        )
+        return format_text(results, costs=costs, include_header=include_header)
     if output_format == "json":
         return format_json(results, costs=costs)
     if output_format == "csv":
@@ -192,8 +182,20 @@ def format_output(
 def _format_file_json(
     file_results: dict[str, dict[str, int]],
     *,
+    models: list[str],
+    total_only: bool,
     costs: dict[str, dict[str, float | None]] | None,
 ) -> str:
+    if total_only:
+        totals, total_costs = _compute_totals(file_results, models=models, costs=costs)
+        if total_costs is None:
+            return json.dumps(totals, indent=2)
+        total_payload = {
+            model: {"tokens": totals[model], "cost": total_costs[model]}
+            for model in models
+        }
+        return json.dumps(total_payload, indent=2)
+
     if not costs:
         return json.dumps(file_results, indent=2)
     payload = {
@@ -215,6 +217,7 @@ def _format_file_table_delimited(
     *,
     models: list[str],
     separator: str,
+    total_only: bool,
     include_header: bool,
     costs: dict[str, dict[str, float | None]] | None,
 ) -> str:
@@ -228,6 +231,16 @@ def _format_file_table_delimited(
 
     if include_header:
         lines.append(separator.join(headers))
+
+    if total_only:
+        totals, total_costs = _compute_totals(file_results, models=models, costs=costs)
+        total_row: list[str] = ["TOTAL"]
+        for model in models:
+            total_row.append(str(totals[model]))
+            if total_costs is not None:
+                total_row.append(format_cost(total_costs[model]))
+        lines.append(separator.join(total_row))
+        return "\n".join(lines)
 
     for filename, model_counts in file_results.items():
         row: list[str] = [filename]
@@ -265,18 +278,16 @@ def _format_file_table_text(
         for model in models:
             table.add_column(model, justify="right", style="green")
 
-    rows, totals, total_costs = _build_table_rows(
-        file_results, models=models, costs=costs
-    )
+    if not total_only:
+        for row in _build_table_rows(file_results, models=models, costs=costs):
+            table.add_row(*row)
 
-    for row in rows:
-        table.add_row(*row)
-
-    if not total_only and len(file_results) > 1:
+    if total_only or len(file_results) > 1:
+        totals, total_costs = _compute_totals(file_results, models=models, costs=costs)
         total_row: list[str] = ["TOTAL"]
         for model in models:
             total_row.append(f"{totals[model]:,}")
-            if costs and total_costs is not None:
+            if total_costs is not None:
                 total_row.append(format_cost(total_costs[model]))
         table.add_row(*total_row, style="bold")
 
@@ -291,33 +302,46 @@ def _build_table_rows(
     *,
     models: list[str],
     costs: dict[str, dict[str, float | None]] | None,
-) -> tuple[list[list[str]], dict[str, int], dict[str, float] | None]:
-    totals = cast("dict[str, int]", dict.fromkeys(models, 0))
-    total_costs: dict[str, float] | None = (
-        cast("dict[str, float]", dict.fromkeys(models, 0.0)) if costs else None
-    )
+) -> list[list[str]]:
     rows: list[list[str]] = []
 
     for filename, model_counts in file_results.items():
         row: list[str] = [filename]
         for model in models:
             if model in model_counts:
-                count = model_counts[model]
-                totals[model] += count
-                row.append(f"{count:,}")
-
+                row.append(f"{model_counts[model]:,}")
                 if costs:
-                    cost_val = costs.get(filename, {}).get(model)
-                    if total_costs is not None and cost_val is not None:
-                        total_costs[model] += cost_val
-                    row.append(format_cost(cost_val))
+                    row.append(format_cost(costs.get(filename, {}).get(model)))
             else:
                 row.append("N/A")
                 if costs:
                     row.append("N/A")
         rows.append(row)
 
-    return rows, totals, total_costs
+    return rows
+
+
+def _compute_totals(
+    file_results: dict[str, dict[str, int]],
+    *,
+    models: list[str],
+    costs: dict[str, dict[str, float | None]] | None,
+) -> tuple[dict[str, int], dict[str, float] | None]:
+    totals: dict[str, int] = dict.fromkeys(models, 0)
+    total_costs: dict[str, float] | None = dict.fromkeys(models, 0.0) if costs else None
+
+    for filename, model_counts in file_results.items():
+        for model in models:
+            if model not in model_counts:
+                continue
+            totals[model] += model_counts[model]
+            if costs is None or total_costs is None:
+                continue
+            cost_val = costs.get(filename, {}).get(model)
+            if cost_val is not None:
+                total_costs[model] += cost_val
+
+    return totals, total_costs
 
 
 def format_file_table(
@@ -329,17 +353,19 @@ def format_file_table(
     include_header: bool = True,
 ) -> str:
     """Format per-file token counts with files as rows and models as columns."""
-    if output_format == "json":
-        return _format_file_json(file_results, costs=costs)
-
     models = _collect_models(file_results)
 
+    if output_format == "json":
+        return _format_file_json(
+            file_results, models=models, total_only=total_only, costs=costs
+        )
+
     if output_format in ("csv", "tsv"):
-        separator = "," if output_format == "csv" else "\t"
         return _format_file_table_delimited(
             file_results,
             models=models,
-            separator=separator,
+            separator="," if output_format == "csv" else "\t",
+            total_only=total_only,
             include_header=include_header,
             costs=costs,
         )

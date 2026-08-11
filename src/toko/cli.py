@@ -348,7 +348,6 @@ def _handle_text_input(
     output = format_output(
         results,
         output_format=adjusted_format,
-        total_only=total_only,
         costs=costs,
         include_header=include_header,
     )

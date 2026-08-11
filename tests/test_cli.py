@@ -268,7 +268,7 @@ def test_option_after_positional_path(tmp_path):
 
     result = runner.invoke(app, [str(sample), "--total-only", "--format", "csv"])
     assert result.exit_code == 0
-    assert "2" in result.stdout
+    assert result.stdout.strip().endswith("TOTAL,2")
 
 
 def test_short_option_after_positional_path(tmp_path):
@@ -301,6 +301,71 @@ def test_all_paths_bad_reports_no_files(tmp_path):
     result = runner.invoke(app, [str(tmp_path / "nope.txt")])
     assert result.exit_code == 1
     assert "Error: No files found matching criteria" in result.stderr
+
+
+def _two_file_args(tmp_path: Path) -> list[str]:
+    first = tmp_path / "first.txt"
+    first.write_text("hello world")
+    second = tmp_path / "second.txt"
+    second.write_text("goodbye world friend")
+    return [str(first), str(second)]
+
+
+def test_total_only_csv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--total-only", "--format", "csv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "TOTAL,6"
+
+
+def test_total_only_csv_with_header(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--header", "--total-only", "--format", "csv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "file,gpt-5\nTOTAL,6"
+
+
+def test_total_only_tsv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--total-only", "--format", "tsv", *args])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "TOTAL\t6"
+
+
+def test_total_only_json(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--total-only", "--format", "json", *args])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"gpt-5": 6}
+
+
+def test_total_only_text(tmp_path, monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--total-only", *args])
+    assert result.exit_code == 0
+    assert "TOTAL" in result.stdout
+    assert "first.txt" not in result.stdout
+    assert "second.txt" not in result.stdout
+
+
+def test_without_total_only_keeps_per_file_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert "first.txt" in result.stdout
+    assert "second.txt" in result.stdout
+    assert "TOTAL" in result.stdout
+
+
+def test_without_total_only_keeps_per_file_rows_csv(tmp_path):
+    args = _two_file_args(tmp_path)
+    result = runner.invoke(app, ["--format", "csv", *args])
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line]
+    assert [line.split(",")[-1] for line in lines] == ["2", "4"]
+    assert not any(line.startswith("TOTAL") for line in lines)
 
 
 def test_partial_success_missing_hf_token(monkeypatch):

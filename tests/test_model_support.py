@@ -60,6 +60,6 @@ def test_every_listed_model_counts_tokens():
                 except Exception as exc:
                     failures.append(f"{model_info.name} ({provider}): {exc}")
 
-    if failures:
-        formatted = "\n".join(failures)
-        pytest.fail(f"The following models failed to count tokens:\n{formatted}")
+        if failures:
+            formatted = "\n".join(failures)
+            pytest.fail(f"The following models failed to count tokens:\n{formatted}")

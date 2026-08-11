@@ -563,10 +563,16 @@ class TestUserOverlay:
         """)
         assert reloaded.get_model("gemini-exp-1206").name == "models/my-own-gemini"
 
-        # Only the declaration that lost is reported; the one that worked is not.
+        # Only the declaration that lost is reported, and the winner it names
+        # has to be the model that actually ends up with the alias. A third
+        # claimant sits between the two in merged order, so a message built
+        # from whoever held the alias mid-walk would name gemini-2.5-pro and
+        # send the user to fix a model that is working.
         err = capsys.readouterr().err
-        assert "gemini-3.1-pro-preview" in err
-        assert "my-own-gemini" not in err
+        assert "declared on 'gemini-3.1-pro-preview' has no effect" in err
+        assert "'my-own-gemini' declares it too" in err
+        assert "so 'my-own-gemini' keeps it" in err
+        assert "gemini-2.5-pro" not in err
 
     def test_a_capitalised_model_name_is_reachable_under_either_spelling(
         self, user_registry

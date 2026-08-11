@@ -87,7 +87,7 @@ class HubTraffic:
 
         Handing them here rather than dropping them is what lets `skip_if_rate_limited`
         name them in the skip reason and chain them onto it, so `-rs` shows what was
-        hidden and strict mode fails carrying the original error.
+        hidden and strict mode fails carrying the original errors.
         """
         self.masked.extend(errors)
 
@@ -151,6 +151,21 @@ class HubFailures:
             else ""
         )
         pytest.fail(f"{headline}\n{formatted}{omitted}")
+
+
+def _chained(errors: list[Exception]) -> BaseException | None:
+    """Build the cause to hang the skip off, keeping every masked error's traceback.
+
+    A sweep the Hub refuses masks one error per model — eight in an observed run — but
+    `raise ... from` takes a single cause, so chaining `errors[0]` would name all eight
+    in the reason and throw seven tracebacks away, in the one mode that exists to
+    diagnose them. A group of one is noise, so a lone error is still chained directly.
+    """
+    if not errors:
+        return None
+    if len(errors) == 1:
+        return errors[0]
+    return ExceptionGroup(f"{len(errors)} errors masked by the rate limit", errors)
 
 
 @contextlib.contextmanager
@@ -218,7 +233,7 @@ def skip_if_rate_limited() -> Iterator[HubTraffic]:
         message = f"Hugging Face Hub rate limit (429) on {hub.first_refused_url}"
         for exc in swallowed:
             message += f"\nThe guarded block also raised {type(exc).__name__}: {exc}"
-        cause = swallowed[0] if swallowed else None
+        cause = _chained(swallowed)
         if os.environ.get(STRICT_ENV_VAR):
             raise pytest.fail.Exception(message) from cause
         raise pytest.skip.Exception(message) from cause

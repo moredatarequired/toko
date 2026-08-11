@@ -4,7 +4,9 @@ The transport is stubbed because a 429 cannot be summoned on demand; everything 
 is the real `requests` stack and the real helper.
 """
 
+import contextlib
 import io
+from typing import TYPE_CHECKING
 
 import pytest
 import requests
@@ -13,10 +15,29 @@ import urllib3
 
 from tests.hf_hub import STRICT_ENV_VAR, HubFailures, skip_if_rate_limited
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 RESOLVE_URL = (
     "https://huggingface.co/meta-llama/Llama-3.2-1B/resolve/main/tokenizer.json"
 )
 WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
+
+
+@contextlib.contextmanager
+def no_silent_skip() -> Iterator[None]:
+    """Fail if the helper skips, for the tests whose verdict is that it must not.
+
+    `pytest.skip.Exception` derives from `BaseException`, so `pytest.raises(SomeError)`
+    does not catch it: an unexpected skip escapes the `raises` block and pytest reports
+    the test as skipped rather than failed. Every guarantee below would then regress to
+    a green build with a skip in it — exactly the invisible-in-CI failure mode this
+    module exists to prevent, reappearing in its own guards. Wrap it outside `raises`.
+    """
+    try:
+        yield
+    except pytest.skip.Exception as skipped:
+        pytest.fail(f"the guard skipped instead of reaching its verdict: {skipped}")
 
 
 def _stub_transport(monkeypatch, statuses: list[int]) -> None:
@@ -115,7 +136,7 @@ def test_rate_limited_load_skips(monkeypatch):
 
 def test_assertion_failure_beats_the_skip(monkeypatch):
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(AssertionError, match="real failure"):
+    with no_silent_skip(), pytest.raises(AssertionError, match="real failure"):
         _block_asserting_on_the_result()
 
 
@@ -125,13 +146,13 @@ def test_reported_failure_beats_the_skip(monkeypatch):
     This is the `test_every_listed_model_counts_tokens` shape.
     """
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(pytest.fail.Exception, match="gpt-5"):
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception, match="gpt-5"):
         _block_reporting_collected_failures()
 
 
 def test_failure_without_a_rate_limit_is_not_skipped(monkeypatch):
     _stub_transport(monkeypatch, [500])
-    with pytest.raises(ValueError, match="server error"):
+    with no_silent_skip(), pytest.raises(ValueError, match="server error"):
         _block_failing_for_another_reason()
 
 
@@ -141,14 +162,14 @@ def test_recovered_rate_limit_does_not_skip(monkeypatch):
     `huggingface_hub` retries 429s on its paginated endpoints.
     """
     _stub_transport(monkeypatch, [429, 200])
-    with skip_if_rate_limited():
+    with no_silent_skip(), skip_if_rate_limited():
         _fetch()
         _fetch()
 
 
 def test_rate_limit_on_an_unrelated_path_does_not_skip(monkeypatch):
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(ValueError, match="unrelated"):
+    with no_silent_skip(), pytest.raises(ValueError, match="unrelated"):
         _block_hitting_an_unrelated_endpoint()
 
 
@@ -165,7 +186,7 @@ def test_unanswered_rate_limit_skips_a_block_that_did_not_raise(monkeypatch):
 def test_strict_mode_turns_the_skip_into_a_failure(monkeypatch):
     monkeypatch.setenv(STRICT_ENV_VAR, "1")
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(pytest.fail.Exception, match="rate limit"):
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception, match="rate limit"):
         _load_refused_by_the_hub()
 
 
@@ -184,7 +205,7 @@ def test_collected_failures_the_hub_caused_do_not_beat_the_skip(monkeypatch):
 def test_collected_genuine_failure_beats_a_coincident_rate_limit(monkeypatch):
     """A real regression during a Hub outage still fails, naming only the real one."""
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(pytest.fail.Exception) as excinfo:
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception) as excinfo:
         _block_collecting_per_model_failures(_broken_tokenizer, _refused_by_the_hub)
 
     message = str(excinfo.value)
@@ -195,14 +216,20 @@ def test_collected_genuine_failure_beats_a_coincident_rate_limit(monkeypatch):
 
 def test_collected_genuine_failure_without_a_rate_limit_is_reported(monkeypatch):
     _stub_transport(monkeypatch, [200])
-    with pytest.raises(pytest.fail.Exception, match="REAL NON-ASSERTION REGRESSION"):
+    with (
+        no_silent_skip(),
+        pytest.raises(pytest.fail.Exception, match="REAL NON-ASSERTION REGRESSION"),
+    ):
         _block_collecting_per_model_failures(_broken_tokenizer)
 
 
 def test_collected_failure_is_reported_when_the_hub_relented(monkeypatch):
     """A 429 the Hub went on to answer excuses nothing — no skip is coming."""
     _stub_transport(monkeypatch, [429, 200])
-    with pytest.raises(pytest.fail.Exception, match="429 Client Error"):
+    with (
+        no_silent_skip(),
+        pytest.raises(pytest.fail.Exception, match="429 Client Error"),
+    ):
         _block_collecting_per_model_failures(_refused_then_answered)
 
 
@@ -225,7 +252,7 @@ def test_strict_mode_recovers_a_collected_rate_limited_error(monkeypatch):
     """Strict mode is the escape hatch, so it must recover what the collector dropped."""
     monkeypatch.setenv(STRICT_ENV_VAR, "1")
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(pytest.fail.Exception) as excinfo:
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception) as excinfo:
         _block_collecting_per_model_failures(_refused_by_the_hub)
 
     assert "rate limit" in str(excinfo.value)
@@ -233,17 +260,34 @@ def test_strict_mode_recovers_a_collected_rate_limited_error(monkeypatch):
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
+def test_strict_mode_chains_every_masked_error(monkeypatch):
+    """A refused sweep masks one error per model, and `raise from` takes one cause.
+
+    Chaining only the first would leave strict mode — the mode that exists to diagnose
+    these — naming every error but able to show one traceback.
+    """
+    monkeypatch.setenv(STRICT_ENV_VAR, "1")
+    _stub_transport(monkeypatch, [429, 429])
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception) as excinfo:
+        _block_collecting_per_model_failures(_refused_by_the_hub, _refused_by_the_hub)
+
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, ExceptionGroup)
+    assert len(cause.exceptions) == 2
+    assert all(exc.__traceback__ is not None for exc in cause.exceptions)
+
+
 def test_assertion_inside_collect_beats_the_skip(monkeypatch):
     """A verdict is a verdict wherever it is raised — the collector must not eat it."""
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(AssertionError, match="COLLECTED ASSERTION"):
+    with no_silent_skip(), pytest.raises(AssertionError, match="COLLECTED ASSERTION"):
         _block_collecting_per_model_failures(_model_asserting_on_the_result)
 
 
 def test_relented_rate_limit_is_reported_alongside_a_genuine_failure(monkeypatch):
     """Nothing excuses a 429 the Hub answered, so a genuine failure must not hide it."""
     _stub_transport(monkeypatch, [429, 200])
-    with pytest.raises(pytest.fail.Exception) as excinfo:
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception) as excinfo:
         _block_collecting_per_model_failures(_broken_tokenizer, _refused_then_answered)
 
     message = str(excinfo.value)
@@ -266,7 +310,7 @@ def test_skip_reason_names_an_exception_it_swallowed(monkeypatch):
 def test_strict_mode_never_loses_a_swallowed_exception(monkeypatch):
     monkeypatch.setenv(STRICT_ENV_VAR, "1")
     _stub_transport(monkeypatch, [429])
-    with pytest.raises(pytest.fail.Exception) as excinfo:
+    with no_silent_skip(), pytest.raises(pytest.fail.Exception) as excinfo:
         _block_failing_for_another_reason()
 
     assert "rate limit" in str(excinfo.value)

@@ -3,6 +3,7 @@
 import contextlib
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -28,6 +29,13 @@ def is_stdout_tty() -> bool:
 def is_stderr_tty() -> bool:
     """Check if stderr is connected to a TTY."""
     return sys.stderr.isatty()
+
+
+class OutputFormat(StrEnum):
+    TEXT = "text"
+    JSON = "json"
+    CSV = "csv"
+    TSV = "tsv"
 
 
 app = typer.Typer(
@@ -94,8 +102,8 @@ def main(
         ),
     ] = False,
     output_format: Annotated[
-        str, typer.Option("--format", "-f", help="Output format: text, json, csv, tsv")
-    ] = "text",
+        OutputFormat, typer.Option("--format", "-f", help="Output format")
+    ] = OutputFormat.TEXT,
     cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
     header: Annotated[
         bool | None,
@@ -180,8 +188,8 @@ def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
     return cli_models or [config.default_model]
 
 
-def _resolve_output_format(config: Config, requested: str) -> str:
-    if requested == "text":
+def _resolve_output_format(config: Config, requested: OutputFormat) -> str:
+    if requested == OutputFormat.TEXT:
         return config.default_format if is_stdout_tty() else "tsv"
     return requested
 
@@ -477,7 +485,7 @@ def _do_count(
     no_ignore: bool,
     no_recursive: bool,
     total_only: bool,
-    output_format: str,
+    output_format: OutputFormat,
     cost: bool,
     header: bool | None,
     list_models: bool,

@@ -370,13 +370,16 @@ def format_file_table(
             costs=costs,
         )
 
-    return _format_file_table_text(
-        file_results,
-        models=models,
-        total_only=total_only,
-        include_header=include_header,
-        costs=costs,
-    )
+    if output_format == "text":
+        return _format_file_table_text(
+            file_results,
+            models=models,
+            total_only=total_only,
+            include_header=include_header,
+            costs=costs,
+        )
+
+    raise ValueError(f"Unknown format: {output_format}")
 
 
 def is_stdin_empty() -> bool:

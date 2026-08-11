@@ -14,7 +14,8 @@ class Config:
     respect_gitignore: bool = True
     default_format: str = "text"
     exclude_patterns: list[str] = field(default_factory=list)
-    api_keys: dict[str, str] = field(default_factory=dict)
+    # repr=False so a crash traceback rendering a Config never echoes secrets.
+    api_keys: dict[str, str] = field(default_factory=dict, repr=False)
     auto_update_prices: bool = False
 
 

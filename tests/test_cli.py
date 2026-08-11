@@ -368,6 +368,28 @@ def test_without_total_only_keeps_per_file_rows_csv(tmp_path):
     assert not any(line.startswith("TOTAL") for line in lines)
 
 
+def test_invalid_format_is_a_usage_error_without_leaking_keys(tmp_path):
+    sentinel = "sk-ant-FAKE-SENTINEL-XYZZY"
+    config_dir = tmp_path / "toko"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        f'[toko.api_keys]\nanthropic = "{sentinel}"\n'
+    )
+
+    result = runner.invoke(
+        app,
+        ["--format", "jsonl", "--text", "hello"],
+        env={"XDG_CONFIG_HOME": str(tmp_path)},
+    )
+
+    assert result.exit_code == 2
+    combined = result.stdout + result.stderr
+    assert "Traceback" not in combined
+    assert "api_keys" not in combined
+    assert sentinel not in combined
+    assert "'jsonl' is not one of" in combined.replace("\n", " ")
+
+
 def test_partial_success_missing_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     assert not os.environ.get("HF_TOKEN")

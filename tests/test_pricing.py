@@ -67,6 +67,7 @@ class TestPricingCoverage:
 
     def test_google_models_have_pricing(self):
         """Current Google models should have pricing data."""
+        # Preview and image models genai-prices does not price
         expected_missing = {
             "gemini-2.5-pro",
             "gemini-2.5-flash",
@@ -92,17 +93,8 @@ class TestPricingCoverage:
 
     def test_xai_models_have_pricing(self):
         """Current xAI models should have pricing data."""
-        # Newer models that may not be in genai-prices yet
-        expected_missing = {
-            "grok-4-fast-non-reasoning",
-            "grok-4-fast-reasoning",
-            "grok-code-fast-1",
-        }
-
         failures = []
         for model_name in XAI_MODELS:
-            if model_name in expected_missing:
-                continue
             cost = estimate_cost(100, model_name)
             if cost is None:
                 failures.append(model_name)

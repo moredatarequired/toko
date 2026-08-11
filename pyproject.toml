@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "genai-prices>=0.0.48",
+    "genai-prices>=0.1.1",
     "httpx>=0.28.1",
     "pathspec>=0.12.1",
     "rich>=14.2.0",

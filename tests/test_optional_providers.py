@@ -4,13 +4,15 @@ import os
 
 import pytest
 
+from tests.hf_hub import skip_if_rate_limited
 from toko.counter import count_tokens
 
 
 def check_token_counting(
     model_name: str, use_cache: bool = False, text: str = "Hello world, this is a test!"
 ) -> None:
-    counted = count_tokens(text, model_name, use_cache=use_cache)
+    with skip_if_rate_limited():
+        counted = count_tokens(text, model_name, use_cache=use_cache)
     assert counted.count > 0
     assert 5 <= counted.count <= 20
 

@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from tests.hf_hub import HubFailures, skip_if_rate_limited
 from toko.counter import count_tokens
 from toko.models import get_model, list_models
 
@@ -44,20 +45,17 @@ def _provider_is_available(provider: str) -> bool:
 @pytest.mark.slow
 def test_every_listed_model_counts_tokens():
     models_by_provider = list_models()
-    failures: list[str] = []
     text = "integration smoke test"
 
-    for provider, models in models_by_provider.items():
-        for model in models:
-            if not _provider_is_available(provider):
-                continue
+    with skip_if_rate_limited() as hub:
+        failures = HubFailures(hub)
+        for provider, models in models_by_provider.items():
+            for model in models:
+                if not _provider_is_available(provider):
+                    continue
 
-            model_info = get_model(model)
-            try:
-                count_tokens(text, model_info.name, use_cache=False)
-            except Exception as exc:
-                failures.append(f"{model_info.name} ({provider}): {exc}")
+                model_info = get_model(model)
+                with failures.collect(f"{model_info.name} ({provider})"):
+                    count_tokens(text, model_info.name, use_cache=False)
 
-    if failures:
-        formatted = "\n".join(failures)
-        pytest.fail(f"The following models failed to count tokens:\n{formatted}")
+        failures.report("The following models failed to count tokens:")

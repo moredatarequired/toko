@@ -4,8 +4,9 @@ import re
 
 import pytest
 
-from toko import models
-from toko.cache import cache_count, clear_cache, get_cached_count
+from toko import counter, models
+from toko.cache import get_cached_count
+from toko.counter import count_tokens
 
 
 @pytest.mark.parametrize(
@@ -110,6 +111,22 @@ def test_google_retirement_notice_does_not_leak_the_api_prefix():
     assert notice is not None
     assert "models/" not in notice
     assert notice.startswith("gemini-2.0-flash-001 was retired")
+
+
+def test_retired_models_are_never_listed_as_supported():
+    listed = {name for names in models.list_models().values() for name in names}
+    retired = [
+        info.name
+        for registry in (
+            models.ANTHROPIC_MODELS,
+            models.GOOGLE_MODELS,
+            models.XAI_MODELS,
+        )
+        for info in registry.values()
+        if info.retired is not None
+    ]
+    assert retired
+    assert not listed.intersection(retired)
 
 
 class TestXaiRegistry:
@@ -217,18 +234,62 @@ class TestAnthropicTokenizerBoundary:
         assert older.name == "claude-opus-4-6"
         assert newer.name == "claude-opus-4-7"
 
-    def test_models_on_opposite_sides_never_share_a_cache_key(self, cache_dir):
-        clear_cache()
-        assert cache_dir.exists()
-        text = "the boundary must hold"
-        # count_tokens caches under both the name the user asked for and the
-        # resolved name, so a 4.6 count must never be served for a 4.7 request.
-        for name in ("claude-opus-4-6", "claude-opus-4-6-latest"):
-            cache_count(text, models.get_model(name).name, 100)
+    def test_models_on_opposite_sides_never_share_a_cache_key(self, monkeypatch):
+        # count_tokens caches under both the name the user typed and the
+        # resolved name, so a shorthand that crossed the boundary would serve a
+        # 4.6 count for a 4.7 request. Anthropic has no local tokenizer, so the
+        # network call is stubbed with a per-generation count -- resolution,
+        # cache keying and read-back are all the real code.
+        counts = {
+            models.CLAUDE_TOKENIZER_LEGACY: 100,
+            models.CLAUDE_TOKENIZER_OPUS_4_7: 130,
+        }
+        monkeypatch.setitem(
+            counter._PROVIDER_HANDLERS,  # noqa: SLF001
+            "anthropic",
+            lambda _text, model_info: counts[model_info.tokenizer],
+        )
 
-        assert get_cached_count(text, "claude-opus-4-6") == 100
-        assert get_cached_count(text, "claude-opus-4-7") is None
-        assert get_cached_count(text, "claude-opus-5") is None
+        text = "the boundary must hold"
+        assert count_tokens(text, "claude-opus-4-6") == 100
+        assert count_tokens(text, "claude-opus-4-6-latest") == 100
+        assert count_tokens(text, "claude-opus-4-7") == 130
+        assert count_tokens(text, "claude-opus-5") == 130
+
+        # The 4.7 counts must not have landed on a 4.6 key on the way through.
+        assert count_tokens(text, "claude-opus-4-6") == 100
+        assert get_cached_count(text, "claude-opus-4-6-latest") == 100
+
+    def test_a_shorthand_spanning_the_boundary_is_left_unresolvable(self, monkeypatch):
+        # No dated ID in the shipped registry sits on the new tokenizer, so the
+        # alias map's boundary guard is only reachable with an injected
+        # registry -- but the day such an ID ships, the shorthand must not
+        # silently pick a side.
+        def spec(date: str, tokenizer: str):
+            name = f"claude-fictional-9-{date}"
+            return name, models.ModelInfo(
+                name=name, provider="anthropic", tokenizer=tokenizer
+            )
+
+        spanning = dict(
+            [
+                spec("20260101", models.CLAUDE_TOKENIZER_LEGACY),
+                spec("20260601", models.CLAUDE_TOKENIZER_OPUS_4_7),
+            ]
+        )
+        monkeypatch.setattr(models, "ANTHROPIC_MODELS", spanning)
+        assert "claude-fictional-9" not in models._build_anthropic_alias_map()  # noqa: SLF001
+
+        within = dict(
+            [
+                spec("20260101", models.CLAUDE_TOKENIZER_LEGACY),
+                spec("20260601", models.CLAUDE_TOKENIZER_LEGACY),
+            ]
+        )
+        monkeypatch.setattr(models, "ANTHROPIC_MODELS", within)
+        assert models._build_anthropic_alias_map() == {  # noqa: SLF001
+            "claude-fictional-9": "claude-fictional-9-20260601"
+        }
 
     def test_no_shorthand_resolves_across_the_boundary(self):
         """Every name that resolves must land on its own tokenizer generation."""

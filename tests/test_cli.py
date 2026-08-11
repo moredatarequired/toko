@@ -420,6 +420,22 @@ def test_invalid_format_is_a_usage_error_without_leaking_keys(tmp_path):
     assert "'jsonl' is not one of" in combined
 
 
+def test_invalid_default_format_in_config_is_a_clean_error(tmp_path):
+    config_dir = tmp_path / "toko"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text('[toko]\ndefault_format = "jsonl"\n')
+
+    result = runner.invoke(
+        app, ["--text", "hello"], env={"XDG_CONFIG_HOME": str(tmp_path)}
+    )
+
+    assert result.exit_code == 1
+    combined = _normalize_cli_output(result.stdout + result.stderr)
+    assert "Traceback" not in combined
+    assert "Invalid default_format 'jsonl'" in combined
+    assert "text, json, csv, tsv" in combined
+
+
 def test_partial_success_missing_hf_token(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     assert not os.environ.get("HF_TOKEN")

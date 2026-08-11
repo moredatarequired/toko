@@ -2,12 +2,20 @@
 
 import json
 import sys
+from enum import StrEnum
 from io import StringIO
 
 from rich.console import Console
 from rich.table import Table
 
 from toko.cost import format_cost
+
+
+class OutputFormat(StrEnum):
+    TEXT = "text"
+    JSON = "json"
+    CSV = "csv"
+    TSV = "tsv"
 
 
 def format_table(

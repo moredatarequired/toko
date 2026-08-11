@@ -3,7 +3,6 @@
 import contextlib
 import sys
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -16,7 +15,12 @@ from toko.config import Config, apply_api_keys, load_config
 from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
-from toko.formatters import format_file_table, format_output, is_stdin_empty
+from toko.formatters import (
+    OutputFormat,
+    format_file_table,
+    format_output,
+    is_stdin_empty,
+)
 from toko.models import list_models as get_model_list
 from toko.price_update import update_prices_if_stale
 
@@ -29,13 +33,6 @@ def is_stdout_tty() -> bool:
 def is_stderr_tty() -> bool:
     """Check if stderr is connected to a TTY."""
     return sys.stderr.isatty()
-
-
-class OutputFormat(StrEnum):
-    TEXT = "text"
-    JSON = "json"
-    CSV = "csv"
-    TSV = "tsv"
 
 
 app = typer.Typer(
@@ -188,9 +185,9 @@ def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
     return cli_models or [config.default_model]
 
 
-def _resolve_output_format(config: Config, requested: OutputFormat) -> str:
+def _resolve_output_format(config: Config, requested: OutputFormat) -> OutputFormat:
     if requested == OutputFormat.TEXT:
-        return config.default_format if is_stdout_tty() else "tsv"
+        return config.default_format if is_stdout_tty() else OutputFormat.TSV
     return requested
 
 

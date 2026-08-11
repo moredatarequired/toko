@@ -35,6 +35,13 @@ def test_dotted_openai_model_keeps_its_own_name_and_encoding():
     )
 
 
+def test_every_priced_verified_encoding_is_advertised():
+    advertised = set(models.POPULAR_OPENAI_MODELS)
+    verified = set(models.OPENAI_MODEL_ENCODINGS)
+    assert verified - advertised == models._UNPRICED_OPENAI_MODELS  # noqa: SLF001
+    assert advertised >= set(models._OPENAI_PREFIX_VARIANTS)  # noqa: SLF001
+
+
 def test_list_models_includes_core_providers():
     listed = models.list_models()
     assert "openai" in listed

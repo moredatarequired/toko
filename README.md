@@ -101,7 +101,7 @@ toko --header --format tsv --model gpt-5-mini --model claude-opus-4-5 --text "Th
 
 ```txt
 model	tokens	cost
-gpt-5-mini	4	$0.000005
+gpt-5-mini	4	$0.000001
 claude-opus-4-5	11	$0.000055
 ```
 
@@ -181,7 +181,8 @@ Two exceptions are worth knowing before you parse the output:
   with the number, rather than being stranded on stderr where the process on the other
   end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
   `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
-  read `tokens`, if a run of yours can hit an unrecognized model or a missing API key.
+  read `tokens`, if a run of yours can hit an unreleased OpenAI name or an xAI model
+  without `XAI_API_KEY` — the two cases that produce an approximate count.
 
 ## Library usage
 
@@ -204,9 +205,17 @@ print(result.count)  # 2
 | `caveat`      | `str \| None`   | Why the count is approximate, when it is.                                             |
 | `cost`        | `float \| None` | Estimated cost in USD, when pricing data covers the model.                            |
 
-Counts fall back to a stand-in tokenizer when the model's own is unreachable — an
-unrecognized model name, or a provider whose API key is missing — so check
-`approximate` before treating a count as exact:
+An unreachable tokenizer is usually an error, not a fallback: `count_tokens` raises
+`ValueError` when `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY` is missing, and when no
+provider can be detected from the name at all. Exactly two paths return an approximate
+count instead, so check `approximate` on those before treating a count as exact:
+
+- An OpenAI name Toko does not know yet — one that still reads as an OpenAI model, such
+  as `gpt-6` — is counted with `o200k_base`, the encoding every OpenAI model since
+  `gpt-4o` uses.
+- An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
+  unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
+  the call raises instead.
 
 ```python
 result = count_tokens("hello world", model="grok-4")
@@ -268,6 +277,9 @@ Some providers require API credentials to access token counting endpoints:
 
 - **Anthropic** – set `ANTHROPIC_API_KEY`
 - **Google Gemini/Gemma** – set `GOOGLE_API_KEY`
+- **xAI Grok** – set `XAI_API_KEY` for exact counts. It is the one provider that degrades instead of failing: without the key, Toko falls back to the Grok-1 tokenizer from `toko[transformers]` and marks the count approximate.
+
+OpenAI needs no key at all; those counts are computed locally with `tiktoken`.
 
 Some providers use tokenizers available on Hugging Face; these may need authentication to download the appropriate tokenizer.
 
@@ -298,7 +310,9 @@ patterns = ["*.log", "*.tmp", "**/__pycache__/*"]
 
 [toko.api_keys]
 anthropic = "sk-ant-..."
-openai = "sk-..."
+xai = "xai-..."
+# An "openai" entry is accepted and exported as OPENAI_API_KEY, but counting never
+# reads it: OpenAI models are tokenized locally with tiktoken.
 ```
 
 Config values act as defaults; command-line flags always win.
@@ -359,7 +373,7 @@ resolve a shorthand name that would span the two, so set it correctly.
 ## Caching and pricing data
 
 - Counts are cached in `$XDG_CACHE_HOME/toko/token_cache.db`.
-- Pricing data from `genai-prices` is stored alongside the package. When `auto_update_prices` is `true`, Toko silently refreshes the cache if data is older than a day. Fetch failures never abort your command.
+- Pricing starts from the data bundled inside the `genai-prices` dependency. Refreshed pricing is never written back into the installed package: it lands in the same cache directory as the counts, as `$XDG_CACHE_HOME/toko/prices.json`, and is loaded from there on later runs. When `auto_update_prices` is `true`, Toko silently refreshes that file if it is older than a day. Fetch failures never abort your command.
 
 ## Development tasks
 

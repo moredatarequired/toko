@@ -6,6 +6,19 @@ readme = "README.md"
 authors = [
     { name = "Hugh Wimberly", email = "hugh.wimberly@gmail.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["cli", "llm", "tiktoken", "token-count", "tokenizer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
 requires-python = ">=3.14"
 dependencies = [
     # Upper bound because toko::price_update reuses genai-prices' private payload
@@ -40,6 +53,12 @@ test = [
     "pytest>=8.4.2",
     "respx>=0.22.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/moredatarequired/toko"
+Repository = "https://github.com/moredatarequired/toko"
+Issues = "https://github.com/moredatarequired/toko/issues"
+Changelog = "https://github.com/moredatarequired/toko/blob/main/CHANGELOG.md"
 
 [project.scripts]
 toko = "toko.cli:app"
@@ -128,3 +147,5 @@ tag_format = "$version"
 version_scheme = "semver2"
 version_provider = "uv"
 update_changelog_on_bump = true
+# Pre-1.0: a breaking change bumps the minor, so cz cannot stamp 1.0.0 by accident.
+major_version_zero = true

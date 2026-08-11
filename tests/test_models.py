@@ -99,6 +99,37 @@ def test_silently_redirected_model_says_whose_count_it_is():
     assert "grok-4.3" in notice
 
 
+class TestGoogleLatestAliases:
+    """Google repoints its "-latest" aliases on two weeks' notice.
+
+    Pinning a target here means reporting some other model's count the moment
+    Google moves it, so the alias is sent to the API verbatim.
+    """
+
+    @pytest.mark.parametrize(
+        "alias",
+        [
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-flash-native-audio-latest",
+        ],
+    )
+    def test_a_latest_alias_is_passed_through_verbatim(self, alias):
+        resolved = models.get_model(alias)
+        assert resolved.provider == "google"
+        assert resolved.name == f"models/{alias}"
+
+    def test_no_latest_alias_is_pinned_to_a_version(self):
+        pinned = [a for a in models._GOOGLE_ALIAS_MAP if a.endswith("-latest")]  # noqa: SLF001
+        assert pinned == []
+
+    def test_dated_previews_still_resolve_to_their_stable_release(self):
+        assert models.get_model("gemini-2.5-pro-preview-06-05").name == (
+            "models/gemini-2.5-pro"
+        )
+
+
 def test_warning_about_a_retired_model_goes_to_stderr(capsys):
     models.warn_if_retired(models.get_model("claude-3-opus-20240229"))
     captured = capsys.readouterr()

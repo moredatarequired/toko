@@ -220,11 +220,7 @@ _GOOGLE_ALIAS_MAP: dict[str, str] = {
     "gemini-2.5-flash-image-preview-09-2025": "gemini-2.5-flash-image",
     "gemini-2.5-flash-lite-native-audio-preview-09-2025": "gemini-2.5-flash-lite",
     "gemini-2.5-flash-native-audio-preview-09-2025": "gemini-2.5-flash",
-    "gemini-2.5-flash-native-audio-latest": "gemini-2.5-flash",
     "gemini-exp-1206": "gemini-2.5-pro",
-    "gemini-flash-latest": "gemini-3.6-flash",
-    "gemini-flash-lite-latest": "gemini-3.5-flash-lite",
-    "gemini-pro-latest": "gemini-3.1-pro-preview",
 }
 
 GOOGLE_MODELS = {
@@ -237,6 +233,13 @@ def _normalize_google_model_name(name: str) -> str:
     if name.startswith("models/"):
         name = name.split("/", 1)[1]
     lowered = name.lower()
+    if lowered.endswith("-latest"):
+        # Google repoints its "-latest" aliases on its own schedule, announced
+        # with two weeks' notice; gemini-flash-latest alone has moved twice.
+        # Any target pinned here goes stale silently and reports another
+        # model's count, so send the alias to countTokens and let Google
+        # resolve it.
+        return lowered
     if lowered in GOOGLE_MODELS:
         return lowered
     alias = _GOOGLE_ALIAS_MAP.get(lowered)

@@ -49,11 +49,15 @@ def estimate_cost(
     provider_id = PROVIDER_ID_MAP.get(model_info.provider)
     price = None
     if provider_id:
-        price = _calculate_price(
-            usage, model_ref=model_info.name, provider_id=provider_id
-        )
-    if price is not None:
-        return price
+        # The name the user asked for comes first: alias resolution collapses
+        # variants onto a canonical name that genai-prices either prices
+        # differently or does not know at all (Google's "models/" prefix).
+        for model_ref in dict.fromkeys((model, model_info.name)):
+            price = _calculate_price(
+                usage, model_ref=model_ref, provider_id=provider_id
+            )
+            if price is not None:
+                return price
 
     openrouter_name = _convert_to_openrouter_name(model_info.name, model_info.provider)
     if openrouter_name is None:

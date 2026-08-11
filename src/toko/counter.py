@@ -53,9 +53,21 @@ def _configure_transformers_logging() -> None:
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
 
-# Models already warned about, so counting a directory does not repeat the same
-# approximation notice once per file.
-_APPROXIMATE_WARNED: set[str] = set()
+# (warning kind, model name) pairs already emitted, so counting a directory does not
+# repeat the same notice once per file. The kind is part of the key so that two
+# different warnings about one model cannot suppress each other.
+_WARNED_ONCE: set[tuple[str, str]] = set()
+
+
+def _warn_once(kind: str, model_name: str, message: str) -> None:
+    key = (kind, model_name)
+    if key in _WARNED_ONCE:
+        return
+    _WARNED_ONCE.add(key)
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+OPENAI_FALLBACK_ENCODING = "o200k_base"
 
 ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 ANTHROPIC_API_VERSION = "2023-06-01"
@@ -110,14 +122,6 @@ def _get_tiktoken_encoding_by_name(encoding_name: str) -> TokenizerProtocol | No
     return tokenizer
 
 
-def _count_with_tiktoken(text: str, model_name: str) -> int | None:
-    """Try to count tokens using tiktoken for the given model name."""
-    encoding = _get_tiktoken_encoding_for_model(model_name)
-    if encoding is None:
-        return None
-    return len(encoding.encode(text))
-
-
 def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
     handler = _PROVIDER_HANDLERS.get(model_info.provider)
     if handler is None:
@@ -128,22 +132,43 @@ def _count_with_provider(text: str, model_info: ModelInfo) -> CountResult:
     return handler(text, model_info)
 
 
-def _count_openai(_text: str, model_info: ModelInfo) -> CountResult:
-    raise ValueError(
-        f"tiktoken does not recognize model '{model_info.name}'. "
-        "Install the latest tiktoken or verify the model name."
+def _warn_openai_estimate(model_name: str, encoding_name: str) -> None:
+    _warn_once(
+        "openai-estimate",
+        model_name,
+        f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}",
     )
 
 
+def _count_openai(text: str, model_info: ModelInfo) -> CountResult:
+    # tiktoken's own table is lowercase, and so is the OPENAI_MODEL_ENCODINGS lookup
+    # in _build_openai_model; without matching here, 'GPT-5' would be called unknown.
+    encoding = _get_tiktoken_encoding_for_model(model_info.name.lower())
+    if encoding is not None:
+        return CountResult(len(encoding.encode(text)))
+
+    # Every OpenAI model since gpt-4o uses o200k_base, so an unreleased name is
+    # far better served by that than by refusing to count it.
+    encoding_name = model_info.encoding or OPENAI_FALLBACK_ENCODING
+    encoding = _get_tiktoken_encoding_by_name(encoding_name)
+    if encoding is None:
+        raise ValueError(
+            f"tiktoken could not load encoding '{encoding_name}' for model "
+            f"'{model_info.name}'. Install the latest tiktoken or verify the model name."
+        )
+    if model_info.encoding is not None:
+        return CountResult(len(encoding.encode(text)))
+
+    _warn_openai_estimate(model_info.name, encoding_name)
+    return CountResult(len(encoding.encode(text)), approximate=True)
+
+
 def _warn_approximate(model_name: str, reason: str) -> None:
-    """Tell the user on stderr that a count is an approximation, once per model."""
-    if model_name in _APPROXIMATE_WARNED:
-        return
-    _APPROXIMATE_WARNED.add(model_name)
-    print(
-        f"Warning: {reason}, so {model_name} was counted with the Grok-1 Hugging Face "
+    _warn_once(
+        "xai-approximate",
+        model_name,
+        f"{reason}, so {model_name} was counted with the Grok-1 Hugging Face "
         "tokenizer. This count is approximate, not exact.",
-        file=sys.stderr,
     )
 
 
@@ -431,21 +456,7 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> int:
             return cached
 
     model_info = get_model(model)
-
-    result: CountResult | None = None
-    if model_info.provider == "openai":
-        names_to_try = []
-        if model_info.name != model:
-            names_to_try.append(model_info.name)
-        names_to_try.append(model)
-        for name in names_to_try:
-            token_count = _count_with_tiktoken(text, name)
-            if token_count is not None:
-                result = CountResult(token_count)
-                break
-
-    if result is None:
-        result = _count_with_provider(text, model_info)
+    result = _count_with_provider(text, model_info)
 
     # Approximate counts are deliberately not cached. A cache hit returns before any
     # provider runs, so a stored approximation would be replayed on later runs without

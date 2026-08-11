@@ -48,14 +48,10 @@ def cache_dir(_cache_root):
 
 @pytest.fixture(autouse=True)
 def _reset_warned_models():
-    """Start every test from an empty set of already-warned-about models.
+    """Start every test from an empty warned-once registry.
 
-    Both registries are process-global, so a "warns once" assertion is otherwise
-    order-dependent.
+    It is process-global, so a "warns once" assertion is otherwise order-dependent.
     """
-    registries = (counter._APPROXIMATE_WARNED, counter._RETIRED_WARNED)  # noqa: SLF001
-    for registry in registries:
-        registry.clear()
+    counter._WARNED_ONCE.clear()  # noqa: SLF001
     yield
-    for registry in registries:
-        registry.clear()
+    counter._WARNED_ONCE.clear()  # noqa: SLF001

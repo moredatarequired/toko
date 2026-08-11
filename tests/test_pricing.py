@@ -2,8 +2,21 @@
 
 import pytest
 
+from toko import models
 from toko.cost import estimate_cost
 from toko.models import ANTHROPIC_MODELS, GOOGLE_MODELS, XAI_MODELS, list_models
+
+# Anthropic and xAI aliases resolve to a canonical name genai-prices already knows,
+# so trying the user's name first must stay invisible for them. Enumerated rather
+# than listed so a newly added alias is covered without touching this file.
+_VERSION_ALIASES = [
+    pytest.param(alias, canonical, id=alias)
+    for alias_map in (
+        models._ANTHROPIC_ALIAS_MAP,  # noqa: SLF001
+        models._XAI_ALIAS_MAP,  # noqa: SLF001
+    )
+    for alias, canonical in sorted(alias_map.items())
+]
 
 
 def _current(registry):
@@ -191,6 +204,12 @@ class TestPricingAccuracy:
         cost = estimate_cost(1000, "gemini-2.5-pro")
         assert cost is not None
         assert cost > 0
+
+    @pytest.mark.parametrize(("alias", "canonical"), _VERSION_ALIASES)
+    def test_alias_prices_match_its_canonical_model(self, alias, canonical):
+        # genai-prices matches model refs by prefix, so an alias could otherwise
+        # silently win against a different entry than its canonical name resolves to.
+        assert estimate_cost(1_000_000, alias) == estimate_cost(1_000_000, canonical)
 
     def test_claude_sonnet_pricing(self):
         """Test Claude 3.5 Sonnet pricing calculation."""

@@ -39,6 +39,13 @@ def test_dotted_openai_model_keeps_its_own_name_and_encoding():
     )
 
 
+def test_every_priced_verified_encoding_is_advertised():
+    advertised = set(models.POPULAR_OPENAI_MODELS)
+    verified = set(models.OPENAI_MODEL_ENCODINGS)
+    assert verified - advertised == models._UNPRICED_OPENAI_MODELS  # noqa: SLF001
+    assert advertised >= set(models._OPENAI_PREFIX_VARIANTS)  # noqa: SLF001
+
+
 def test_list_models_includes_core_providers():
     listed = models.list_models()
     assert "openai" in listed
@@ -202,14 +209,14 @@ class TestGoogleLatestAliases:
 
 
 def test_warning_about_a_retired_model_goes_to_stderr(capsys):
-    models.warn_if_retired(models.get_model("claude-3-opus-20240229"))
+    counter._warn_if_retired(models.get_model("claude-3-opus-20240229"))  # noqa: SLF001
     captured = capsys.readouterr()
     assert "retired" in captured.err
     assert captured.out == ""
 
 
 def test_no_warning_is_emitted_for_a_current_model(capsys):
-    models.warn_if_retired(models.get_model("claude-opus-5"))
+    counter._warn_if_retired(models.get_model("claude-opus-5"))  # noqa: SLF001
     assert capsys.readouterr().err == ""
 
 
@@ -247,7 +254,7 @@ class TestAnthropicTokenizerBoundary:
         monkeypatch.setitem(
             counter._PROVIDER_HANDLERS,  # noqa: SLF001
             "anthropic",
-            lambda _text, model_info: counts[model_info.tokenizer],
+            lambda _text, model_info: counter.CountResult(counts[model_info.tokenizer]),
         )
 
         text = "the boundary must hold"

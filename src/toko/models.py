@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 import typing
 from collections import defaultdict
 from dataclasses import dataclass
@@ -35,7 +34,7 @@ class ModelInfo:
 RETIREMENT_DATE_UNKNOWN = "unknown"
 
 
-_OPENAI_NAME_PATTERN = re.compile(r"(gpt-|o\d)")
+_OPENAI_NAME_PATTERN = re.compile(r"gpt-|o\d")
 
 
 def detect_provider(model: str) -> str | None:
@@ -366,16 +365,19 @@ OPENAI_MODEL_ENCODINGS = {
     "gpt-5.2-pro": "o200k_base",
 }
 
-# Listed by --list-models on top of tiktoken's own table. gpt-5.1-pro is omitted
-# because genai-prices has no entry for it.
-POPULAR_OPENAI_MODELS = (
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-5.1",
-    "gpt-5.2",
-    "gpt-5.2-pro",
+# Sub-variants tiktoken resolves by prefix but never lists in its own table.
+_OPENAI_PREFIX_VARIANTS = ("gpt-4.1-mini", "gpt-4.1-nano", "gpt-5-mini", "gpt-5-nano")
+
+# Verified for counting, but genai-prices has no entry, so not worth advertising.
+_UNPRICED_OPENAI_MODELS = frozenset({"gpt-5.1-pro"})
+
+# Listed by --list-models on top of tiktoken's own table. Derived so that adding an
+# entry above is enough to advertise it.
+POPULAR_OPENAI_MODELS = tuple(
+    sorted(
+        set(_OPENAI_PREFIX_VARIANTS)
+        | (OPENAI_MODEL_ENCODINGS.keys() - _UNPRICED_OPENAI_MODELS)
+    )
 )
 
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS}
@@ -564,12 +566,6 @@ def retirement_notice(model_info: ModelInfo) -> str | None:
             f"not {name}'s."
         )
     return f"{notice}; the {model_info.provider} API will reject or redirect it."
-
-
-def warn_if_retired(model_info: ModelInfo) -> None:
-    notice = retirement_notice(model_info)
-    if notice is not None:
-        print(f"Warning: {notice}", file=sys.stderr)
 
 
 def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:

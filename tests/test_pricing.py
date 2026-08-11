@@ -75,17 +75,13 @@ class TestPricingCoverage:
 
     def test_openai_models_have_pricing(self):
         """All current OpenAI models should have pricing data."""
-        # gpt-3.5-turbo-0301 is a dated snapshot tiktoken still lists; genai-prices
-        # prices only the undated name, so it is exempt alongside the retired engines.
-        exempt = RETIRED_OPENAI_MODELS | {"gpt-3.5-turbo-0301"}
-
         failures = []
         openai_models = list_models(include_retired=True).get("openai", [])
 
         current_prefixes = ("gpt-", "o", "text-embedding-3")
 
         for model_name in openai_models:
-            if model_name in exempt:
+            if model_name in RETIRED_OPENAI_MODELS:
                 continue
             if not any(model_name.startswith(prefix) for prefix in current_prefixes):
                 # Skip legacy completions and embeddings we no longer track pricing for

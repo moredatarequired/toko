@@ -405,12 +405,13 @@ POPULAR_OPENAI_MODELS = tuple(
 
 # Dead OpenAI engines that tiktoken still carries in MODEL_TO_ENCODING. They tokenize
 # fine, so counting is untouched; they are just hidden from --list-models by default.
-# gpt-3.5-turbo, gpt-4, and text-embedding-ada-002 are deliberately absent: still live.
+# Deliberately absent because they are still live: gpt-3.5-turbo (and its Azure
+# deployment alias gpt-35-turbo), gpt-4, text-embedding-ada-002, and the fine-tuning
+# bases babbage-002 and davinci-002 that replaced the original babbage and davinci.
 RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
     {
         "ada",
         "babbage",
-        "babbage-002",
         "code-cushman-001",
         "code-cushman-002",
         "code-davinci-001",
@@ -421,11 +422,9 @@ RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
         "curie",
         "cushman-codex",
         "davinci",
-        "davinci-002",
         "davinci-codex",
         "gpt-2",
         "gpt-3.5",
-        "gpt-35-turbo",
         "gpt2",
         "text-ada-001",
         "text-babbage-001",

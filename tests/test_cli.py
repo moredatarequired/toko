@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,13 @@ from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 
 runner = CliRunner()
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Rich splits styled help text with SGR codes whenever color is forced (as CI does)."""
+    return _ANSI_ESCAPE.sub("", text)
 
 
 def _invoke_cli(args: list[str], env_overrides: dict[str, str] | None = None):
@@ -283,7 +291,7 @@ def test_short_option_after_positional_path(tmp_path):
 def test_help_after_positional_path(tmp_path):
     result = runner.invoke(app, [str(tmp_path), "--help"])
     assert result.exit_code == 0
-    assert "Usage: toko" in result.stdout
+    assert "Usage: toko" in _strip_ansi(result.stdout)
 
 
 def test_bad_path_does_not_abort_good_paths(tmp_path):

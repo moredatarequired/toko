@@ -7,6 +7,7 @@ import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
+from urllib.parse import quote
 
 # Suppress transformers warning about missing PyTorch/TF/Flax
 # We only need tokenizers, not the full ML frameworks
@@ -65,6 +66,30 @@ def _warn_once(kind: str, model_name: str, message: str) -> None:
         return
     _WARNED_ONCE.add(key)
     print(f"Warning: {message}", file=sys.stderr)
+
+
+def _redact_key(message: str, api_key: str | None) -> str:
+    """Strip an API key out of text that is about to be shown to the user.
+
+    Transport errors embed whatever they were given: the request URL for a key sent
+    as a query parameter, the raw header bytes for a key httpx rejected. Both the
+    verbatim key and its percent-encoded form are replaced.
+    """
+    if not api_key:
+        return message
+    needles = {api_key, api_key.strip()}
+    needles |= {quote(needle, safe="") for needle in tuple(needles)}
+    for needle in sorted(needles, key=len, reverse=True):
+        if needle:
+            message = message.replace(needle, "***")
+    return message
+
+
+def _api_key_from_env(env_var: str) -> str | None:
+    # `export KEY=$(cat keyfile)` leaves a trailing newline, which httpx rejects
+    # outright as a header value rather than sending.
+    value = os.environ.get(env_var)
+    return value.strip() if value else value
 
 
 OPENAI_FALLBACK_ENCODING = "o200k_base"
@@ -179,7 +204,7 @@ def _warn_approximate(model_name: str, reason: str) -> None:
 
 
 def _count_xai(text: str, model_info: ModelInfo) -> CountResult:
-    api_key = os.environ.get("XAI_API_KEY")
+    api_key = _api_key_from_env("XAI_API_KEY")
     if api_key:
         try:
             return CountResult(_count_xai_via_api(text, model_info.name, api_key))
@@ -197,11 +222,12 @@ def _count_xai(text: str, model_info: ModelInfo) -> CountResult:
             "and ensure HF_TOKEN grants access to Xenova/grok-1-tokenizer."
         )
         if api_key and last_error is not None:
-            raise ValueError(f"{message} Last API error: {last_error}") from hf_error
+            detail = _redact_key(str(last_error), api_key)
+            raise ValueError(f"{message} Last API error: {detail}") from hf_error
         raise ValueError(message) from hf_error
 
     reason = (
-        f"the xAI token API was unavailable ({last_error})"
+        f"the xAI token API was unavailable ({_redact_key(str(last_error), api_key)})"
         if last_error is not None
         else "XAI_API_KEY is not set"
     )
@@ -223,7 +249,9 @@ def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise ValueError(f"xAI tokenization request failed: {exc}") from exc
+        raise ValueError(
+            f"xAI tokenization request failed: {_redact_key(str(exc), api_key)}"
+        ) from exc
 
     count = _extract_token_count(data)
     if count is None:
@@ -278,7 +306,7 @@ def _count_xai_via_transformers(text: str) -> int:
 
 
 def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = _api_key_from_env("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError(
             "ANTHROPIC_API_KEY environment variable not set. "
@@ -301,7 +329,8 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
         data = response.json()
     except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Anthropic model {model_info.name}: {exc}. "
+            f"Failed to count tokens for Anthropic model {model_info.name}: "
+            f"{_redact_key(str(exc), api_key)}. "
             "The model may not exist or may not be available with your API key."
         ) from exc
 
@@ -318,7 +347,7 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> CountResult:
 
 
 def _count_google(text: str, model_info: ModelInfo) -> CountResult:
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = _api_key_from_env("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError(
             "GOOGLE_API_KEY environment variable not set. "
@@ -327,12 +356,15 @@ def _count_google(text: str, model_info: ModelInfo) -> CountResult:
     url = f"{GOOGLE_COUNT_URL_BASE}/{model_info.name}:countTokens"
     payload = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
     try:
-        response = httpx.post(url, params={"key": api_key}, json=payload, timeout=10.0)
+        response = httpx.post(
+            url, headers={"x-goog-api-key": api_key}, json=payload, timeout=10.0
+        )
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
         raise ValueError(
-            f"Failed to count tokens for Google model {model_info.name}: {exc}. "
+            f"Failed to count tokens for Google model {model_info.name}: "
+            f"{_redact_key(str(exc), api_key)}. "
             "The model may not exist or may not support token counting."
         ) from exc
 

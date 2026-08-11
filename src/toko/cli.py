@@ -72,6 +72,8 @@ app = typer.Typer(
     no_args_is_help=False,
     invoke_without_command=True,
     cls=TokoGroup,
+    # Frame locals hold API keys; keep them out of any traceback Typer renders.
+    pretty_exceptions_show_locals=False,
 )
 
 

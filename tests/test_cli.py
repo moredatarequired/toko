@@ -53,7 +53,7 @@ def test_version():
 def test_list_models(monkeypatch):
     monkeypatch.setattr(
         "toko.cli.get_model_list",
-        lambda: {
+        lambda **_kwargs: {
             "openai": ["gpt-4.1", "gpt-5"],
             "google": ["models/gemini-flash-latest"],
             "huggingface": ["meta-llama/Llama-3.2-1B"],
@@ -69,6 +69,28 @@ def test_list_models(monkeypatch):
         "openai/gpt-4.1",
         "openai/gpt-5",
     ]
+
+
+def test_list_models_hides_retired_engines_without_the_flag():
+    default = _invoke_cli(["--list-models"])
+    with_retired = _invoke_cli(["--list-models", "--include-retired"])
+
+    assert default.exit_code == 0
+    assert with_retired.exit_code == 0
+    assert "openai/text-davinci-003" not in default.stdout.splitlines()
+    assert "openai/text-davinci-003" in with_retired.stdout.splitlines()
+    assert "openai/gpt-4" in default.stdout.splitlines()
+
+
+def test_retired_models_still_count(tmp_path):
+    """--include-retired only shortens the listing; counting is untouched."""
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(["--format", "csv", "-m", "text-davinci-003", str(sample)])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in _strip_ansi(result.stdout)
 
 
 @pytest.mark.slow
@@ -105,6 +127,56 @@ def test_clear_cache_removes_the_price_cache():
     assert result.exit_code == 0
     assert not get_price_data_path().exists()
     assert not get_price_cache_path().exists()
+
+
+# Each subcommand echoes its marker before doing any work, so the marker proves the
+# name was dispatched even when the work behind it fails.
+@pytest.mark.parametrize(
+    ("args", "marker"),
+    [
+        (["--total-only", "clear-cache"], "Cache cleared"),
+        (["-m", "gpt-5", "clear-cache"], "Cache cleared"),
+        (["--format", "csv", "clear-cache"], "Cache cleared"),
+        (["--format=csv", "clear-cache"], "Cache cleared"),
+        (["-mgpt-5", "clear-cache"], "Cache cleared"),
+    ],
+)
+def test_global_option_before_a_subcommand_still_dispatches(args, marker):
+    """A leading global option must not hide the subcommand name behind PATHS."""
+    result = _invoke_cli(args)
+
+    output = _strip_ansi(result.stdout)
+    assert "Path not found" not in output + _strip_ansi(result.stderr)
+    assert marker in output
+
+
+@respx.mock
+def test_global_option_before_update_prices_still_dispatches():
+    """The other subcommand, dispatched behind a global option without the network."""
+    respx.get(PRICE_DATA_URL).mock(return_value=httpx.Response(503))
+
+    result = _invoke_cli(["-m", "gpt-5", "update-prices"])
+
+    assert "Path not found" not in _strip_ansi(result.stdout + result.stderr)
+    assert "Fetching latest pricing data" in _strip_ansi(result.stdout)
+
+
+def test_subcommand_name_as_an_option_value_is_not_dispatched(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(["-m", "clear-cache", str(sample)])
+
+    assert "Cache cleared" not in _strip_ansi(result.stdout)
+    assert "clear-cache" in _strip_ansi(result.stderr)
+
+
+def test_subcommand_name_after_a_double_dash_is_a_path():
+    result = _invoke_cli(["--", "clear-cache"])
+
+    assert result.exit_code == 1
+    assert "Cache cleared" not in _strip_ansi(result.stdout)
+    assert "Path not found: clear-cache" in _strip_ansi(result.stderr)
 
 
 @pytest.mark.parametrize("subcommand", ["update-prices", "clear-cache"])

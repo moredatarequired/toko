@@ -214,6 +214,10 @@ if result.approximate:
     print(f"estimate only: {result.caveat}")
 ```
 
+`caveat` is a human-readable explanation to show a person and is explicitly **not**
+machine-parseable — its wording, and for an aggregate its internal punctuation, may change
+at any time, so branch on the `approximate` boolean rather than parsing `caveat`.
+
 `TokenCount` is deliberately not int-like: it does not implement `__int__`/`__index__`
 or arithmetic, and it compares equal only to another `TokenCount` with the same fields,
 so use `result.count` wherever you need the number. Most misuses fail loudly — `+`,

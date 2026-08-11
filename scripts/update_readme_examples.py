@@ -8,9 +8,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README_PATH = REPO_ROOT / "README.md"
-# Pinned rather than taken from $SHELL: a different shell can print different prompts
-# and startup noise, which would churn every regenerated block.
-SHELL = "/bin/zsh"
 ALLOWED_LANGUAGES = {"txt", "json", "csv", "tsv"}
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])")
 
@@ -37,7 +34,7 @@ def run_command(command: str) -> str:
         chunks.append(data.decode("utf-8", "ignore"))
         return b""
 
-    pty.spawn([SHELL, "-lc", shell_command], reader)
+    pty.spawn(["/bin/zsh", "-lc", shell_command], reader)
     output = "".join(chunks)
     output = ANSI_RE.sub("", output)
     return output.rstrip("\r\n")
@@ -60,11 +57,6 @@ def iter_code_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
 
 
 def update_readme() -> None:
-    # pty.spawn reports a missing shell as a traceback written to the pty, which would
-    # be captured and pasted into the tracked README as if it were command output.
-    if not os.access(SHELL, os.X_OK):
-        raise RuntimeError(f"{SHELL} is required to regenerate the README examples")
-
     lines = README_PATH.read_text().splitlines()
     code_blocks = list(iter_code_blocks(lines))
 

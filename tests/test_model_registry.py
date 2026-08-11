@@ -37,6 +37,130 @@ def _registry(*documents: str) -> models.Registry:
     )
 
 
+def _registry_listing(*, include_retired: bool = False) -> dict[str, list[str]]:
+    """Keep only the --list-models entries that models.toml is responsible for.
+
+    tiktoken and the optional transformers extra contribute the rest, and both
+    move independently of this repo.
+    """
+    from_registry = {info.name for info in models.MODELS.values()}
+    return {
+        provider: listed
+        for provider, names in models.list_models(
+            include_retired=include_retired
+        ).items()
+        if (listed := [name for name in names if name in from_registry])
+    }
+
+
+GOLDEN_HINT = (
+    "src/toko/data/models.toml no longer produces the --list-models entries this "
+    "test pins. If you added, retired or unlisted a model on purpose, update "
+    "GOLDEN_LISTING / GOLDEN_LISTING_WITH_RETIRED below to match."
+)
+
+GOLDEN_LISTING = {
+    "anthropic": [
+        "claude-fable-5",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6",
+        "claude-sonnet-5",
+    ],
+    "google": [
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-image",
+        "models/gemini-2.5-flash-lite",
+        "models/gemini-2.5-pro",
+        "models/gemini-3.1-flash-lite",
+        "models/gemini-3.1-pro-preview",
+        "models/gemini-3.5-flash",
+        "models/gemini-3.5-flash-lite",
+        "models/gemini-3.6-flash",
+    ],
+    "openai": [
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.2-pro",
+    ],
+    "xai": ["grok-4.3", "grok-4.5", "grok-build-0.1"],
+}
+
+GOLDEN_LISTING_WITH_RETIRED = {
+    "anthropic": [
+        "claude-3-5-haiku-20241022",
+        "claude-3-5-sonnet-20240620",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-haiku-20240307",
+        "claude-3-opus-20240229",
+        "claude-fable-5",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-1-20250805",
+        "claude-opus-4-20250514",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6",
+        "claude-sonnet-5",
+    ],
+    "google": [
+        "models/gemini-2.0-flash-001",
+        "models/gemini-2.0-flash-lite-001",
+        "models/gemini-2.0-flash-preview-image-generation",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-image",
+        "models/gemini-2.5-flash-lite",
+        "models/gemini-2.5-pro",
+        "models/gemini-3-pro-preview",
+        "models/gemini-3.1-flash-lite",
+        "models/gemini-3.1-flash-lite-preview",
+        "models/gemini-3.1-pro-preview",
+        "models/gemini-3.5-flash",
+        "models/gemini-3.5-flash-lite",
+        "models/gemini-3.6-flash",
+    ],
+    "openai": [
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.2-pro",
+    ],
+    "xai": [
+        "grok-2-1212",
+        "grok-2-vision-1212",
+        "grok-3",
+        "grok-3-mini",
+        "grok-4",
+        "grok-4-0709",
+        "grok-4-1-fast-non-reasoning",
+        "grok-4-1-fast-reasoning",
+        "grok-4-fast-non-reasoning",
+        "grok-4-fast-reasoning",
+        "grok-4.3",
+        "grok-4.5",
+        "grok-build-0.1",
+        "grok-code-fast-1",
+    ],
+}
+
+
 class TestPackagedRegistry:
     def test_the_registry_ships_inside_the_package(self):
         resource = resources.files("toko.data").joinpath(models.REGISTRY_FILENAME)
@@ -70,6 +194,14 @@ class TestPackagedRegistry:
         assert grok_4.retired == "2026-05-15"
         assert grok_4.redirects_to == "grok-4.3"
         assert grok_4.encoding == "o200k_base"
+
+    def test_the_listing_is_exactly_what_the_registry_declares(self):
+        assert _registry_listing() == GOLDEN_LISTING, GOLDEN_HINT
+
+    def test_retired_models_appear_only_when_asked_for(self):
+        assert _registry_listing(include_retired=True) == GOLDEN_LISTING_WITH_RETIRED, (
+            GOLDEN_HINT
+        )
 
     def test_a_packaged_registry_that_is_not_utf8_fails_loudly(self, monkeypatch):
         """An install bug must surface as a clear error, not a decode traceback."""

@@ -242,9 +242,8 @@ alone. Available fields are `name`, `provider`, `encoding`, `api_endpoint`,
 only). `aliases` is the one field that accumulates rather than replaces: your
 list is appended to the shipped one, so adding a nickname cannot quietly
 unpublish the alternate names a model already answered to. A malformed file —
-including one that is not valid UTF-8 — is reported on
-stderr and skipped, and Toko falls back to the registry it shipped with rather
-than failing to run.
+including one that is not valid UTF-8 — is reported on stderr and skipped, and
+Toko falls back to the registry it shipped with rather than failing to run.
 
 `tokenizer` matters for Anthropic: Claude Opus 4.7 changed tokenizer, and the
 same text counts roughly 30% higher on 4.7-generation models. Toko refuses to

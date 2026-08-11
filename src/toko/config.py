@@ -56,12 +56,6 @@ _TYPE_NAMES: dict[type, str] = {
 }
 
 
-def _redact_leaf(key: str) -> str:
-    """Replace the last dotted component, which may itself be a secret."""
-    head, separator, _ = key.rpartition(".")
-    return f"{head}{separator}<redacted>" if separator else key
-
-
 def _require_type[T](
     value: object,
     expected: type[T],
@@ -72,16 +66,11 @@ def _require_type[T](
 ) -> T:
     if isinstance(value, expected):
         return value
-    # show_value=False for secrets, and the message reaches the terminal. Under
-    # [toko.api_keys] the key itself is the secret, so the leaf name goes too and the
-    # message only says where the mistake is.
-    if show_value:
-        raise ValueError(
-            f"Invalid {key} {value!r} in {config_path}"
-            f" (expected {_TYPE_NAMES[expected]})"
-        )
+    # show_value=False for secrets, and the message reaches the terminal. Callers pass
+    # a key that is already safe to print, so nothing here has to find the secret.
+    shown_value = f" {value!r}" if show_value else ""
     raise ValueError(
-        f"Invalid {_redact_leaf(key)} in {config_path}"
+        f"Invalid {key}{shown_value} in {config_path}"
         f" (expected {_TYPE_NAMES[expected]})"
     )
 
@@ -156,11 +145,13 @@ def load_config() -> Config:
         config_path=config_path,
         show_value=False,
     )
-    for name, key_value in api_keys.items():
+    # Under [toko.api_keys] the name is as secret as the value, and a key can contain
+    # dots, so the name never goes into the message at all.
+    for key_value in api_keys.values():
         _require_type(
             key_value,
             str,
-            key=f"api_keys.{name}",
+            key="api_keys.<redacted>",
             config_path=config_path,
             show_value=False,
         )

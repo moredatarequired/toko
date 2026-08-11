@@ -124,6 +124,16 @@ def test_rejected_api_key_message_never_echoes_the_key_name(write_config):
     assert SENTINEL not in str(excinfo.value)
 
 
+def test_rejected_api_key_message_never_echoes_a_dotted_key_name(write_config):
+    """JWT-shaped keys carry dots, so redaction cannot split on the last one."""
+    write_config(f'[toko.api_keys]\n"sk-ant.{SENTINEL}.XYZZY" = 123\n')
+    with pytest.raises(
+        ValueError, match=r"Invalid api_keys\.<redacted> in .*a string"
+    ) as excinfo:
+        load_config()
+    assert SENTINEL not in str(excinfo.value)
+
+
 def test_api_keys_written_as_a_bare_string_never_echo_the_value(write_config):
     """The likeliest misspelling puts the key itself where the table belongs."""
     write_config(f'[toko]\napi_keys = "{SENTINEL}"\n')

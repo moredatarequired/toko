@@ -1232,7 +1232,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=4.57.1" },
     { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.57.1" },
-    { name = "typer", specifier = ">=0.20.0" },
+    { name = "typer", specifier = ">=0.20.0,<0.26" },
 ]
 provides-extras = ["transformers", "mistral", "all"]
 

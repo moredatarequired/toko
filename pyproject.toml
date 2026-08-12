@@ -17,7 +17,10 @@ dependencies = [
     "pathspec>=0.12.1",
     "rich>=14.2.0",
     "tiktoken>=0.12.0",
-    "typer>=0.20.0",
+    # Upper bound because toko::cli's TokoGroup assumes typer builds its params as
+    # external click objects; 0.26.0 vendored click as typer._click, so the isinstance
+    # check finds no options and subcommands after a global option misroute to paths.
+    "typer>=0.20.0,<0.26",
 ]
 
 [dependency-groups]

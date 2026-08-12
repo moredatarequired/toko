@@ -584,7 +584,7 @@ wheels = [
 
 [[package]]
 name = "mistral-common"
-version = "1.8.6"
+version = "1.11.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -596,9 +596,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/3d/2ce630343f4574ac5150e355dc15bf95e8ce18954aa0f5949e195ffde382/mistral_common-1.8.6.tar.gz", hash = "sha256:c61702720093f7a06508e81923917b04e35062b9ff396b8512b9c4d1139767ee", size = 6332366, upload-time = "2025-11-30T22:03:37.698Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6f/d0/61b2c24be62a8e2f0e46a1c16de23de386c8644408da249bc66768a6681b/mistral_common-1.11.7.tar.gz", hash = "sha256:d3b79583595cf6d96a2ab33e42cb8449768383147b8c56cac5a4f193be19d20d", size = 6387178, upload-time = "2026-07-23T09:21:17.206Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/eb/56ba11528da93b890fe985cbbaa17955064ff4b7019dd18566e3c3559b9e/mistral_common-1.8.6-py3-none-any.whl", hash = "sha256:dd8c0e55b397e8167751eb3da147cf23fd970824673ca0e260aa58c888be1b0a", size = 6515009, upload-time = "2025-11-30T22:03:35.108Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/a4/bc2850eb33cc2d633a21f51530756350dca325ee69b07c9202552f2bbadb/mistral_common-1.11.7-py3-none-any.whl", hash = "sha256:a9511b88eacacbe7dacddd9d3498c1739f56847b7fdddbd5a22e7844fd9def95", size = 6553583, upload-time = "2026-07-23T09:21:19.818Z" },
 ]
 
 [package.optional-dependencies]

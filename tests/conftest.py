@@ -24,11 +24,6 @@ warnings.filterwarnings(
     message="builtin type swigvarlink has no __module__ attribute",
     category=DeprecationWarning,
 )
-warnings.filterwarnings(
-    "ignore",
-    message="Calling `MistralTokenizer.from_model(..., strict=False)` is deprecated",
-    category=FutureWarning,
-)
 
 
 @pytest.fixture(autouse=True)

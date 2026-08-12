@@ -3,6 +3,9 @@
 import csv
 import io
 import json
+import re
+
+import pytest
 
 from toko.formatters import format_file_table, format_output
 from toko.result import TokenCount
@@ -261,3 +264,92 @@ def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
     )
     assert per_file == ["a.txt\t4\tN/A", "b.txt\t9\tN/A"]
     assert total == "TOTAL\t13\tN/A"
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The formatters force a terminal so rich still styles the cells; the layout is what
+# these assert, so the colors come off first.
+_BOX_DRAWING = re.compile(r"[─-╿]")
+
+
+def _plain_lines(output: str) -> list[str]:
+    return _ANSI.sub("", output).splitlines()
+
+
+def test_text_table_has_no_borders():
+    output = format_output(
+        {"gpt-5": _counted(12), "gpt-4.1": _counted(1234, model="gpt-4.1")}
+    )
+    assert _plain_lines(output) == [
+        "Model    Tokens",
+        "gpt-5        12",
+        "gpt-4.1   1,234",
+    ]
+
+
+def test_text_table_without_a_header_starts_at_the_first_row():
+    output = format_output(
+        {"gpt-5": _counted(12), "gpt-4.1": _counted(1234, model="gpt-4.1")},
+        include_header=False,
+    )
+    assert _plain_lines(output) == ["gpt-5       12", "gpt-4.1  1,234"]
+
+
+def test_text_table_header_is_bold(monkeypatch):
+    # Without a rule under it, bold is all that separates the header from the data, so
+    # this test keeps the ANSI. rich drops every style under TERM=dumb/unknown, hence
+    # the pinned terminal.
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    header, *rows = format_output(
+        {"gpt-5": _counted(12), "gpt-4.1": _counted(1234, model="gpt-4.1")}
+    ).splitlines()
+    assert _ANSI.sub("", header) == "Model    Tokens"
+    assert header.startswith("\x1b[1m")
+    assert "\x1b[1m" not in "".join(rows)
+
+
+def test_file_text_table_has_no_borders():
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}, "longer/b.txt": {"gpt-5": _counted(1234)}}
+    )
+    assert _plain_lines(output) == [
+        "File          gpt-5",
+        "a.txt             4",
+        "longer/b.txt  1,234",
+        "TOTAL         1,238",
+    ]
+
+
+def test_file_text_table_without_a_header_starts_at_the_first_row():
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}, "longer/b.txt": {"gpt-5": _counted(1234)}},
+        include_header=False,
+    )
+    assert _plain_lines(output) == [
+        "a.txt             4",
+        "longer/b.txt  1,234",
+        "TOTAL         1,238",
+    ]
+
+
+@pytest.mark.parametrize("show_costs", [False, True])
+@pytest.mark.parametrize("total_only", [False, True])
+@pytest.mark.parametrize("include_header", [False, True])
+def test_every_text_table_variant_is_unruled_and_flush_left(
+    show_costs, total_only, include_header
+):
+    output = format_file_table(
+        {
+            "a.txt": {"gpt-5": _counted(4, cost=0.0002)},
+            "b.txt": {"gpt-5": _counted(9), "gpt-4.1": _counted(11, model="gpt-4.1")},
+        },
+        total_only=total_only,
+        show_costs=show_costs,
+        include_header=include_header,
+    )
+    lines = _plain_lines(output)
+    assert not _BOX_DRAWING.search("\n".join(lines))
+    # With costs the header spans two lines and its first one is blank under "File", so
+    # the row that proves nothing indents the body is the last one.
+    assert lines[-1].startswith("TOTAL")

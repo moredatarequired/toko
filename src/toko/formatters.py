@@ -17,6 +17,14 @@ if TYPE_CHECKING:
     from toko.result import TokenCount
 
 
+def _plain_table(*, include_header: bool) -> Table:
+    # No box and no edge padding, so rows read like conventional CLI output: columns
+    # separated by spaces and starting at column 0.
+    return Table(
+        show_header=include_header, header_style="bold", box=None, pad_edge=False
+    )
+
+
 def format_table(
     results: dict[str, TokenCount],
     *,
@@ -24,7 +32,7 @@ def format_table(
     include_header: bool = True,
 ) -> str:
     """Format results as a table using rich."""
-    table = Table(show_header=include_header, header_style="bold")
+    table = _plain_table(include_header=include_header)
     table.add_column("Model", style="cyan")
     table.add_column("Tokens", justify="right", style="green")
 
@@ -311,7 +319,7 @@ def _format_file_table_text(
     include_header: bool,
     show_costs: bool,
 ) -> str:
-    table = Table(show_header=include_header, header_style="bold")
+    table = _plain_table(include_header=include_header)
     table.add_column("File", style="cyan", no_wrap=False)
 
     if show_costs:

@@ -131,7 +131,6 @@ filterwarnings = [
     "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
-    "ignore:Calling `MistralTokenizer.from_model\\(\\.\\.\\., strict=False\\)` is deprecated:FutureWarning",
 ]
 
 [tool.coverage.run]

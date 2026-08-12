@@ -142,6 +142,48 @@ def _api_key_from_env(env_var: str) -> str | None:
 
 OPENAI_FALLBACK_ENCODING = "o200k_base"
 
+# The tokenizer each named Mistral release shipped with, as a
+# "<mistral-common classmethod>[+flag...]" spec for _load_mistral_tokenizer. A name has
+# an entry here only if it identifies one release, so the tokenizer cannot drift out from
+# under it; rolling names fall through to MISTRAL_FALLBACK_TOKENIZER instead. The dated
+# entries mirror mistral-common's own MODEL_NAME_TO_TOKENIZER_CLS, which
+# test_mistral_specs_match_mistral_common checks entry by entry -- toko keeps a copy
+# because that table serves the deprecated `from_model` and shrinks with it, 1.10.0
+# having already dropped every undated key below.
+MISTRAL_TOKENIZERS = {
+    "codestral-22b": "v3",
+    "codestral-2405": "v3",
+    "codestral-mamba-2407": "v3",
+    "ministral-8b-2410": "v3+tekken",
+    "mistral-embed": "v1",
+    "mistral-large-2402": "v2",
+    "mistral-large-2407": "v3",
+    "mistral-large-2411": "v7",
+    "mistral-medium-2312": "v1",
+    "mistral-nemo": "v3+tekken",
+    "mistral-small-2312": "v2",
+    "mistral-small-2402": "v2",
+    "mistral-small-2409": "v3+tekken",
+    "mistral-tiny-2312": "v2",
+    "mistral-tiny-2407": "v3",
+    "open-mistral-7b": "v1",
+    "open-mistral-nemo-2407": "v3+tekken",
+    "open-mixtral-8x22b": "v3",
+    "open-mixtral-8x22b-2404": "v3",
+    "open-mixtral-8x7b": "v1",
+    "pixtral": "v3+tekken+mm",
+    "pixtral-12b-2409": "v3+tekken+mm",
+    "pixtral-large": "v7+mm",
+    "pixtral-large-2411": "v7+mm",
+}
+
+# mistral-common bundles nothing newer than November 2024, so no rolling alias
+# ("mistral-large-latest") and no recent release can be counted with the tokenizer it
+# actually ships. Every Mistral model since Nemo tokenizes with tekken, so tekken is a
+# far better answer for an unrecognised name than refusing to count it -- flagged
+# approximate, as the vocabulary is right but the tokenizer revision is not.
+MISTRAL_FALLBACK_TOKENIZER = "v3+tekken"
+
 ANTHROPIC_COUNT_URL = "https://api.anthropic.com/v1/messages/count_tokens"
 ANTHROPIC_API_VERSION = "2023-06-01"
 GOOGLE_COUNT_URL_BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -441,6 +483,35 @@ def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
     return _exact(total_tokens, model_info)
 
 
+def _warn_mistral_approximate(model_name: str) -> str:
+    caveat = (
+        f"mistral-common ships no tokenizer for {model_name}, so it was counted with "
+        "the bundled tekken tokenizer that every Mistral model since Nemo uses. This "
+        "count is approximate, not exact. The bundled tokenizers stop at November 2024, "
+        "so only a release mistral-common has one for, such as mistral-large-2411, "
+        "counts exactly."
+    )
+    _warn_once("mistral-approximate", model_name, caveat)
+    return caveat
+
+
+def _load_mistral_tokenizer(spec: str) -> MistralTokenizer:
+    """Build one of the tokenizers mistral-common bundles, named as in MISTRAL_TOKENIZERS.
+
+    The classmethods are the supported offline path: each reads a tokenizer file shipped
+    inside the package, so a count needs no network access and no Hugging Face token.
+    mistral-common's own name lookup, `MistralTokenizer.from_model`, is not usable
+    instead -- it is deprecated and goes away in mistral-common 1.13.0.
+    """
+    from mistral_common.tokens.tokenizers.mistral import (  # noqa: PLC0415
+        MistralTokenizer,
+    )
+
+    version, *flags = spec.split("+")
+    options = {f"is_{flag}": True for flag in flags}
+    return cast("MistralTokenizer", getattr(MistralTokenizer, version)(**options))
+
+
 def _count_mistral(text: str, model_info: ModelInfo) -> TokenCount:
     if not HAS_MISTRAL:
         raise ValueError(
@@ -455,19 +526,21 @@ def _count_mistral(text: str, model_info: ModelInfo) -> TokenCount:
         from mistral_common.protocol.instruct.request import (  # noqa: PLC0415
             ChatCompletionRequest,
         )
-        from mistral_common.tokens.tokenizers.mistral import (  # noqa: PLC0415
-            MistralTokenizer,
-        )
     except Exception as e:
         raise ValueError(f"Failed to import mistral-common: {e}") from e
 
-    cache_key = f"mistral:{model_info.name}"
-    if cache_key not in _TOKENIZER_CACHE:
-        _TOKENIZER_CACHE[cache_key] = MistralTokenizer.from_model(model_info.name)
-    tokenizer = cast("MistralTokenizer", _TOKENIZER_CACHE[cache_key])
+    known = MISTRAL_TOKENIZERS.get(model_info.name.lower())
+    spec = known or MISTRAL_FALLBACK_TOKENIZER
+    caveat = None if known else _warn_mistral_approximate(model_info.name)
 
+    cache_key = f"mistral:{spec}"
+    if cache_key not in _TOKENIZER_CACHE:
+        _TOKENIZER_CACHE[cache_key] = _load_mistral_tokenizer(spec)
+    tokenizer = cast("MistralTokenizer", _TOKENIZER_CACHE[cache_key])
     request = ChatCompletionRequest(messages=[UserMessage(content=text)])
     tokens = tokenizer.encode_chat_completion(request).tokens
+    if caveat is not None:
+        return _approximate(len(tokens), model_info, caveat)
     return _exact(len(tokens), model_info)
 
 

@@ -398,12 +398,18 @@ def test_main_exits_nonzero_when_an_example_is_left_stale(
     tmp_path, monkeypatch, capsys
 ):
     """The exit code is the only thing that makes the guard visible to CI or a human."""
-    readme, original = _write_example(tmp_path, "echo 'Error: nope'")
+    # printf assembles the reason, so "Error: nope" appears nowhere in the command. A
+    # report that echoed only the command, or that listed only the reasons, satisfies
+    # one of the assertions below but never both.
+    command = "printf 'Error: %s\\n' nope"
+    readme, original = _write_example(tmp_path, command)
     _point_script_at(monkeypatch, readme, TEST_SHELL)
 
     assert update_readme_examples.main() == 1
 
-    assert "Error: nope" in capsys.readouterr().err
+    report = capsys.readouterr().err
+    assert "Error: nope" in report
+    assert f"$ {command}" in report
     assert readme.read_text() == original
 
 

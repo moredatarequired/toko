@@ -35,6 +35,13 @@ uv run cz bump --dry-run
 Going to 1.0.0 is a deliberate act: drop `major_version_zero`, or pass an explicit
 `--increment MAJOR`.
 
+The bump commit runs the pre-commit hooks, and lefthook's `format markdown` job
+re-indents the `BREAKING CHANGE` continuation lines cz emits flush-left. That cancels
+cz's de-indentation, `stage_fixed: true` re-stages, and the commit lands looking
+unremarkable. It only cancels if `just setup` installed the hooks; without them the
+changelog lands de-indented. Either way, `uv run cz changelog` never comes back clean
+on `main`, so an empty diff is not a check that the changelog is current.
+
 ## 3. Push the commit, then the tag
 
 ```sh
@@ -56,10 +63,12 @@ The tag push is what releases. Nothing is published until it lands.
    file that the wheel happens to carry but the sdist omits.
 1. **Publish** — `uv publish` to PyPI.
 
-The `[all]` extras are required, not incidental: `tests/smoke_test.py` asserts
-`len(models_by_provider) > 4`, and the Mistral and HuggingFace-backed providers only
-register when `mistral-common` and `transformers` are installed. A bare install would
-fail that assertion.
+The extras are required, not incidental: `tests/smoke_test.py` asserts
+`len(models_by_provider) > 4`, and a bare install lists exactly 4 providers. Installing
+`transformers` is what clears the bar — `list_models()` then also registers `llama`,
+`deepseek`, `qwen`, and `huggingface`, taking the count to 8. `mistral-common` does not
+move it: `list_models()` has no `mistral_common` branch, so the `mistral` extra rides
+along in `[all]` for counting Mistral models, not for this assertion.
 
 Publishing uses [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/), so
 there is no API token to rotate. The workflow's `pypi` environment supplies the OIDC

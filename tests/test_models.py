@@ -92,6 +92,18 @@ def test_optional_groups_use_module_detection(monkeypatch):
     assert extra_status["transformers"] is False
 
 
+def test_mistral_models_are_listed_only_when_mistral_common_is_installed(monkeypatch):
+    monkeypatch.setattr(models, "_has_module", lambda name: name == "mistral_common")
+    listed = models.list_models()
+    assert set(listed["mistral"]) == set(models.MISTRAL_MODELS)
+    # The caveat on an approximate count names a dated release to reach for, so that
+    # name has to be one --list-models shows.
+    assert "mistral-large-2411" in listed["mistral"]
+
+    monkeypatch.setattr(models, "_has_module", lambda _: False)
+    assert "mistral" not in models.list_models()
+
+
 def test_current_models_are_listed_and_retired_ones_are_hidden():
     listed = models.list_models()
     assert "claude-opus-5" in listed["anthropic"]

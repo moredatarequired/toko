@@ -64,6 +64,26 @@ def test_rolling_names_are_approximate_and_dated_ones_are_not():
     assert dated.caveat is None
 
 
+@pytest.mark.parametrize(
+    ("undated", "dated"),
+    [
+        ("mistral-large-v1", "mistral-large-2402"),
+        ("mistral-small-v1", "mistral-small-2402"),
+    ],
+)
+def test_v1_names_count_exactly_as_their_dated_release(undated, dated):
+    """The two undated names that still name one release, keyed from 1.8.6's table.
+
+    mistral-common dropped them in 1.10.0 along with the genuinely rolling undated keys,
+    but these two are unambiguous -- 1.8.6 mapped both to the same v2 tokenizer as the
+    2402 pair -- so toko keeps counting them exactly instead of falling back to tekken.
+    """
+    assert MISTRAL_TOKENIZERS[undated] == MISTRAL_TOKENIZERS[dated]
+    counted = count_tokens(TEXT, undated, use_cache=False)
+    assert not counted.approximate
+    assert counted.count == count_tokens(TEXT, dated, use_cache=False).count
+
+
 def test_counting_avoids_deprecated_mistral_common_api():
     """No count may go through `MistralTokenizer.from_model`.
 

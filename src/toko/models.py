@@ -532,6 +532,17 @@ TRANSFORMERS_MODELS: tuple[str, ...] = (
     "NousResearch/Hermes-3-Llama-3.1-8B",
 )
 
+# The Mistral names --list-models advertises once mistral-common is installed. The
+# "-latest" aliases are the names users type and they do count, but only approximately,
+# so the list also carries the newest release mistral-common bundles a tokenizer for --
+# otherwise the caveat sends users to an exact name the tool never shows them.
+MISTRAL_MODELS: tuple[str, ...] = (
+    "mistral-small-latest",
+    "mistral-medium-latest",
+    "mistral-large-latest",
+    "mistral-large-2411",
+)
+
 # Names tiktoken still carries in MODEL_TO_ENCODING that --list-models should not
 # advertise. They tokenize fine, so counting is untouched; they are only hidden from
 # the default listing. As of 2026-08-11 that covers OpenAI engines already shut down,
@@ -636,11 +647,7 @@ OPTIONAL_GROUPS: tuple[OptionalGroupDef, ...] = (
         extra="mistral",
         module="mistral_common",
         providers=("mistral",),
-        models=(
-            "mistral-small-latest",
-            "mistral-medium-latest",
-            "mistral-large-latest",
-        ),
+        models=MISTRAL_MODELS,
     ),
     OptionalGroupDef(
         extra="transformers",
@@ -796,6 +803,9 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
         if provider is None:
             provider = "openai"
         providers[provider].add(model_name)
+
+    if _has_module("mistral_common"):
+        providers["mistral"].update(MISTRAL_MODELS)
 
     if _has_module("transformers"):
         for model_name in TRANSFORMERS_MODELS:

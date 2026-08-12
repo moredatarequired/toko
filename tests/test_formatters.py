@@ -490,3 +490,44 @@ def test_count_sort_breaks_a_tie_on_the_path():
     }
     output = format_file_table(file_results, output_format="csv", sort_order="count")
     assert [row[0] for row in _csv_rows(output)[1:]] == ["a.txt", "m.txt", "z.txt"]
+
+
+def _differently_caveated_files() -> dict[str, dict[str, TokenCount]]:
+    # Two files that failed differently, the larger count second so a count sort would
+    # swap them and a path sort would not.
+    return {
+        "b.txt": _caveated_column(3, "the xAI token API was unavailable (429)"),
+        "a.txt": _caveated_column(400, "the xAI token API was unavailable (503)"),
+    }
+
+
+def test_sort_leaves_a_total_only_run_alone():
+    """--sort orders the per-file rows, so it must not rewrite the TOTAL row's caveat.
+
+    _compute_totals joins the per-file caveats in iteration order, so sorting a run that
+    prints no file rows would still show through, in the one row it does print.
+    """
+    unsorted = format_file_table(
+        _differently_caveated_files(), output_format="json", total_only=True
+    )
+    for sort_order in ("input", "path", "count"):
+        assert (
+            format_file_table(
+                _differently_caveated_files(),
+                output_format="json",
+                total_only=True,
+                sort_order=sort_order,
+            )
+            == unsorted
+        )
+    # Not vacuous: the caveats are in the order the files arrived, which is the order
+    # both other values would have changed.
+    assert json.loads(unsorted)["grok-4.5"]["caveat"] == (
+        "the xAI token API was unavailable (429); "
+        "the xAI token API was unavailable (503)"
+    )
+
+
+def test_an_unknown_sort_order_is_rejected():
+    with pytest.raises(ValueError, match="Unknown sort order: size"):
+        format_file_table(_three_files(), output_format="csv", sort_order="size")

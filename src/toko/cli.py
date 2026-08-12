@@ -181,7 +181,7 @@ def main(
             help=(
                 "Order of the per-file rows: input keeps the order the paths were read, "
                 "path sorts by path, count puts the largest first (by the leftmost model "
-                "column). No effect on --text or stdin input."
+                "column). No effect on --text, stdin, or --total-only."
             ),
         ),
     ] = SortOrder.INPUT,

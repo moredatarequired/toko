@@ -138,14 +138,15 @@ TOTAL                                 31,465
 - The default is `--sort input`, which leaves the rows in the order the paths were read.
 
 `--sort path` compares the paths as the `File` column shows them, so files in the same
-directory stay together. A directory scan already arrives in that order, so `path` only
-differs from `input` when several path arguments interleave. `--sort count` ranks rows by
-the leftmost model column, so a multi-model run sorts by the alphabetically first model
-name rather than the first `--model` you passed; files the model could not be counted for
-keep their `N/A` and sort last. The `TOTAL` row stays at the bottom whichever order you
-pick, and the order applies to every format, not just the text table, so
-`--sort count --format json` yields keys in the same order the table would show. Runs
-that count `--text` or stdin have no file rows and ignore the option.
+directory stay together. A directory scan already arrives in near-path order, but not the
+same one: the scan compares path components, so `src/toko.py` lands after everything under
+`src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
+model column, which belongs to the model whose name sorts first as a string rather than to
+the first `--model` you passed; files the model could not be counted for keep their `N/A`
+and sort last. The `TOTAL` row stays at the bottom whichever order you pick, and the order
+applies to every format, not just the text table, so `--sort count --format json` yields
+keys in the same order the table would show. Runs that count `--text` or stdin have no file
+rows, and neither does `--total-only`, so the option is accepted and ignored there.
 
 ## Machine-readable output
 

@@ -428,12 +428,18 @@ def _sort_file_results(
 ) -> dict[str, dict[str, TokenCount]]:
     # Reordered once, before the per-format code runs, so every format agrees on the row
     # order — including JSON, whose keys keep their insertion order.
+    if sort_order == SortOrder.INPUT:
+        return file_results
+
     if sort_order == SortOrder.PATH:
         # The keys are the paths as the File column shows them, so a plain string sort
         # is the order a reader sees, and it keeps a directory's files together.
         return dict(sorted(file_results.items(), key=lambda item: item[0]))
 
-    if sort_order != SortOrder.COUNT or not models:
+    if sort_order != SortOrder.COUNT:
+        raise ValueError(f"Unknown sort order: {sort_order}")
+
+    if not models:
         return file_results
     leading = models[0]
 
@@ -461,9 +467,13 @@ def format_file_table(
 ) -> str:
     """Format per-file token counts with files as rows and models as columns."""
     models = _collect_models(file_results)
-    file_results = _sort_file_results(
-        file_results, models=models, sort_order=sort_order
-    )
+    if not total_only:
+        # A total-only run prints no file rows to order, and sorting anyway would leak
+        # into the one row it does print: _compute_totals joins the per-file caveats in
+        # iteration order, so the row's caveat text would follow --sort.
+        file_results = _sort_file_results(
+            file_results, models=models, sort_order=sort_order
+        )
 
     if output_format == OutputFormat.JSON:
         return _format_file_json(

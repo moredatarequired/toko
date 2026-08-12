@@ -64,6 +64,12 @@ def _output_block(readme: Path) -> str:
     return _blocks(readme, "txt")[0]
 
 
+def _reasons(stale: list[str]) -> list[str]:
+    # Each report opens with `$ {command}`, which repeats the very text a reason names, so
+    # searching a whole report proves only that some reason fired, not which one.
+    return [line for report in stale for line in report.splitlines()[1:]]
+
+
 def test_only_a_bare_toko_command_is_rewritten():
     prepare = update_readme_examples._prepare_command  # noqa: SLF001
 
@@ -96,7 +102,7 @@ def test_command_that_warns_and_exits_zero_is_refused(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert [warning] == [line for report in stale for line in report.splitlines()[1:]]
+    assert _reasons(stale) == [warning]
     assert readme.read_text() == original
 
 
@@ -165,7 +171,7 @@ def test_an_error_message_is_still_a_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "Error fetching URL: 404" in "\n".join(stale)
+    assert _reasons(stale) == ["Error fetching URL: 404"]
     assert readme.read_text() == original
 
 
@@ -199,7 +205,9 @@ def test_an_indented_warning_is_still_a_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "Warning: indented" in "\n".join(stale)
+    # The indentation survives: the match is made on the stripped line, but the reason
+    # quotes the line as printed.
+    assert _reasons(stale) == ["   Warning: indented"]
     assert readme.read_text() == original
 
 
@@ -212,7 +220,8 @@ def test_a_traceback_is_a_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "Traceback (most recent call last):" in "\n".join(stale)
+    # Only the header line is a reason; the frame below it is not matched.
+    assert _reasons(stale) == ["Traceback (most recent call last):"]
     assert readme.read_text() == original
 
 

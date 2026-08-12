@@ -28,7 +28,10 @@ dependencies = [
     "pathspec>=0.12.1",
     "rich>=14.2.0",
     "tiktoken>=0.12.0",
-    "typer>=0.20.0",
+    # Floor at 0.27 because toko::cli's TokoGroup subclasses TyperGroup and filters its
+    # params: before 0.26 those were external click objects, from 0.26 they are typer's
+    # own vendored ones, and supporting both means keeping two isinstance checks alive.
+    "typer>=0.27.1",
 ]
 
 [dependency-groups]

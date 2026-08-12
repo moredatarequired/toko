@@ -4,11 +4,10 @@ import contextlib
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
-import click
 import typer
-from typer.core import TyperGroup
+from typer.core import TyperGroup, TyperOption
 
 from toko import __version__
 from toko.cache import clear_cache as do_clear_cache
@@ -49,19 +48,17 @@ class TokoGroup(TyperGroup):
     would otherwise swallow names like ``update-prices`` and treat them as files.
     """
 
-    def _value_taking_option_names(self, ctx: click.Context) -> set[str]:
+    def _value_taking_option_names(self, ctx: typer.Context) -> set[str]:
         names: set[str] = set()
         for param in super().get_params(ctx):
-            if (
-                isinstance(param, click.Option)
-                and not param.is_flag
-                and not param.count
-            ):
+            # TyperOption rather than click's Option: typer vendored click in 0.26, so
+            # the params it builds are no longer instances of the external package.
+            if isinstance(param, TyperOption) and not param.is_flag and not param.count:
                 names.update(param.opts)
                 names.update(param.secondary_opts)
         return names
 
-    def _first_positional(self, ctx: click.Context, args: list[str]) -> str | None:
+    def _first_positional(self, ctx: typer.Context, args: list[str]) -> str | None:
         """Find the first non-option token, skipping over option values.
 
         A global option before the subcommand name (``toko --total-only clear-cache``)
@@ -88,10 +85,13 @@ class TokoGroup(TyperGroup):
             index += 2 if consumes_next else 1
         return None
 
-    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+    # `ctx` and the parameters are typed `Any` in the two overridden methods because
+    # typer vendored click in 0.26 and publishes no name for the vendored Context or
+    # Parameter; annotating them as typer.Context would narrow the inherited signature.
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         is_subcommand = self._first_positional(ctx, args) in self.commands
         ctx.meta[_SUBCOMMAND_META_KEY] = is_subcommand
-        # click.Group defaults allow_interspersed_args to False so that options after
+        # A click group defaults allow_interspersed_args to False so that options after
         # a subcommand name reach the subcommand. The default command needs the
         # opposite (`toko src --total-only` must not read the flag as a path), so pick
         # per invocation rather than setting it globally. The parser is built from ctx
@@ -99,7 +99,7 @@ class TokoGroup(TyperGroup):
         ctx.allow_interspersed_args = not is_subcommand
         return super().parse_args(ctx, args)
 
-    def get_params(self, ctx: click.Context) -> list[click.Parameter]:
+    def get_params(self, ctx: Any) -> list[Any]:
         params = super().get_params(ctx)
         if ctx.meta.get(_SUBCOMMAND_META_KEY):
             return [param for param in params if param.name != "paths"]

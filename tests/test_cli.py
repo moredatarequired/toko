@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -15,6 +15,9 @@ from tests.hf_hub import skip_if_rate_limited
 from toko.cli import app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 runner = CliRunner()
 
@@ -32,16 +35,26 @@ def _normalize_cli_output(text: str) -> str:
     return " ".join(_BOX_DRAWING.sub(" ", _strip_ansi(text)).split())
 
 
+@pytest.fixture(autouse=True)
+def _isolated_config_home(tmp_path, monkeypatch):
+    """Point config discovery at an empty per-test directory.
+
+    CliRunner isolates the streams and the environment but never the filesystem, so
+    the config lookup has to be pinned somewhere harmless from the outside.
+    """
+    config_home = tmp_path / "config"
+    config_home.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    return config_home
+
+
 def _invoke_cli(
     args: list[str],
     env_overrides: dict[str, str] | None = None,
     stdin: str | None = None,
 ):
-    """Invoke the CLI in an isolated filesystem with predictable config."""
-    overrides = dict(env_overrides or {})
-    with runner.isolated_filesystem():
-        overrides.setdefault("XDG_CONFIG_HOME", str(Path.cwd()))
-        return runner.invoke(app, args, env=overrides, input=stdin)
+    """Invoke the CLI against the per-test config home."""
+    return runner.invoke(app, args, env=env_overrides, input=stdin)
 
 
 def test_version():
@@ -134,9 +147,13 @@ def test_clear_cache_removes_the_price_cache():
 @pytest.mark.parametrize(
     ("args", "marker"),
     [
+        # The bare form is the control: it survives even a broken option scan, so the
+        # separated forms below are the ones that actually prove the scan works.
+        (["clear-cache"], "Cache cleared"),
         (["--total-only", "clear-cache"], "Cache cleared"),
         (["-m", "gpt-5", "clear-cache"], "Cache cleared"),
         (["--format", "csv", "clear-cache"], "Cache cleared"),
+        # Glued forms consume no following token, so they survive it too.
         (["--format=csv", "clear-cache"], "Cache cleared"),
         (["-mgpt-5", "clear-cache"], "Cache cleared"),
     ],

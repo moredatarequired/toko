@@ -57,13 +57,17 @@ The tag push is what releases. Nothing is published until it lands.
 
 1. `uv build` — builds the wheel and the sdist into `dist/` (gitignored; never
    committed).
-1. **Smoke test, wheel** — installs the built wheel with the `[all]` extras into an
-   isolated environment and runs `tests/smoke_test.py`. Each check gates on
-   `importlib.util.find_spec`, so an install without the extras skips the Mistral and
-   transformers counts rather than failing them, and the provider listing is asserted
-   against 4 providers there and 8 here.
-1. **Smoke test, sdist** — the same check against the `.tar.gz`, which is what catches a
-   file that the wheel happens to carry but the sdist omits.
+1. **Smoke test, wheel, no extras** — installs the bare wheel into an isolated
+   environment and runs `tests/smoke_test.py`. This is the only step that can catch a
+   module toko imports but never declares: under `[all]`, `transformers` pulls in
+   `huggingface-hub`, which depends on `click`, so an undeclared `import click` would
+   resolve there no matter what `pyproject.toml` says.
+1. **Smoke test, wheel, all extras** — the same file with `[all]`, which is what
+   reaches the optional tokenizers. Each check gates on `importlib.util.find_spec`, so
+   the bare run above skips the Mistral and transformers counts rather than failing
+   them, and the provider listing is asserted against 4 providers there and 8 here.
+1. **Smoke test, sdist, all extras** — the same check against the `.tar.gz`, which is
+   what catches a file that the wheel happens to carry but the sdist omits.
 1. **Publish** — `uv publish` to PyPI.
 
 A bare install lists exactly 4 providers, and either extra adds to that on its own.
@@ -71,7 +75,7 @@ A bare install lists exactly 4 providers, and either extra adds to that on its o
 to 8; `mistral-common` registers `mistral`, taking it to 5. `[all]`, which is what the
 smoke steps install, gets both and lists 9.
 
-The job sets `XDG_CACHE_HOME` under the workspace so both smoke steps share one
+The job sets `XDG_CACHE_HOME` under the workspace so both `[all]` steps share one
 Hugging Face download. The transformers count is the one check allowed to skip on its
 own: it fetches a tokenizer from the Hub, which refuses anonymous callers with 429 on
 its own schedule, and a rate limit must not block a release. Every other Hub failure —

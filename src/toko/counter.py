@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import threading
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 from urllib.parse import quote
@@ -60,13 +61,19 @@ _TOKENIZER_CACHE: dict[str, object] = {}
 # different warnings about one model cannot suppress each other.
 _WARNED_ONCE: set[tuple[str, str]] = set()
 
+# Counts run concurrently, so the test and the insert below have to be one step: two
+# threads that both miss the set would otherwise both print the same notice, and two
+# printing at once can interleave halfway through a line.
+_WARN_LOCK = threading.Lock()
+
 
 def _warn_once(kind: str, model_name: str, message: str) -> None:
     key = (kind, model_name)
-    if key in _WARNED_ONCE:
-        return
-    _WARNED_ONCE.add(key)
-    print(f"Warning: {message}", file=sys.stderr)
+    with _WARN_LOCK:
+        if key in _WARNED_ONCE:
+            return
+        _WARNED_ONCE.add(key)
+        print(f"Warning: {message}", file=sys.stderr)
 
 
 # Below this length a "key" is more likely to be a common substring than a secret,

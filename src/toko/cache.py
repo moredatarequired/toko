@@ -96,31 +96,22 @@ def cache_count(text: str, model: str, count: int) -> None:
         with sqlite3.connect(cache_path) as conn:
             _init_db(conn)
 
-            # Get existing counts for this message
-            cursor = conn.execute(
-                "SELECT counts_json FROM token_counts WHERE message_hash = ?",
-                (message_hash,),
+            # Merged in SQL rather than read here and written back, because counts run
+            # concurrently: two models counted against the same text would both see no
+            # row, both insert, and the loser's count would be lost to the UNIQUE
+            # constraint and swallowed below. json_patch folds the new model into
+            # whatever is stored, so a writer need not have read the others' work.
+            conn.execute(
+                """
+                INSERT INTO token_counts (message_hash, counts_json) VALUES (?, ?)
+                ON CONFLICT(message_hash) DO UPDATE
+                    SET counts_json = json_patch(counts_json, excluded.counts_json)
+                """,
+                (message_hash, json.dumps({model: count})),
             )
-            row = cursor.fetchone()
-
-            if row:
-                # Update existing entry
-                counts = json.loads(row[0])
-                counts[model] = count
-                conn.execute(
-                    "UPDATE token_counts SET counts_json = ? WHERE message_hash = ?",
-                    (json.dumps(counts), message_hash),
-                )
-            else:
-                # Insert new entry
-                counts = {model: count}
-                conn.execute(
-                    "INSERT INTO token_counts (message_hash, counts_json) VALUES (?, ?)",
-                    (message_hash, json.dumps(counts)),
-                )
 
             conn.commit()
-    except (sqlite3.Error, json.JSONDecodeError):
+    except sqlite3.Error:
         # Silently fail - caching is optional
         pass
 

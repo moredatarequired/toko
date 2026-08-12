@@ -134,6 +134,7 @@ TOTAL                                 32,103
 
 - Directories are processed recursively by default and honor `.gitignore`.
 - Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Counts run eight at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` to change that, or `--jobs 1` to count one file at a time.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.
 - The default is `--sort input`, which leaves the rows in the order the paths were read.

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.3.0 (2026-08-12)
 
 ### BREAKING CHANGE
 
@@ -28,6 +28,8 @@
 
 ### Fix
 
+- **mistral**: resolve model names without mistral-common's deprecated from_model
+- **deps**: upgrade to typer 0.27 and drop the direct click import
 - **formatters**: keep every distinct caveat in a model total
 - **formatters**: emit the JSON approximate field only when a count is approximate
 - **toko**: keep unknown package attributes a type error
@@ -84,6 +86,8 @@
 
 ### Refactor
 
+- **cli**: annotate all TokoGroup ctx params Any and harden the smoke test
+- **counter**: require api_key on \_describe_request_failure
 - move OutputFormat to a leaf module
 - **prices**: read the update URL from its exported constant
 - **models**: derive the advertised OpenAI list from the verified encodings

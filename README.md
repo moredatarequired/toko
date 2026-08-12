@@ -214,7 +214,7 @@ count instead, so check `approximate` on those before treating a count as exact:
 - An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
   unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
   the call raises instead.
-- A Mistral name that is not one dated release — a rolling alias such as
+- A Mistral name Toko has no pinned tokenizer for — a rolling alias such as
   `mistral-large-latest`, or a release newer than the tokenizers `mistral-common` ships —
   is counted with the bundled tekken tokenizer, whose vocabulary every Mistral model
   since Nemo shares. An exact count needs a release `mistral-common` bundles a tokenizer

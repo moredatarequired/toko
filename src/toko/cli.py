@@ -179,12 +179,12 @@ def main(
         typer.Option(
             "--sort",
             help=(
-                "Order of the per-file rows: path leaves them as read, count puts the "
-                "largest first (by the leftmost model column). No effect on --text or "
-                "stdin input."
+                "Order of the per-file rows: input keeps the order the paths were read, "
+                "path sorts by path, count puts the largest first (by the leftmost model "
+                "column). No effect on --text or stdin input."
             ),
         ),
-    ] = SortOrder.PATH,
+    ] = SortOrder.INPUT,
     cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
     header: Annotated[
         bool | None,
@@ -507,7 +507,7 @@ def _handle_file_inputs(
     total_only: bool,
     include_costs: bool,
     include_header: bool,
-    sort_order: SortOrder = SortOrder.PATH,
+    sort_order: SortOrder = SortOrder.INPUT,
 ) -> None:
     file_results, file_errors, model_errors = _collect_file_counts(models, files)
 
@@ -589,7 +589,7 @@ def _do_count(
     list_models: bool,
     *,
     include_retired: bool = False,
-    sort_order: SortOrder = SortOrder.PATH,
+    sort_order: SortOrder = SortOrder.INPUT,
 ) -> None:
     config = _load_runtime_config()
     _prepare_prices(config)

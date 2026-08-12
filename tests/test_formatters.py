@@ -370,15 +370,63 @@ def _three_files() -> dict[str, dict[str, TokenCount]]:
     }
 
 
+def _mixed_paths() -> dict[str, dict[str, TokenCount]]:
+    # Insertion order is neither path order nor count order, so each --sort value lands
+    # on a different arrangement and no test can pass by accident.
+    return {
+        "src/b.txt": {"gpt-5": _counted(30)},
+        "a.txt": {"gpt-5": _counted(7)},
+        "src/a.txt": {"gpt-5": _counted(1)},
+    }
+
+
 def test_rows_keep_their_input_order_by_default():
     output = format_file_table(_three_files(), output_format="csv")
     assert _csv_rows(output)[1:] == [["a.txt", "1"], ["b.txt", "30"], ["c.txt", "7"]]
 
 
-def test_path_sort_is_the_default():
+def test_input_sort_is_the_default():
     assert format_file_table(
-        _three_files(), output_format="csv", sort_order="path"
-    ) == format_file_table(_three_files(), output_format="csv")
+        _mixed_paths(), output_format="csv", sort_order="input"
+    ) == format_file_table(_mixed_paths(), output_format="csv")
+
+
+def test_input_sort_leaves_paths_that_are_out_of_order_alone():
+    output = format_file_table(_mixed_paths(), output_format="csv", sort_order="input")
+    assert [row[0] for row in _csv_rows(output)[1:]] == [
+        "src/b.txt",
+        "a.txt",
+        "src/a.txt",
+    ]
+
+
+def test_path_sort_orders_rows_by_the_path_string():
+    # A plain string sort, which is what keeps src/a.txt next to src/b.txt.
+    output = format_file_table(_mixed_paths(), output_format="csv", sort_order="path")
+    assert [row[0] for row in _csv_rows(output)[1:]] == [
+        "a.txt",
+        "src/a.txt",
+        "src/b.txt",
+    ]
+
+
+def test_path_sort_reorders_json_keys_the_same_way():
+    payload = json.loads(
+        format_file_table(_mixed_paths(), output_format="json", sort_order="path")
+    )
+    assert list(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
+
+
+def test_path_sort_reorders_tsv_the_same_way():
+    output = format_file_table(
+        _mixed_paths(), output_format="tsv", sort_order="path", include_header=False
+    )
+    assert output.splitlines() == ["a.txt\t7", "src/a.txt\t1", "src/b.txt\t30"]
+
+
+def test_path_sort_reorders_the_text_table_and_leaves_the_total_last():
+    output = format_file_table(_mixed_paths(), sort_order="path", include_header=False)
+    assert _row_labels(output) == ["a.txt", "src/a.txt", "src/b.txt", "TOTAL"]
 
 
 def test_count_sort_puts_the_largest_file_first():

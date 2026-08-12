@@ -827,12 +827,12 @@ def test_partial_success_missing_hf_token(monkeypatch):
 
 
 def _uneven_file_args(tmp_path: Path) -> list[str]:
-    # Named so that path order and count order disagree.
-    small = tmp_path / "a-small.txt"
-    small.write_text("hello")
-    large = tmp_path / "b-large.txt"
-    large.write_text("one two three four five six seven eight")
-    return [str(small), str(large)]
+    # Passed in an order that is neither path order nor count order, so each --sort value
+    # lands on a different arrangement and no assertion below can pass by accident.
+    (tmp_path / "a-small.txt").write_text("hello")
+    (tmp_path / "b-mid.txt").write_text("one two three four five")
+    (tmp_path / "c-big.txt").write_text("one two three four five six seven eight nine")
+    return [str(tmp_path / name) for name in ("b-mid.txt", "c-big.txt", "a-small.txt")]
 
 
 def _row_names(output: str, separator: str = "\t") -> list[str]:
@@ -843,32 +843,41 @@ def _row_names(output: str, separator: str = "\t") -> list[str]:
     ]
 
 
-def test_rows_follow_the_paths_read_by_default(tmp_path):
+def test_rows_follow_the_order_the_paths_were_given_by_default(tmp_path):
     result = _invoke_cli(_uneven_file_args(tmp_path))
     assert result.exit_code == 0
-    assert _row_names(result.stdout) == ["a-small.txt", "b-large.txt"]
+    assert _row_names(result.stdout) == ["b-mid.txt", "c-big.txt", "a-small.txt"]
 
 
-def test_sort_path_matches_the_default(tmp_path):
+def test_sort_input_matches_the_default(tmp_path):
     args = _uneven_file_args(tmp_path)
-    assert _invoke_cli(["--sort", "path", *args]).stdout == _invoke_cli(args).stdout
+    assert _invoke_cli(["--sort", "input", *args]).stdout == _invoke_cli(args).stdout
+
+
+def test_sort_path_reorders_paths_the_default_leaves_as_given(tmp_path):
+    args = _uneven_file_args(tmp_path)
+    sorted_run = _invoke_cli(["--sort", "path", *args])
+    assert sorted_run.exit_code == 0
+    assert _row_names(sorted_run.stdout) == ["a-small.txt", "b-mid.txt", "c-big.txt"]
+    assert sorted_run.stdout != _invoke_cli(args).stdout
 
 
 def test_sort_count_puts_the_largest_file_first(tmp_path):
     result = _invoke_cli(["--sort", "count", *_uneven_file_args(tmp_path)])
     assert result.exit_code == 0
-    assert _row_names(result.stdout) == ["b-large.txt", "a-small.txt"]
+    assert _row_names(result.stdout) == ["c-big.txt", "b-mid.txt", "a-small.txt"]
 
 
-def test_sort_count_reaches_json_and_csv_too(tmp_path):
+def test_sort_reaches_json_and_csv_too(tmp_path):
     args = _uneven_file_args(tmp_path)
-    as_json = _invoke_cli(["--sort", "count", "--format", "json", *args])
-    as_csv = _invoke_cli(["--sort", "count", "--format", "csv", *args])
-    assert [key.split("/")[-1] for key in json.loads(as_json.stdout)] == [
-        "b-large.txt",
+    by_count = _invoke_cli(["--sort", "count", "--format", "json", *args])
+    by_path = _invoke_cli(["--sort", "path", "--format", "csv", *args])
+    assert [key.split("/")[-1] for key in json.loads(by_count.stdout)] == [
+        "c-big.txt",
+        "b-mid.txt",
         "a-small.txt",
     ]
-    assert _row_names(as_csv.stdout, ",") == ["b-large.txt", "a-small.txt"]
+    assert _row_names(by_path.stdout, ",") == ["a-small.txt", "b-mid.txt", "c-big.txt"]
 
 
 def test_sort_count_keeps_the_total_row_last(tmp_path, monkeypatch):
@@ -883,7 +892,8 @@ def test_sort_count_keeps_the_total_row_last(tmp_path, monkeypatch):
     ]
     assert [row[0].split("/")[-1] for row in rows if row] == [
         "File",
-        "b-large.txt",
+        "c-big.txt",
+        "b-mid.txt",
         "a-small.txt",
         "TOTAL",
     ]
@@ -900,4 +910,4 @@ def test_unknown_sort_is_a_usage_error(tmp_path):
     result = _invoke_cli(["--sort", "size", *_uneven_file_args(tmp_path)])
     assert result.exit_code == 2
     combined = _normalize_cli_output(result.stdout + result.stderr)
-    assert "'size' is not one of 'path', 'count'" in combined
+    assert "'size' is not one of 'input', 'path', 'count'" in combined

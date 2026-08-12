@@ -4,5 +4,6 @@ from enum import StrEnum
 
 
 class SortOrder(StrEnum):
+    INPUT = "input"
     PATH = "path"
     COUNT = "count"

@@ -48,7 +48,12 @@ class TokoGroup(TyperGroup):
     would otherwise swallow names like ``update-prices`` and treat them as files.
     """
 
-    def _value_taking_option_names(self, ctx: typer.Context) -> set[str]:
+    # `ctx` and the params are `Any` in all four methods below. Typer vendored click
+    # in 0.26 and passes its own `typer._click.core.Context` at runtime; `typer.Context`
+    # subclasses that rather than aliasing it, so annotating `typer.Context` here would
+    # assert a type that never actually arrives. The vendored name is private and none
+    # of these are part of toko's typed surface, so `Any` beats importing it.
+    def _value_taking_option_names(self, ctx: Any) -> set[str]:
         names: set[str] = set()
         for param in super().get_params(ctx):
             # TyperOption rather than click's Option: typer vendored click in 0.26, so
@@ -58,7 +63,7 @@ class TokoGroup(TyperGroup):
                 names.update(param.secondary_opts)
         return names
 
-    def _first_positional(self, ctx: typer.Context, args: list[str]) -> str | None:
+    def _first_positional(self, ctx: Any, args: list[str]) -> str | None:
         """Find the first non-option token, skipping over option values.
 
         A global option before the subcommand name (``toko --total-only clear-cache``)
@@ -85,9 +90,6 @@ class TokoGroup(TyperGroup):
             index += 2 if consumes_next else 1
         return None
 
-    # `ctx` and the parameters are typed `Any` in the two overridden methods because
-    # typer vendored click in 0.26 and publishes no name for the vendored Context or
-    # Parameter; annotating them as typer.Context would narrow the inherited signature.
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         is_subcommand = self._first_positional(ctx, args) in self.commands
         ctx.meta[_SUBCOMMAND_META_KEY] = is_subcommand

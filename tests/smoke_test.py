@@ -27,4 +27,13 @@ with contextlib.redirect_stdout(version_output), contextlib.suppress(SystemExit)
     app(["--version"])
 assert toko.__version__ in version_output.getvalue()
 
+# --version is an eager no-value flag, so it never reaches the option scan TokoGroup
+# uses to find a subcommand past a global option. Dispatch a subcommand behind a
+# separated option value instead: if a future typer changes how params are built, the
+# scan stops recognising -m as value-taking and "clear-cache" is read as a path.
+dispatch_output = io.StringIO()
+with contextlib.redirect_stdout(dispatch_output), contextlib.suppress(SystemExit):
+    app(["-m", "gpt-5", "clear-cache"])
+assert "Cache cleared" in dispatch_output.getvalue()
+
 print("Smoke test succeeded")

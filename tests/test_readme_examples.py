@@ -66,7 +66,9 @@ def _output_block(readme: Path) -> str:
 
 def _reasons(stale: list[str]) -> list[str]:
     # Each report opens with `$ {command}`, which repeats the very text a reason names, so
-    # searching a whole report proves only that some reason fired, not which one.
+    # searching a whole report proves only that some reason fired, not which one. Dropping
+    # a single line assumes the echoed command is one line, which holds for every
+    # documented example and every command written below.
     return [line for report in stale for line in report.splitlines()[1:]]
 
 
@@ -126,8 +128,12 @@ def test_readme_cost_example_is_refused_without_an_api_key(tmp_path, monkeypatch
 
     stale = update_readme_examples.update_readme()
 
-    # Not matched on the model name: the report echoes the command, which names it too.
-    assert "ANTHROPIC_API_KEY environment variable" in "\n".join(stale)
+    # A reason, not the whole report: the report echoes the command, and matching the
+    # echo would prove only that the example failed, not that the key is why. The reason
+    # is toko's own line, so the surrounding wording is left free.
+    assert any(
+        "ANTHROPIC_API_KEY environment variable" in reason for reason in _reasons(stale)
+    )
     assert readme.read_text() == original
 
 
@@ -182,7 +188,7 @@ def test_a_command_that_prints_nothing_is_a_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "printed nothing" in "\n".join(stale)
+    assert _reasons(stale) == ["the command printed nothing"]
     assert readme.read_text() == original
 
 
@@ -194,7 +200,7 @@ def test_a_command_that_prints_only_whitespace_is_a_failure(tmp_path, monkeypatc
 
     stale = update_readme_examples.update_readme()
 
-    assert "printed nothing" in "\n".join(stale)
+    assert _reasons(stale) == ["the command printed nothing"]
     assert readme.read_text() == original
 
 
@@ -232,7 +238,8 @@ def test_a_nonzero_exit_is_a_failure_however_clean_the_output(tmp_path, monkeypa
 
     stale = update_readme_examples.update_readme()
 
-    assert "exited 2" in "\n".join(stale)
+    # The clean output is not a second reason; the exit code is the whole complaint.
+    assert _reasons(stale) == ["the command exited 2"]
     assert readme.read_text() == original
 
 
@@ -243,7 +250,8 @@ def test_a_command_the_shell_cannot_find_is_a_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "exited 127" in "\n".join(stale)
+    # The shell's own "command not found" is not a reason: it matches no failure pattern.
+    assert _reasons(stale) == ["the command exited 127"]
     assert readme.read_text() == original
 
 

@@ -68,7 +68,10 @@ def run_command(command: str, scratch: Path) -> CommandResult:
     for directory in (config_home, cache_home):
         directory.mkdir(parents=True, exist_ok=True)
     env_overrides = {
-        "RICH_NO_COLOR": "1",
+        # NO_COLOR, not RICH_NO_COLOR: rich reads the former, and the latter suppressed
+        # nothing. ANSI_RE strips what does get emitted, so this only keeps the captured
+        # bytes closer to what lands in the README.
+        "NO_COLOR": "1",
         # Isolated so that neither the developer's own config nor counts cached from an
         # earlier run can change what an example prints.
         "XDG_CONFIG_HOME": str(config_home),

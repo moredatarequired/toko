@@ -81,9 +81,14 @@ def test_counting_avoids_deprecated_mistral_common_api():
 def test_mistral_specs_match_mistral_common():
     """Every shared name loads the same tokenizer file in toko as in mistral-common.
 
-    Comparing a tokenization instead would guard almost nothing: of the seven specs, only
-    v1 tokenizes a short English sample differently from the rest, so mapping
-    `mistral-large-2411` to v3 would pass while counting Arabic 2.5x high.
+    Comparing a tokenization instead would guard almost nothing. Six of the seven specs
+    give a short English sample the same count, so a count comparison misses a tekken
+    model like `open-mistral-nemo-2407` mapped to v3, which counts Arabic two to three
+    times high. Comparing token IDs catches that one but not `mistral-large-2411`
+    mapped to v3, because v3 and v7 are the same tokenizer on text -- their vocabularies
+    differ in seven control tokens no text reaches, so they part only over the chat
+    template, where a system message changes the IDs without changing the count. The
+    file catches both.
     """
     shared = sorted(set(MISTRAL_TOKENIZERS) & set(UPSTREAM_TABLE))
     assert shared, "mistral-common's table no longer shares a name with toko's"

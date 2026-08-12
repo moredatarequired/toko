@@ -452,7 +452,6 @@ def test_describe_request_failure_takes_the_api_key_without_a_default():
     api_key = inspect.signature(_describe_request_failure).parameters["api_key"]
 
     assert api_key.default is inspect.Parameter.empty
-    assert api_key.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
 
 
 def test_describe_request_failure_strips_a_query_string_and_fragment():

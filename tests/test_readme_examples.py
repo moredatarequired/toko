@@ -356,6 +356,32 @@ def test_the_examples_run_isolated_from_the_developers_own_config(
 
 
 @needs_shell
+def test_the_isolation_reaches_every_command_of_a_pipeline(tmp_path, monkeypatch):
+    readme, _ = _write_example(tmp_path, "printf 'x' | printenv XDG_CACHE_HOME")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "developers-cache"))
+
+    assert update_readme_examples.update_readme() == []
+
+    used_cache = _output_block(readme)
+    assert "developers-cache" not in used_cache
+    assert not Path(used_cache).exists()
+
+
+@needs_shell
+def test_the_developers_active_virtualenv_does_not_reach_an_example(
+    tmp_path, monkeypatch
+):
+    readme, _ = _write_example(tmp_path, 'echo "[${VIRTUAL_ENV:-unset}]"')
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "developers-venv"))
+
+    assert update_readme_examples.update_readme() == []
+
+    assert _output_block(readme) == "[unset]"
+
+
+@needs_shell
 def test_the_examples_run_from_the_repository_root(tmp_path, monkeypatch):
     """`uv run toko` resolves the project from the working directory, not from $PATH."""
     readme, _ = _write_example(tmp_path, "pwd -P")

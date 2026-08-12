@@ -77,9 +77,15 @@ def run_command(command: str, scratch: Path) -> CommandResult:
         # the environment from the network on every example, so it keeps the real one.
         "UV_CACHE_DIR": _uv_cache_dir(),
     }
-    env_prefix = " ".join(
+    env_assignments = " ".join(
         f"{key}={shlex.quote(value)}" for key, value in env_overrides.items()
     )
+    # Exported rather than written as an assignment prefix: a prefix applies only to the
+    # first command of a pipeline, so `printf … | toko` would run toko unisolated. Exporting
+    # inside the command string still runs after the login shell's profile, so the overrides
+    # win over it. VIRTUAL_ENV goes for the same reason the XDG homes are replaced: an
+    # example must not run against whatever environment the developer has active.
+    script = f"unset VIRTUAL_ENV; export {env_assignments}; {command}"
 
     # A terminal, not a pipe: toko draws tables only when stdout is a tty, and treats a
     # non-tty stdin as piped input. openpty plus a subprocess rather than pty.spawn, whose
@@ -89,8 +95,8 @@ def run_command(command: str, scratch: Path) -> CommandResult:
     try:
         try:
             process = subprocess.Popen(  # noqa: S603
-                [SHELL, "-lc", f"{env_prefix} {command}"],
-                # The examples say `toko`, which becomes `uv run toko`, and uv resolves
+                [SHELL, "-lc", script],
+                # The examples say `toko`, which becomes `uv run -q toko`, and uv resolves
                 # the project from the working directory. Without this the script only
                 # works when invoked from the repository root.
                 cwd=REPO_ROOT,

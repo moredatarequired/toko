@@ -75,11 +75,23 @@ def _reasons(stale: list[str]) -> list[str]:
 def test_only_a_bare_toko_command_is_rewritten():
     prepare = update_readme_examples._prepare_command  # noqa: SLF001
 
-    assert prepare("toko --text hi") == "uv run toko --text hi"
-    assert prepare("printf hi | toko") == "printf hi | uv run toko"
+    assert prepare("toko --text hi") == "uv run -q toko --text hi"
+    assert prepare("printf hi | toko") == "printf hi | uv run -q toko"
     assert prepare("ls ~/.cache/toko") == "ls ~/.cache/toko"
     assert prepare("ls my-toko") == "ls my-toko"
     assert prepare("ls dir.toko") == "ls dir.toko"
+
+
+@needs_shell
+def test_a_warning_from_the_launcher_is_not_blamed_on_toko(tmp_path, monkeypatch):
+    # A real `uv run`, given the mismatched VIRTUAL_ENV that uv warns about. The warning is
+    # uv's, not toko's, so it must not leave the example stale.
+    readme, _ = _write_example(tmp_path, "VIRTUAL_ENV=/no-such-venv toko --version")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    assert update_readme_examples.update_readme() == []
+
+    assert "toko version" in _output_block(readme)
 
 
 def test_missing_shell_is_refused(tmp_path, monkeypatch):
@@ -134,6 +146,9 @@ def test_readme_cost_example_is_refused_without_an_api_key(tmp_path, monkeypatch
     assert any(
         "ANTHROPIC_API_KEY environment variable" in reason for reason in _reasons(stale)
     )
+    # Exactly one: the missing key is the only complaint, so noise from the launcher
+    # creeping back into the reasons would fail here rather than pass the check above.
+    assert len(_reasons(stale)) == 1
     assert readme.read_text() == original
 
 

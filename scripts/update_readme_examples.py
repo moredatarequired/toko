@@ -44,7 +44,9 @@ class CommandResult(NamedTuple):
 
 
 def _prepare_command(command: str) -> str:
-    return re.sub(r"(?<![\w./-])toko\b", "uv run toko", command)
+    # `-q` silences uv's own warnings, which FAILURE_RE would otherwise blame on toko and
+    # refuse to regenerate for. A single `-q` still lets uv's errors through.
+    return re.sub(r"(?<![\w./-])toko\b", "uv run -q toko", command)
 
 
 def _uv_cache_dir() -> str:

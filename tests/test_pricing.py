@@ -102,8 +102,17 @@ class TestPricingCoverage:
             "mistral-small-2409",
             "mistral-nemo",
             "open-mistral-7b",
+            "codestral-latest",
+            "codestral-2501",
+            "codestral-2508",
             "codestral-mamba-2407",
+            "ministral-3b",
             "ministral-8b-2410",
+            "mistral-medium-latest",
+            "mistral-small-latest",
+            "mistral-tiny-2407",
+            "open-mixtral-8x7b",
+            "open-mixtral-8x22b",
             "pixtral-12b-2409",
             "pixtral-large-2411",
         ],
@@ -115,6 +124,32 @@ class TestPricingCoverage:
         nothing at all.
         """
         assert estimate_cost(1_000_000, model_name) is not None
+
+    @pytest.mark.parametrize(
+        ("model_name", "other_name"),
+        [
+            ("ministral-3b", "mistral-small-2409"),
+            ("ministral-3b", "ministral-8b-2410"),
+            ("mistral-tiny-2407", "mistral-small-2409"),
+            ("open-mixtral-8x7b", "open-mistral-7b"),
+            ("open-mixtral-8x22b", "mistral-small-2409"),
+            ("codestral-2501", "codestral-2405"),
+            ("mistral-medium-latest", "mistral-medium-2312"),
+            ("mistral-small-latest", "mistral-small-2409"),
+        ],
+    )
+    def test_mistral_family_models_are_not_priced_as_each_other(
+        self, model_name, other_name
+    ):
+        """Distinct models must not collapse onto one id, which pricing alone hides.
+
+        Every name here used to fall through _convert_mistral_name onto the id its
+        partner resolves to, so each priced to something and the swap went unnoticed.
+        Comparing the two survives a price update in a way a hardcoded rate would not.
+        """
+        assert estimate_cost(1_000_000, model_name) != estimate_cost(
+            1_000_000, other_name
+        )
 
     @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):

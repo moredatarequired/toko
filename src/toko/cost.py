@@ -113,25 +113,60 @@ def _convert_llama_name(model_name: str) -> str:
 
 def _convert_mistral_name(model_name: str) -> str:
     lower = model_name.lower()
-    # Pixtral, Codestral Mamba and Ministral 8B are priced as their own models rather
-    # than as the mistral-* release whose size word they happen to contain: without
-    # these, pixtral-12b-2409 is billed at mistral-small's rate, which is twice its own.
+    # Pixtral, Codestral Mamba, Ministral and Mixtral are priced as their own models
+    # rather than as the mistral-* release whose size word they happen to contain:
+    # without these, pixtral-12b-2409 is billed at mistral-small's rate, which is twice
+    # its own, and open-mixtral-8x7b matches "7b" and is billed as mistral-7b-instruct,
+    # eight times cheaper than the mixture it names.
     if "pixtral" in lower:
         return (
             "mistralai/pixtral-large-2411"
             if "large" in lower
             else "mistralai/pixtral-12b"
         )
-    if "codestral" in lower and "mamba" in lower:
-        return "mistralai/codestral-mamba"
+    if "codestral" in lower:
+        if "mamba" in lower:
+            return "mistralai/codestral-mamba"
+        if "2501" in lower:
+            return "mistralai/codestral-2501"
+        # A rolling codestral name still has to resolve to some release, and the newest
+        # one carried beats the mistral-small fallback. codestral-2405 and codestral-22b
+        # fall through to that fallback on purpose: neither release is in the data, and
+        # 2501/2508 are different models rather than later names for them.
+        if "2405" not in lower and "22b" not in lower:
+            return "mistralai/codestral-2508"
     if "ministral" in lower and "8b" in lower:
         return "mistralai/ministral-8b"
+    if "ministral" in lower and "3b" in lower:
+        return "mistralai/ministral-3b"
+    if "mixtral" in lower:
+        return (
+            "mistralai/mixtral-8x22b-instruct"
+            if "8x22b" in lower
+            else "mistralai/mixtral-8x7b-instruct"
+        )
     if "large" in lower:
         return "mistralai/mistral-large"
     if "medium" in lower:
-        return "mistralai/mistral-medium"
+        # The unversioned mistralai/mistral-medium is the retired 2312 release at nearly
+        # seven times Medium 3's rate, so only 2312 itself may have it. Everything else
+        # goes where the native Mistral data sends any mistral-medium* name: Medium 3.
+        return (
+            "mistralai/mistral-medium"
+            if "2312" in lower
+            else "mistralai/mistral-medium-3"
+        )
     if "small" in lower:
-        return "mistralai/mistral-small"
+        # Same shape one tier down, but only the rolling name moved on: the dated small
+        # releases really are the unversioned entry, while mistral-small-latest is
+        # Mistral Small 3.2 in the native data.
+        return (
+            "mistralai/mistral-small-3.2-24b-instruct"
+            if "latest" in lower
+            else "mistralai/mistral-small"
+        )
+    if "tiny" in lower:
+        return "mistralai/mistral-tiny"
     if "nemo" in lower:
         return "mistralai/mistral-nemo"
     if "7b" in lower:

@@ -353,3 +353,92 @@ def test_every_text_table_variant_is_unruled_and_flush_left(
     # With costs the header spans two lines and its first one is blank under "File", so
     # the row that proves nothing indents the body is the last one.
     assert lines[-1].startswith("TOTAL")
+
+
+def _row_labels(output: str) -> list[str]:
+    # The first cell of every row the table drew, with the borders taken out so the
+    # assertion is about the order of the rows and not the shape of the frame.
+    words = [_BOX_DRAWING.sub(" ", line).split() for line in _plain_lines(output)]
+    return [row[0] for row in words if row]
+
+
+def _three_files() -> dict[str, dict[str, TokenCount]]:
+    return {
+        "a.txt": {"gpt-5": _counted(1)},
+        "b.txt": {"gpt-5": _counted(30)},
+        "c.txt": {"gpt-5": _counted(7)},
+    }
+
+
+def test_rows_keep_their_input_order_by_default():
+    output = format_file_table(_three_files(), output_format="csv")
+    assert _csv_rows(output)[1:] == [["a.txt", "1"], ["b.txt", "30"], ["c.txt", "7"]]
+
+
+def test_path_sort_is_the_default():
+    assert format_file_table(
+        _three_files(), output_format="csv", sort_order="path"
+    ) == format_file_table(_three_files(), output_format="csv")
+
+
+def test_count_sort_puts_the_largest_file_first():
+    output = format_file_table(_three_files(), output_format="csv", sort_order="count")
+    assert _csv_rows(output)[1:] == [["b.txt", "30"], ["c.txt", "7"], ["a.txt", "1"]]
+
+
+def test_count_sort_reorders_json_keys_the_same_way():
+    payload = json.loads(
+        format_file_table(_three_files(), output_format="json", sort_order="count")
+    )
+    assert list(payload) == ["b.txt", "c.txt", "a.txt"]
+
+
+def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
+    output = format_file_table(_three_files(), sort_order="count", include_header=False)
+    assert _row_labels(output) == ["b.txt", "c.txt", "a.txt", "TOTAL"]
+
+
+def test_count_sort_ranks_by_the_leftmost_model_column():
+    # Columns are ordered by model name, so the leftmost one here is claude-opus-4-5,
+    # and ranking by gpt-5 instead would put b.txt first.
+    file_results = {
+        "a.txt": {
+            "gpt-5": _counted(1),
+            "claude-opus-4-5": _counted(50, model="claude-opus-4-5"),
+        },
+        "b.txt": {
+            "gpt-5": _counted(90),
+            "claude-opus-4-5": _counted(2, model="claude-opus-4-5"),
+        },
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert _csv_rows(output) == [
+        ["file", "claude-opus-4-5", "gpt-5"],
+        ["a.txt", "50", "1"],
+        ["b.txt", "2", "90"],
+    ]
+
+
+def test_count_sort_puts_a_file_the_leading_model_missed_last():
+    file_results = {
+        "missed.txt": {"gpt-5": _counted(3)},
+        "counted.txt": {
+            "gpt-5": _counted(4),
+            "claude-opus-4-5": _counted(1, model="claude-opus-4-5"),
+        },
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert _csv_rows(output)[1:] == [
+        ["counted.txt", "1", "4"],
+        ["missed.txt", "N/A", "3"],
+    ]
+
+
+def test_count_sort_breaks_a_tie_on_the_path():
+    file_results = {
+        "z.txt": {"gpt-5": _counted(5)},
+        "m.txt": {"gpt-5": _counted(5)},
+        "a.txt": {"gpt-5": _counted(5)},
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert [row[0] for row in _csv_rows(output)[1:]] == ["a.txt", "m.txt", "z.txt"]

@@ -24,6 +24,7 @@ from toko.price_update import (
     refresh_prices,
     update_prices_if_stale,
 )
+from toko.sort_order import SortOrder
 
 if TYPE_CHECKING:
     from toko.result import TokenCount
@@ -173,6 +174,17 @@ def main(
     output_format: Annotated[
         OutputFormat, typer.Option("--format", "-f", help="Output format")
     ] = OutputFormat.TEXT,
+    sort_order: Annotated[
+        SortOrder,
+        typer.Option(
+            "--sort",
+            help=(
+                "Order of the per-file rows: path leaves them as read, count puts the "
+                "largest first (by the leftmost model column). No effect on --text or "
+                "stdin input."
+            ),
+        ),
+    ] = SortOrder.PATH,
     cost: Annotated[bool, typer.Option("--cost", help="Show cost estimates")] = False,
     header: Annotated[
         bool | None,
@@ -210,6 +222,7 @@ def main(
         header,
         list_models,
         include_retired=include_retired,
+        sort_order=sort_order,
     )
 
 
@@ -494,6 +507,7 @@ def _handle_file_inputs(
     total_only: bool,
     include_costs: bool,
     include_header: bool,
+    sort_order: SortOrder = SortOrder.PATH,
 ) -> None:
     file_results, file_errors, model_errors = _collect_file_counts(models, files)
 
@@ -514,6 +528,7 @@ def _handle_file_inputs(
         total_only=total_only,
         show_costs=include_costs,
         include_header=include_header,
+        sort_order=sort_order,
     )
     typer.echo(output)
 
@@ -574,6 +589,7 @@ def _do_count(
     list_models: bool,
     *,
     include_retired: bool = False,
+    sort_order: SortOrder = SortOrder.PATH,
 ) -> None:
     config = _load_runtime_config()
     _prepare_prices(config)
@@ -607,6 +623,7 @@ def _do_count(
         total_only=total_only,
         include_costs=cost,
         include_header=include_header,
+        sort_order=sort_order,
     )
     # Results for the readable inputs are already printed; signal the bad ones.
     if inputs.had_failures:

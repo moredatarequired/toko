@@ -153,6 +153,7 @@ def test_clear_cache_removes_the_price_cache():
         (["--total-only", "clear-cache"], "Cache cleared"),
         (["-m", "gpt-5", "clear-cache"], "Cache cleared"),
         (["--format", "csv", "clear-cache"], "Cache cleared"),
+        (["--sort", "count", "clear-cache"], "Cache cleared"),
         # Glued forms consume no following token, so they survive it too.
         (["--format=csv", "clear-cache"], "Cache cleared"),
         (["-mgpt-5", "clear-cache"], "Cache cleared"),
@@ -823,3 +824,80 @@ def test_partial_success_missing_hf_token(monkeypatch):
     assert "meta-llama/Llama-3.2-1B" not in result.stdout
     assert "Failed to count tokens for meta-llama/Llama-3.2-1B" in result.stderr
     assert "HF_TOKEN" in result.stderr
+
+
+def _uneven_file_args(tmp_path: Path) -> list[str]:
+    # Named so that path order and count order disagree.
+    small = tmp_path / "a-small.txt"
+    small.write_text("hello")
+    large = tmp_path / "b-large.txt"
+    large.write_text("one two three four five six seven eight")
+    return [str(small), str(large)]
+
+
+def _row_names(output: str, separator: str = "\t") -> list[str]:
+    return [
+        line.split(separator)[0].split("/")[-1]
+        for line in output.splitlines()
+        if line.strip()
+    ]
+
+
+def test_rows_follow_the_paths_read_by_default(tmp_path):
+    result = _invoke_cli(_uneven_file_args(tmp_path))
+    assert result.exit_code == 0
+    assert _row_names(result.stdout) == ["a-small.txt", "b-large.txt"]
+
+
+def test_sort_path_matches_the_default(tmp_path):
+    args = _uneven_file_args(tmp_path)
+    assert _invoke_cli(["--sort", "path", *args]).stdout == _invoke_cli(args).stdout
+
+
+def test_sort_count_puts_the_largest_file_first(tmp_path):
+    result = _invoke_cli(["--sort", "count", *_uneven_file_args(tmp_path)])
+    assert result.exit_code == 0
+    assert _row_names(result.stdout) == ["b-large.txt", "a-small.txt"]
+
+
+def test_sort_count_reaches_json_and_csv_too(tmp_path):
+    args = _uneven_file_args(tmp_path)
+    as_json = _invoke_cli(["--sort", "count", "--format", "json", *args])
+    as_csv = _invoke_cli(["--sort", "count", "--format", "csv", *args])
+    assert [key.split("/")[-1] for key in json.loads(as_json.stdout)] == [
+        "b-large.txt",
+        "a-small.txt",
+    ]
+    assert _row_names(as_csv.stdout, ",") == ["b-large.txt", "a-small.txt"]
+
+
+def test_sort_count_keeps_the_total_row_last(tmp_path, monkeypatch):
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    result = _invoke_cli(["--sort", "count", *_uneven_file_args(tmp_path)])
+    assert result.exit_code == 0
+    # Row by row rather than through _normalize_cli_output, which folds the table into
+    # one line; the borders come off so the assertion is only about the order.
+    rows = [
+        _BOX_DRAWING.sub(" ", _strip_ansi(line)).split()
+        for line in result.stdout.splitlines()
+    ]
+    assert [row[0].split("/")[-1] for row in rows if row] == [
+        "File",
+        "b-large.txt",
+        "a-small.txt",
+        "TOTAL",
+    ]
+
+
+def test_sort_is_accepted_and_ignored_for_text_input():
+    plain = _invoke_cli(["--text", "hello world"])
+    sorted_run = _invoke_cli(["--sort", "count", "--text", "hello world"])
+    assert sorted_run.exit_code == 0
+    assert sorted_run.stdout == plain.stdout
+
+
+def test_unknown_sort_is_a_usage_error(tmp_path):
+    result = _invoke_cli(["--sort", "size", *_uneven_file_args(tmp_path)])
+    assert result.exit_code == 2
+    combined = _normalize_cli_output(result.stdout + result.stderr)
+    assert "'size' is not one of 'path', 'count'" in combined

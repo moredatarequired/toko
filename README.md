@@ -133,6 +133,16 @@ TOTAL                                 31,465
 
 - Directories are processed recursively by default and honor `.gitignore`.
 - Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Use `--sort count` to put the biggest files first, which is the quick way to find
+  whatever is filling a context window. `--sort path` is the default and leaves the rows
+  in the order the paths were read, which for a directory scan is path order.
+
+`--sort count` ranks rows by the leftmost model column, so a multi-model run sorts by the
+alphabetically first model name rather than the first `--model` you passed. Files the
+model could not be counted for keep their `N/A` and sort last, and the `TOTAL` row stays
+at the bottom either way. The order applies to every format, not just the text table, so
+`--sort count --format json` yields keys in the same order the table would show. Runs
+that count `--text` or stdin have no file rows and ignore the option.
 
 ## Machine-readable output
 

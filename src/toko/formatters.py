@@ -12,6 +12,7 @@ from rich.table import Table
 
 from toko.cost import format_cost
 from toko.output_format import OutputFormat
+from toko.sort_order import SortOrder
 
 if TYPE_CHECKING:
     from toko.result import TokenCount
@@ -419,6 +420,31 @@ def _compute_totals(
     return totals
 
 
+def _sort_file_results(
+    file_results: dict[str, dict[str, TokenCount]],
+    *,
+    models: list[str],
+    sort_order: SortOrder | str,
+) -> dict[str, dict[str, TokenCount]]:
+    # Reordered once, before the per-format code runs, so every format agrees on the row
+    # order — including JSON, whose keys keep their insertion order.
+    if sort_order != SortOrder.COUNT or not models:
+        return file_results
+    leading = models[0]
+
+    def rank(item: tuple[str, dict[str, TokenCount]]) -> tuple[bool, int, str]:
+        filename, model_counts = item
+        counted = model_counts.get(leading)
+        # A file the leading model could not count has no number to rank by, so it sorts
+        # after the ones that do rather than to the top on a stand-in zero. The filename
+        # breaks ties, so equal counts stay in a stable, readable order.
+        if counted is None:
+            return (True, 0, filename)
+        return (False, -counted.count, filename)
+
+    return dict(sorted(file_results.items(), key=rank))
+
+
 def format_file_table(
     file_results: dict[str, dict[str, TokenCount]],
     output_format: OutputFormat | str = "text",
@@ -426,9 +452,13 @@ def format_file_table(
     *,
     show_costs: bool = False,
     include_header: bool = True,
+    sort_order: SortOrder | str = SortOrder.PATH,
 ) -> str:
     """Format per-file token counts with files as rows and models as columns."""
     models = _collect_models(file_results)
+    file_results = _sort_file_results(
+        file_results, models=models, sort_order=sort_order
+    )
 
     if output_format == OutputFormat.JSON:
         return _format_file_json(

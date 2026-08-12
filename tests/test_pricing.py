@@ -3,7 +3,7 @@
 import pytest
 
 from toko import models
-from toko.cost import estimate_cost
+from toko.cost import _convert_mistral_name, estimate_cost
 from toko.models import (
     ANTHROPIC_MODELS,
     GOOGLE_MODELS,
@@ -136,6 +136,7 @@ class TestPricingCoverage:
             ("codestral-2501", "codestral-2405"),
             ("mistral-medium-latest", "mistral-medium-2312"),
             ("mistral-small-latest", "mistral-small-2409"),
+            ("pixtral-12b-2409", "mistral-small-2409"),
         ],
     )
     def test_mistral_family_models_are_not_priced_as_each_other(
@@ -149,6 +150,18 @@ class TestPricingCoverage:
         """
         assert estimate_cost(1_000_000, model_name) != estimate_cost(
             1_000_000, other_name
+        )
+
+    def test_pixtral_large_resolves_to_its_own_id(self):
+        """The one family member no price differential can catch.
+
+        pixtral-large-2411 and mistral-large carry identical rates in the shipped data,
+        so collapsing the former onto the latter costs nothing and every comparison
+        above would still pass. Asserting the id is the only way to see it.
+        """
+        assert (
+            _convert_mistral_name("pixtral-large-2411")
+            == "mistralai/pixtral-large-2411"
         )
 
     @requires_current_prices("anthropic")

@@ -113,11 +113,9 @@ def _convert_llama_name(model_name: str) -> str:
 
 def _convert_mistral_name(model_name: str) -> str:
     lower = model_name.lower()
-    # Pixtral, Codestral Mamba, Ministral and Mixtral are priced as their own models
-    # rather than as the mistral-* release whose size word they happen to contain:
-    # without these, pixtral-12b-2409 is billed at mistral-small's rate, which is twice
-    # its own, and open-mixtral-8x7b matches "7b" and is billed as mistral-7b-instruct,
-    # eight times cheaper than the mixture it names.
+    # Left to the size-word branches below, each of these families lands on an unrelated
+    # release: open-mixtral-8x7b matches "7b" and bills as mistral-7b-instruct, and any
+    # name matching no size word at all falls through to the mistral-small default.
     if "pixtral" in lower:
         return (
             "mistralai/pixtral-large-2411"

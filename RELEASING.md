@@ -58,17 +58,27 @@ The tag push is what releases. Nothing is published until it lands.
 1. `uv build` — builds the wheel and the sdist into `dist/` (gitignored; never
    committed).
 1. **Smoke test, wheel** — installs the built wheel with the `[all]` extras into an
-   isolated environment and runs `tests/smoke_test.py`.
+   isolated environment and runs `tests/smoke_test.py`. Each check gates on
+   `importlib.util.find_spec`, so an install without the extras skips the Mistral and
+   transformers counts rather than failing them, and the provider listing is asserted
+   against 4 providers there and 8 here.
 1. **Smoke test, sdist** — the same check against the `.tar.gz`, which is what catches a
    file that the wheel happens to carry but the sdist omits.
 1. **Publish** — `uv publish` to PyPI.
 
-The extras are required, not incidental: `tests/smoke_test.py` asserts
-`len(models_by_provider) > 4`, and a bare install lists exactly 4 providers. Either
-extra now clears the bar on its own. `transformers` also registers `llama`, `deepseek`,
-`qwen`, and `huggingface`, taking the count to 8; `mistral-common` also registers
-`mistral`, taking it to 5. `[all]`, which is what the smoke steps install, gets both and
-lists 9.
+A bare install lists exactly 4 providers, and either extra adds to that on its own.
+`transformers` registers `llama`, `deepseek`, `qwen`, and `huggingface`, taking the count
+to 8; `mistral-common` registers `mistral`, taking it to 5. `[all]`, which is what the
+smoke steps install, gets both and lists 9.
+
+The job sets `XDG_CACHE_HOME` under the workspace so both smoke steps share one
+Hugging Face download. The transformers count is the one check allowed to skip on its
+own: it fetches a tokenizer from the Hub, which refuses anonymous callers with 429 on
+its own schedule, and a rate limit must not block a release. Every other Hub failure —
+a gated repo, a missing model — still fails the job.
+
+The checks themselves also run on every PR, via `tests/test_release_smoke.py`, so a
+broken assertion surfaces there rather than here.
 
 Publishing uses [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/), so
 there is no API token to rotate. The workflow's `pypi` environment supplies the OIDC

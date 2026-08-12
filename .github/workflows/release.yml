@@ -16,6 +16,15 @@ jobs:
     permissions:
       id-token: write
       contents: read
+
+    env:
+      # Both [all] steps load the same Hugging Face tokenizer. Without this they each
+      # get a fresh temp cache and download it again, doubling the anonymous Hub
+      # traffic in the one job that treats a 429 as a skip. huggingface_hub reads
+      # XDG_CACHE_HOME, and so does the smoke test, whose setdefault leaves this in
+      # place; its own clear-cache dispatch only ever removes toko's own files.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5

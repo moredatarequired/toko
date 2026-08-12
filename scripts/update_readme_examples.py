@@ -43,6 +43,11 @@ class CommandResult(NamedTuple):
     exit_code: int
 
 
+class StaleExample(NamedTuple):
+    command: str
+    reasons: list[str]
+
+
 def _prepare_command(command: str) -> str:
     # `-q` silences uv's own warnings, which FAILURE_RE would otherwise blame on toko and
     # refuse to regenerate for. A single `-q` still lets uv's errors through.
@@ -162,7 +167,7 @@ def documented_examples(lines: list[str]) -> list[Example]:
     return examples
 
 
-def update_readme() -> list[str]:
+def update_readme() -> list[StaleExample]:
     # Checked before anything runs, so a machine without the pinned shell gets one clear
     # message rather than a traceback out of the middle of the first example.
     if not os.access(SHELL, os.X_OK):
@@ -178,11 +183,11 @@ def update_readme() -> list[str]:
         ]
 
     regenerated: list[tuple[Example, str]] = []
-    stale: list[str] = []
+    stale: list[StaleExample] = []
     for example, result in results:
         reasons = failure_reasons(result)
         if reasons:
-            stale.append("\n".join([f"$ {example.command}", *reasons]))
+            stale.append(StaleExample(example.command, reasons))
         else:
             regenerated.append((example, result.output))
 
@@ -202,9 +207,12 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 1
     if stale:
+        reports = [
+            "\n".join([f"$ {example.command}", *example.reasons]) for example in stale
+        ]
         print(
             f"Left {len(stale)} of the README's examples at their previous output rather "
-            "than documenting a failure:\n\n" + "\n\n".join(stale),
+            "than documenting a failure:\n\n" + "\n\n".join(reports),
             file=sys.stderr,
         )
         return 1

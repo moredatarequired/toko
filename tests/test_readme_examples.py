@@ -64,12 +64,10 @@ def _output_block(readme: Path) -> str:
     return _blocks(readme, "txt")[0]
 
 
-def _reasons(stale: list[str]) -> list[str]:
-    # Each report opens with `$ {command}`, which repeats the very text a reason names, so
-    # searching a whole report proves only that some reason fired, not which one. Dropping
-    # a single line assumes the echoed command is one line, which holds for every
-    # documented example and every command written below.
-    return [line for report in stale for line in report.splitlines()[1:]]
+def _reasons(stale: list[update_readme_examples.StaleExample]) -> list[str]:
+    # The reasons alone: a report also echoes the command, which repeats the very text a
+    # reason names, so searching the rendered report proves only that some reason fired.
+    return [reason for example in stale for reason in example.reasons]
 
 
 def test_only_a_bare_toko_command_is_rewritten():
@@ -259,6 +257,20 @@ def test_a_nonzero_exit_is_a_failure_however_clean_the_output(tmp_path, monkeypa
 
 
 @needs_shell
+def test_a_multi_line_command_reports_only_its_reasons(tmp_path, monkeypatch):
+    command = "echo one\necho two\nexit 2"
+    readme, original = _write_example(tmp_path, command)
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    stale = update_readme_examples.update_readme()
+
+    # The command's own continuation lines are not reasons.
+    assert _reasons(stale) == ["the command exited 2"]
+    assert _commands(readme) == [command]
+    assert readme.read_text() == original
+
+
+@needs_shell
 def test_a_command_the_shell_cannot_find_is_a_failure(tmp_path, monkeypatch):
     readme, original = _write_example(tmp_path, "no-such-command-xyz --version")
     _point_script_at(monkeypatch, readme, TEST_SHELL)
@@ -280,7 +292,7 @@ def test_a_growing_block_does_not_hide_a_later_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "Warning: bad" in "\n".join(stale)
+    assert _reasons(stale) == ["Warning: bad"]
     assert _commands(readme) == ["seq 1 3", later]
     assert _blocks(readme, "txt") == ["1\n2\n3", "second"]
 
@@ -308,7 +320,7 @@ def test_a_failing_example_leaves_the_others_regenerated(tmp_path, monkeypatch):
     stale = update_readme_examples.update_readme()
 
     assert len(stale) == 1
-    assert "Error: nope" in stale[0]
+    assert stale[0].reasons == ["Error: nope"]
     assert _blocks(readme, "txt") == ["keep me", "fresh"]
 
 

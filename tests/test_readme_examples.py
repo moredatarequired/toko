@@ -181,6 +181,42 @@ def test_a_command_that_prints_nothing_is_a_failure(tmp_path, monkeypatch):
 
 
 @needs_shell
+def test_a_command_that_prints_only_whitespace_is_a_failure(tmp_path, monkeypatch):
+    """Otherwise the block is silently emptied, which is what the guard exists to stop."""
+    readme, original = _write_example(tmp_path, "printf '   '")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    stale = update_readme_examples.update_readme()
+
+    assert "printed nothing" in "\n".join(stale)
+    assert readme.read_text() == original
+
+
+@needs_shell
+def test_an_indented_warning_is_still_a_failure(tmp_path, monkeypatch):
+    readme, original = _write_example(tmp_path, "echo '   Warning: indented'")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    stale = update_readme_examples.update_readme()
+
+    assert "Warning: indented" in "\n".join(stale)
+    assert readme.read_text() == original
+
+
+@needs_shell
+def test_a_traceback_is_a_failure(tmp_path, monkeypatch):
+    readme, original = _write_example(
+        tmp_path, "echo 'Traceback (most recent call last):'; echo '  File \"x.py\"'"
+    )
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    stale = update_readme_examples.update_readme()
+
+    assert "Traceback (most recent call last):" in "\n".join(stale)
+    assert readme.read_text() == original
+
+
+@needs_shell
 def test_a_nonzero_exit_is_a_failure_however_clean_the_output(tmp_path, monkeypatch):
     readme, original = _write_example(tmp_path, "echo 'model\ttokens'; exit 2")
     _point_script_at(monkeypatch, readme, TEST_SHELL)
@@ -258,3 +294,64 @@ def test_the_examples_run_isolated_from_the_developers_own_caches(
     assert "developers-cache" not in used_cache
     # The scratch home is a temporary directory, so nothing is left behind to clean up.
     assert not Path(used_cache).exists()
+
+
+@needs_shell
+def test_the_examples_run_isolated_from_the_developers_own_config(
+    tmp_path, monkeypatch
+):
+    readme, _ = _write_example(tmp_path, "printenv XDG_CONFIG_HOME")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "developers-config"))
+
+    assert update_readme_examples.update_readme() == []
+
+    used_config = _output_block(readme)
+    assert "developers-config" not in used_config
+    assert not Path(used_config).exists()
+
+
+@needs_shell
+def test_the_examples_run_from_the_repository_root(tmp_path, monkeypatch):
+    """`uv run toko` resolves the project from the working directory, not from $PATH."""
+    readme, _ = _write_example(tmp_path, "pwd -P")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.chdir(tmp_path)
+
+    assert update_readme_examples.update_readme() == []
+
+    assert _output_block(readme) == str(update_readme_examples.REPO_ROOT)
+
+
+@needs_shell
+def test_main_exits_nonzero_when_an_example_is_left_stale(
+    tmp_path, monkeypatch, capsys
+):
+    """The exit code is the only thing that makes the guard visible to CI or a human."""
+    readme, original = _write_example(tmp_path, "echo 'Error: nope'")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    assert update_readme_examples.main() == 1
+
+    assert "Error: nope" in capsys.readouterr().err
+    assert readme.read_text() == original
+
+
+@needs_shell
+def test_main_exits_zero_when_every_example_regenerates(tmp_path, monkeypatch):
+    readme, _ = _write_example(tmp_path, "echo fresh")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    assert update_readme_examples.main() == 0
+
+    assert _output_block(readme) == "fresh"
+
+
+def test_main_exits_nonzero_when_the_shell_is_missing(tmp_path, monkeypatch, capsys):
+    readme, original = _write_example(tmp_path, "echo hello")
+    _point_script_at(monkeypatch, readme, str(tmp_path / "no-such-shell"))
+
+    assert update_readme_examples.main() == 1
+
+    assert "required to regenerate the README examples" in capsys.readouterr().err
+    assert readme.read_text() == original

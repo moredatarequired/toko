@@ -95,6 +95,27 @@ class TestPricingCoverage:
                 f"The following current OpenAI models lack pricing data: {', '.join(failures)}"
             )
 
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "mistral-large-2411",
+            "mistral-small-2409",
+            "mistral-nemo",
+            "open-mistral-7b",
+            "codestral-mamba-2407",
+            "ministral-8b-2410",
+            "pixtral-12b-2409",
+            "pixtral-large-2411",
+        ],
+    )
+    def test_mistral_family_models_have_pricing(self, model_name):
+        """Every OpenRouter id _convert_mistral_name can produce has to be a real one.
+
+        genai-prices matches these exactly, so an id that only looks plausible prices
+        nothing at all.
+        """
+        assert estimate_cost(1_000_000, model_name) is not None
+
     @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):
         """All current Anthropic models should have pricing data."""

@@ -21,11 +21,31 @@ from toko.result import TokenCount
         ("gpt-oss-20b", "huggingface"),
         ("openai/gpt-oss-120b", "huggingface"),
         ("claude-opus-4-5", "anthropic"),
+        ("mistral-large-2411", "mistral"),
+        ("open-mixtral-8x7b", "mistral"),
+        ("codestral-2405", "mistral"),
+        ("ministral-8b-2410", "mistral"),
+        ("pixtral-large-2411", "mistral"),
         ("unknown-model-xyz", None),
     ],
 )
 def test_detect_provider(name, provider):
     assert models.detect_provider(name) == provider
+
+
+def test_every_keyed_mistral_tokenizer_is_reachable_by_name():
+    """A table entry detection cannot route to Mistral is dead weight.
+
+    The lookup runs only after resolution has already picked the provider, so a name
+    detection misses fails outright instead of counting -- which is how eight entries
+    named for the codestral, ministral and pixtral families came to be unreachable.
+    """
+    unreachable = {
+        name
+        for name in counter.MISTRAL_TOKENIZERS
+        if models.detect_provider(name) != "mistral"
+    }
+    assert not unreachable
 
 
 def test_unknown_openai_model_carries_no_verified_encoding():

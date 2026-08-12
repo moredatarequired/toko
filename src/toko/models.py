@@ -325,6 +325,12 @@ OPENAI_MODEL_ENCODINGS = {
 
 _OPENAI_NAME_PATTERN = re.compile(r"gpt-|o\d")
 
+# Mistral ships whole families whose names contain neither "mistral" nor "mixtral", so
+# matching those two alone leaves codestral-2405, ministral-8b-2410 and the pixtral
+# releases with no provider at all -- they fail before any Mistral code runs, even though
+# MISTRAL_TOKENIZERS keys them.
+_MISTRAL_NAME_PATTERNS = ("mistral", "mixtral", "codestral", "ministral", "pixtral")
+
 
 def detect_provider(model: str) -> str | None:
     """Detect provider from model name using pattern matching."""
@@ -352,7 +358,7 @@ def detect_provider(model: str) -> str | None:
         return "xai"
 
     # Mistral models
-    if "mistral" in model_lower or "mixtral" in model_lower:
+    if any(pattern in model_lower for pattern in _MISTRAL_NAME_PATTERNS):
         return "mistral"
 
     # Llama models (including fine-tunes)

@@ -32,13 +32,31 @@ def test_the_mistral_count_is_plausible():
     smoke_test.check_mistral()
 
 
+# What `_count_transformers` actually raises when the Hub is unreachable, captured
+# verbatim from a run against an endpoint answering 429 (500, 503 and HF_HUB_OFFLINE=1
+# with a cold cache all produce the identical text — the status code never reaches here,
+# because hf_hub_download converts every one of them to LocalEntryNotFoundError first).
+HUB_OUTAGE_MESSAGE = (
+    "Failed to count tokens for Qwen model Qwen/Qwen2.5-7B-Instruct: We couldn't "
+    "connect to 'https://huggingface.co' to load the files, and couldn't find them in "
+    "the cached files.\nCheck your internet connection or see how to run the library in "
+    "offline mode at "
+    "'https://huggingface.co/docs/transformers/installation#offline-mode'."
+)
+
+
 @pytest.mark.parametrize(
     "reason",
     [
+        HUB_OUTAGE_MESSAGE,
         "429 Client Error: Too Many Requests for url: https://huggingface.co/...",
         "We couldn't connect to 'https://huggingface.co' to load this file",
         "503 Server Error: Service Unavailable",
         "HTTPSConnectionPool: Read timed out.",
+        # The one shape that does carry the code: transformers reporting an HfHubHTTPError
+        # it was handed rather than a LocalEntryNotFoundError.
+        "There was a specific connection error when trying to load Qwen/Qwen2.5-7B-"
+        "Instruct:\n429 Client Error: Too Many Requests for url: https://huggingface.co/",
     ],
 )
 def test_a_hub_outage_is_recognised(reason):
@@ -52,6 +70,11 @@ def test_a_hub_outage_is_recognised(reason):
         "Model 'org/model-429b' is gated on Hugging Face. Accept the license",
         "Model 'Qwen/Qwen2.5-72B' requires authentication. Set HF_TOKEN",
         "Failed to count tokens for Qwen model X: shape mismatch at offset 5043",
+        # A bare status pattern matched all of these, so a broken tokenizer could print
+        # "skipped" and let the release publish.
+        "Failed to count tokens for Qwen model X: expected 512 tokens, got 7",
+        "Failed to count tokens for Qwen model X: bad merges table (see line 501)",
+        "Failed to count tokens for Qwen model X: vocab size 500 does not match 4096",
     ],
 )
 def test_a_failure_the_hub_did_not_cause_is_not_excused(reason):

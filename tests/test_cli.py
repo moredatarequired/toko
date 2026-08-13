@@ -71,6 +71,9 @@ def _imports_click(source: str) -> bool:
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
+            # `from .click import x` resolves inside toko, not to the click package.
+            if node.level:
+                continue
             names = [node.module or ""]
         else:
             continue
@@ -86,12 +89,15 @@ def test_no_module_imports_click_directly():
     accident of the resolution: with the [all] extras, huggingface-hub 1.x installs
     click whatever toko declares, and only a bare install breaks.
     """
+    modules = sorted(SRC_ROOT.rglob("*.py"))
     offenders = [
         str(path.relative_to(SRC_ROOT))
-        for path in sorted(SRC_ROOT.rglob("*.py"))
+        for path in modules
         if _imports_click(path.read_text(encoding="utf-8"))
     ]
     assert offenders == []
+    # A scan that found nothing to read passes for the wrong reason.
+    assert modules, f"no modules under {SRC_ROOT}"
 
 
 # A tripwire that stops recognising the import is a tripwire that silently passes.
@@ -106,6 +112,9 @@ def test_no_module_imports_click_directly():
         ('"""\nimport click\n"""', False),
         ("import typer\nfrom typer.core import TyperOption", False),
         ("import clicky\nfrom toko.clicker import thing", False),
+        # Relative, so it names a toko submodule however much it reads like the package.
+        ("from .click import Option", False),
+        ("from ..click.core import Context", False),
     ],
 )
 def test_the_click_scan_reads_imports_not_text(source, imported):

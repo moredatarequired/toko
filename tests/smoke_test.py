@@ -48,9 +48,29 @@ TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 # what the Hub did is only visible in the message; anything these do not cover — a gated
 # repo, a missing model, a broken tokenizer — is a real failure and still fails the
 # release.
-_HUB_STATUS = re.compile(r"\b(?:429|5\d\d)\b")
+#
+# The status code is almost never in that message. `hf_hub_download` and
+# `snapshot_download` both convert a 429 or a 5xx HEAD failure into a bare
+# `LocalEntryNotFoundError` (only 401, gated and repo-not-found keep their
+# `HfHubHTTPError`), and transformers then reports that as "We couldn't connect to ...".
+# Against a live endpoint returning 429, 500 or 503 alike, and under HF_HUB_OFFLINE=1
+# with a cold cache, the whole of what arrives here is:
+#
+#     Failed to count tokens for Qwen model Qwen/Qwen2.5-7B-Instruct: We couldn't
+#     connect to 'https://huggingface.co' to load the files, and couldn't find them in
+#     the cached files.
+#     Check your internet connection or see how to run the library in offline mode at
+#     'https://huggingface.co/docs/transformers/installation#offline-mode'.
+#
+# So the markers, not the status pattern, are what actually excuses an outage. The
+# pattern stays for the paths that do pass an `HfHubHTTPError` through verbatim, and is
+# anchored on the phrase requests puts after the code, because a bare `\b5\d\d\b` also
+# matches "expected 512 tokens, got 7" — turning a genuinely broken tokenizer into a
+# printed skip, which is the one thing this guard must never do.
+_HUB_STATUS = re.compile(r"\b(?:429|5\d\d) (?:client|server) error\b")
 HUB_UNAVAILABLE_MARKERS = (
-    "cannot find the requested files in the local cache",
+    # Both the "local cache" and the "disk cache" wording of LocalEntryNotFoundError.
+    "cannot find the requested files",
     "connection",
     "couldn't connect",
     "name resolution",

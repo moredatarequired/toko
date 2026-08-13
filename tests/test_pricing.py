@@ -1,14 +1,21 @@
 """Comprehensive pricing tests for all supported models."""
 
 import pytest
+from genai_prices.data import providers
 
 from toko import models
-from toko.cost import _convert_mistral_name, estimate_cost
+from toko.cost import (
+    _MISTRAL_EXACT_ID_EXCLUSIONS,
+    _MISTRAL_EXACT_IDS,
+    _convert_mistral_name,
+    estimate_cost,
+)
 from toko.models import (
     ANTHROPIC_MODELS,
     GOOGLE_MODELS,
     RETIRED_OPENAI_MODELS,
     XAI_MODELS,
+    detect_provider,
     list_models,
 )
 
@@ -115,6 +122,12 @@ class TestPricingCoverage:
             "open-mixtral-8x22b",
             "pixtral-12b-2409",
             "pixtral-large-2411",
+            "mistral-medium-3-5",
+            "mistral-large-2512",
+            "mistral-small-2603",
+            "mistral-small-3.1-24b-instruct",
+            "ministral-14b-2512",
+            "codestral-embed-2505",
         ],
     )
     def test_mistral_family_models_have_pricing(self, model_name):
@@ -129,7 +142,6 @@ class TestPricingCoverage:
         ("model_name", "other_name"),
         [
             ("ministral-3b", "mistral-small-2409"),
-            ("ministral-3b", "ministral-8b-2410"),
             ("mistral-tiny-2407", "mistral-small-2409"),
             ("open-mixtral-8x7b", "open-mistral-7b"),
             ("open-mixtral-8x22b", "mistral-small-2409"),
@@ -137,6 +149,20 @@ class TestPricingCoverage:
             ("mistral-medium-latest", "mistral-medium-2312"),
             ("mistral-small-latest", "mistral-small-2409"),
             ("pixtral-12b-2409", "mistral-small-2409"),
+            # A dated release must not collapse onto the rolling name of its tier: each
+            # of these matched the tier's size word and billed as the wrong release.
+            ("mistral-medium-3-5", "mistral-medium-latest"),
+            ("mistral-large-2512", "mistral-large-2411"),
+            ("mistral-small-2603", "mistral-small-2409"),
+            ("mistral-small-3.1-24b-instruct", "mistral-small-2409"),
+            ("mistral-small-3.1-24b-instruct", "mistral-small-3.2-24b-instruct"),
+            ("mistral-small-24b-instruct-2501", "mistral-small-2409"),
+            ("ministral-3b-2512", "ministral-3b"),
+            ("ministral-8b-2512", "ministral-8b-2410"),
+            ("ministral-14b-2512", "mistral-small-2409"),
+            ("mistral-7b-instruct-v0.2", "mistral-7b-instruct"),
+            # An embedding model must not be billed at its family's chat rate.
+            ("codestral-embed-2505", "codestral-2508"),
         ],
     )
     def test_mistral_family_models_are_not_priced_as_each_other(
@@ -147,10 +173,32 @@ class TestPricingCoverage:
         Every name here used to fall through _convert_mistral_name onto the id its
         partner resolves to, so each priced to something and the swap went unnoticed.
         Comparing the two survives a price update in a way a hardcoded rate would not.
+        Both directions are priced because some pairs share an input rate and differ
+        only on output, ministral-14b-2512 against the mistral-small fallback among them.
         """
-        assert estimate_cost(1_000_000, model_name) != estimate_cost(
-            1_000_000, other_name
+        assert estimate_cost(1_000_000, model_name, output_tokens=1_000_000) != (
+            estimate_cost(1_000_000, other_name, output_tokens=1_000_000)
         )
+
+    def test_mistral_exact_ids_cover_the_price_data(self):
+        """_MISTRAL_EXACT_IDS has to keep up with the shipped price data.
+
+        A mistralai/* release the set misses falls back to a size-word branch and bills
+        as the wrong member of its tier, which is the defect the set exists to prevent,
+        so a data update adding one has to fail here rather than pass quietly.
+        """
+        available = {
+            model.id.removeprefix("mistralai/")
+            for provider in providers
+            if provider.id == "openrouter"
+            for model in provider.models
+            if model.id.startswith("mistralai/")
+        }
+        # devstral and voxtral share the namespace but not the naming: detect_provider
+        # routes neither to Mistral, so _convert_mistral_name never sees them.
+        reachable = {name for name in available if detect_provider(name) == "mistral"}
+        assert reachable - _MISTRAL_EXACT_IDS == _MISTRAL_EXACT_ID_EXCLUSIONS
+        assert available >= _MISTRAL_EXACT_IDS
 
     def test_pixtral_large_resolves_to_its_own_id(self):
         """The one family member no price differential can catch.

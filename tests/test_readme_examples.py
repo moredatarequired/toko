@@ -64,22 +64,32 @@ def _output_block(readme: Path) -> str:
     return _blocks(readme, "txt")[0]
 
 
-def _reasons(stale: list[str]) -> list[str]:
-    # Each report opens with `$ {command}`, which repeats the very text a reason names, so
-    # searching a whole report proves only that some reason fired, not which one. Dropping
-    # a single line assumes the echoed command is one line, which holds for every
-    # documented example and every command written below.
-    return [line for report in stale for line in report.splitlines()[1:]]
+def _reasons(stale: list[update_readme_examples.StaleExample]) -> list[str]:
+    # The reasons alone: a report also echoes the command, which repeats the very text a
+    # reason names, so searching the rendered report proves only that some reason fired.
+    return [reason for example in stale for reason in example.reasons]
 
 
 def test_only_a_bare_toko_command_is_rewritten():
     prepare = update_readme_examples._prepare_command  # noqa: SLF001
 
-    assert prepare("toko --text hi") == "uv run toko --text hi"
-    assert prepare("printf hi | toko") == "printf hi | uv run toko"
+    assert prepare("toko --text hi") == "uv run -q toko --text hi"
+    assert prepare("printf hi | toko") == "printf hi | uv run -q toko"
     assert prepare("ls ~/.cache/toko") == "ls ~/.cache/toko"
     assert prepare("ls my-toko") == "ls my-toko"
     assert prepare("ls dir.toko") == "ls dir.toko"
+
+
+@needs_shell
+def test_a_warning_from_the_launcher_is_not_blamed_on_toko(tmp_path, monkeypatch):
+    # A real `uv run`, given the mismatched VIRTUAL_ENV that uv warns about. The warning is
+    # uv's, not toko's, so it must not leave the example stale.
+    readme, _ = _write_example(tmp_path, "VIRTUAL_ENV=/no-such-venv toko --version")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    assert update_readme_examples.update_readme() == []
+
+    assert "toko version" in _output_block(readme)
 
 
 def test_missing_shell_is_refused(tmp_path, monkeypatch):
@@ -134,6 +144,9 @@ def test_readme_cost_example_is_refused_without_an_api_key(tmp_path, monkeypatch
     assert any(
         "ANTHROPIC_API_KEY environment variable" in reason for reason in _reasons(stale)
     )
+    # Exactly one: the missing key is the only complaint, so noise from the launcher
+    # creeping back into the reasons would fail here rather than pass the check above.
+    assert len(_reasons(stale)) == 1
     assert readme.read_text() == original
 
 
@@ -244,6 +257,20 @@ def test_a_nonzero_exit_is_a_failure_however_clean_the_output(tmp_path, monkeypa
 
 
 @needs_shell
+def test_a_multi_line_command_reports_only_its_reasons(tmp_path, monkeypatch):
+    command = "echo one\necho two\nexit 2"
+    readme, original = _write_example(tmp_path, command)
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+
+    stale = update_readme_examples.update_readme()
+
+    # The command's own continuation lines are not reasons.
+    assert _reasons(stale) == ["the command exited 2"]
+    assert _commands(readme) == [command]
+    assert readme.read_text() == original
+
+
+@needs_shell
 def test_a_command_the_shell_cannot_find_is_a_failure(tmp_path, monkeypatch):
     readme, original = _write_example(tmp_path, "no-such-command-xyz --version")
     _point_script_at(monkeypatch, readme, TEST_SHELL)
@@ -265,7 +292,7 @@ def test_a_growing_block_does_not_hide_a_later_failure(tmp_path, monkeypatch):
 
     stale = update_readme_examples.update_readme()
 
-    assert "Warning: bad" in "\n".join(stale)
+    assert _reasons(stale) == ["Warning: bad"]
     assert _commands(readme) == ["seq 1 3", later]
     assert _blocks(readme, "txt") == ["1\n2\n3", "second"]
 
@@ -293,7 +320,7 @@ def test_a_failing_example_leaves_the_others_regenerated(tmp_path, monkeypatch):
     stale = update_readme_examples.update_readme()
 
     assert len(stale) == 1
-    assert "Error: nope" in stale[0]
+    assert stale[0].reasons == ["Error: nope"]
     assert _blocks(readme, "txt") == ["keep me", "fresh"]
 
 
@@ -329,6 +356,32 @@ def test_the_examples_run_isolated_from_the_developers_own_config(
 
 
 @needs_shell
+def test_the_isolation_reaches_every_command_of_a_pipeline(tmp_path, monkeypatch):
+    readme, _ = _write_example(tmp_path, "printf 'x' | printenv XDG_CACHE_HOME")
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "developers-cache"))
+
+    assert update_readme_examples.update_readme() == []
+
+    used_cache = _output_block(readme)
+    assert "developers-cache" not in used_cache
+    assert not Path(used_cache).exists()
+
+
+@needs_shell
+def test_the_developers_active_virtualenv_does_not_reach_an_example(
+    tmp_path, monkeypatch
+):
+    readme, _ = _write_example(tmp_path, 'echo "[${VIRTUAL_ENV:-unset}]"')
+    _point_script_at(monkeypatch, readme, TEST_SHELL)
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "developers-venv"))
+
+    assert update_readme_examples.update_readme() == []
+
+    assert _output_block(readme) == "[unset]"
+
+
+@needs_shell
 def test_the_examples_run_from_the_repository_root(tmp_path, monkeypatch):
     """`uv run toko` resolves the project from the working directory, not from $PATH."""
     readme, _ = _write_example(tmp_path, "pwd -P")
@@ -345,12 +398,18 @@ def test_main_exits_nonzero_when_an_example_is_left_stale(
     tmp_path, monkeypatch, capsys
 ):
     """The exit code is the only thing that makes the guard visible to CI or a human."""
-    readme, original = _write_example(tmp_path, "echo 'Error: nope'")
+    # printf assembles the reason, so "Error: nope" appears nowhere in the command. A
+    # report that echoed only the command, or that listed only the reasons, satisfies
+    # one of the assertions below but never both.
+    command = "printf 'Error: %s\\n' nope"
+    readme, original = _write_example(tmp_path, command)
     _point_script_at(monkeypatch, readme, TEST_SHELL)
 
     assert update_readme_examples.main() == 1
 
-    assert "Error: nope" in capsys.readouterr().err
+    report = capsys.readouterr().err
+    assert "Error: nope" in report
+    assert f"$ {command}" in report
     assert readme.read_text() == original
 
 

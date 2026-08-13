@@ -43,8 +43,15 @@ class CommandResult(NamedTuple):
     exit_code: int
 
 
+class StaleExample(NamedTuple):
+    command: str
+    reasons: list[str]
+
+
 def _prepare_command(command: str) -> str:
-    return re.sub(r"(?<![\w./-])toko\b", "uv run toko", command)
+    # `-q` silences uv's own warnings, which FAILURE_RE would otherwise blame on toko and
+    # refuse to regenerate for. A single `-q` still lets uv's errors through.
+    return re.sub(r"(?<![\w./-])toko\b", "uv run -q toko", command)
 
 
 def _uv_cache_dir() -> str:
@@ -61,7 +68,10 @@ def run_command(command: str, scratch: Path) -> CommandResult:
     for directory in (config_home, cache_home):
         directory.mkdir(parents=True, exist_ok=True)
     env_overrides = {
-        "RICH_NO_COLOR": "1",
+        # NO_COLOR, not RICH_NO_COLOR: rich reads the former, and the latter suppressed
+        # nothing. ANSI_RE strips what does get emitted, so this only keeps the captured
+        # bytes closer to what lands in the README.
+        "NO_COLOR": "1",
         # Isolated so that neither the developer's own config nor counts cached from an
         # earlier run can change what an example prints.
         "XDG_CONFIG_HOME": str(config_home),
@@ -70,9 +80,15 @@ def run_command(command: str, scratch: Path) -> CommandResult:
         # the environment from the network on every example, so it keeps the real one.
         "UV_CACHE_DIR": _uv_cache_dir(),
     }
-    env_prefix = " ".join(
+    env_assignments = " ".join(
         f"{key}={shlex.quote(value)}" for key, value in env_overrides.items()
     )
+    # Exported rather than written as an assignment prefix: a prefix applies only to the
+    # first command of a pipeline, so `printf … | toko` would run toko unisolated. Exporting
+    # inside the command string still runs after the login shell's profile, so the overrides
+    # win over it. VIRTUAL_ENV goes for the same reason the XDG homes are replaced: an
+    # example must not run against whatever environment the developer has active.
+    script = f"unset VIRTUAL_ENV; export {env_assignments}; {command}"
 
     # A terminal, not a pipe: toko draws tables only when stdout is a tty, and treats a
     # non-tty stdin as piped input. openpty plus a subprocess rather than pty.spawn, whose
@@ -82,8 +98,8 @@ def run_command(command: str, scratch: Path) -> CommandResult:
     try:
         try:
             process = subprocess.Popen(  # noqa: S603
-                [SHELL, "-lc", f"{env_prefix} {command}"],
-                # The examples say `toko`, which becomes `uv run toko`, and uv resolves
+                [SHELL, "-lc", script],
+                # The examples say `toko`, which becomes `uv run -q toko`, and uv resolves
                 # the project from the working directory. Without this the script only
                 # works when invoked from the repository root.
                 cwd=REPO_ROOT,
@@ -160,7 +176,7 @@ def documented_examples(lines: list[str]) -> list[Example]:
     return examples
 
 
-def update_readme() -> list[str]:
+def update_readme() -> list[StaleExample]:
     # Checked before anything runs, so a machine without the pinned shell gets one clear
     # message rather than a traceback out of the middle of the first example.
     if not os.access(SHELL, os.X_OK):
@@ -176,11 +192,11 @@ def update_readme() -> list[str]:
         ]
 
     regenerated: list[tuple[Example, str]] = []
-    stale: list[str] = []
+    stale: list[StaleExample] = []
     for example, result in results:
         reasons = failure_reasons(result)
         if reasons:
-            stale.append("\n".join([f"$ {example.command}", *reasons]))
+            stale.append(StaleExample(example.command, reasons))
         else:
             regenerated.append((example, result.output))
 
@@ -200,9 +216,12 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 1
     if stale:
+        reports = [
+            "\n".join([f"$ {example.command}", *example.reasons]) for example in stale
+        ]
         print(
             f"Left {len(stale)} of the README's examples at their previous output rather "
-            "than documenting a failure:\n\n" + "\n\n".join(stale),
+            "than documenting a failure:\n\n" + "\n\n".join(reports),
             file=sys.stderr,
         )
         return 1

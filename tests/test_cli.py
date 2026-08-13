@@ -3,7 +3,8 @@
 import json
 import os
 import re
-from typing import TYPE_CHECKING
+import sqlite3
+from pathlib import Path
 
 import httpx
 import pytest
@@ -12,12 +13,10 @@ from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
 from tests.hf_hub import skip_if_rate_limited
-from toko.cli import app
+from toko.cache import get_cache_db_path, get_cached_count
+from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 runner = CliRunner()
 
@@ -911,3 +910,151 @@ def test_unknown_sort_is_a_usage_error(tmp_path):
     assert result.exit_code == 2
     combined = _normalize_cli_output(result.stdout + result.stderr)
     assert "'size' is not one of 'input', 'path', 'count'" in combined
+
+
+def _write_tree(tmp_path: Path) -> Path:
+    """Build a directory of files to count whose first file is by far the largest.
+
+    Files are counted in sorted order, so the big one is submitted first and finishes
+    last: a run that reported counts in completion order would put it elsewhere.
+    """
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "aaa_big.txt").write_text("lorem ipsum dolor sit amet " * 20_000)
+    for index in range(12):
+        # Text the two OpenAI encodings disagree about, so a count filed under the wrong
+        # model shows up as a changed number rather than passing unnoticed.
+        (tree / f"file_{index:02d}.txt").write_text(
+            f"héllo wörld — naïve café 日本語 {index}\n" * 3
+        )
+    return tree
+
+
+def _csv_rows(output: str) -> list[list[str]]:
+    return [line.split(",") for line in _strip_ansi(output).splitlines() if line]
+
+
+def test_concurrent_counting_matches_a_sequential_run(tmp_path):
+    assert DEFAULT_JOBS > 1, "the default has to be concurrent for this to compare"
+    tree = _write_tree(tmp_path)
+    # Two encodings, so a count landing under the wrong model would change the row.
+    args = ["--header", "--format", "csv", "-m", "gpt-5", "-m", "gpt-4", str(tree)]
+
+    # Concurrent first: counts are cached, so running the sequential pass first would
+    # leave the concurrent one replaying that cache instead of counting anything.
+    concurrent = _invoke_cli(args)
+    sequential = _invoke_cli([*args, "--jobs", "1"])
+
+    assert sequential.exit_code == 0
+    assert concurrent.exit_code == 0
+    assert concurrent.stdout == sequential.stdout
+
+    rows = _csv_rows(concurrent.stdout)
+    assert rows[0] == ["file", "gpt-4", "gpt-5"]
+    assert rows[1][0] == str(tree / "aaa_big.txt")
+    assert [row[0] for row in rows[1:]] == [
+        str(path) for path in sorted(tree.iterdir())
+    ]
+    assert rows[2][1] != rows[2][2]
+
+
+def test_concurrent_counting_reports_failures_like_a_sequential_run(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+    tree = _write_tree(tmp_path)
+    args = [
+        "--header",
+        "--format",
+        "csv",
+        "-m",
+        "gpt-5",
+        "-m",
+        "claude-opus-4-5",
+        str(tree),
+    ]
+
+    sequential = _invoke_cli([*args, "--jobs", "1"])
+    concurrent = _invoke_cli(args)
+
+    assert sequential.exit_code == 0
+    assert concurrent.exit_code == 0
+    assert concurrent.stdout == sequential.stdout
+    # Compared line by line after sorting rather than verbatim: notices are printed by
+    # whichever worker reaches them, so once two models have something to say their
+    # order on stderr is whoever got there first. The content of every line is still
+    # pinned; only the sequence between them is left free.
+    assert sorted(concurrent.stderr.splitlines()) == sorted(
+        sequential.stderr.splitlines()
+    )
+    assert (
+        "Failed to count tokens for claude-opus-4-5 on 13 file(s)" in concurrent.stderr
+    )
+    assert "claude-opus-4-5" not in concurrent.stdout
+
+
+def test_every_model_failing_still_exits_nonzero_when_concurrent(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(["-m", "claude-opus-4-5", str(tree)])
+
+    assert result.exit_code == 1
+    assert "Error: All models failed for all files" in result.stderr
+
+
+def test_a_warn_once_notice_is_still_printed_once_across_workers(tmp_path):
+    """Every file re-reaches the notice, so the workers race for the one printing of it."""
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-6-imaginary", str(tree)])
+
+    assert result.exit_code == 0
+    warnings = [
+        line for line in result.stderr.splitlines() if line.startswith("Warning:")
+    ]
+    assert len(warnings) == 1
+    assert "unknown OpenAI model 'gpt-6-imaginary'" in warnings[0]
+
+
+def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(
+        ["--header", "--format", "csv", "-m", "gpt-5", "-m", "gpt-4", str(tree)]
+    )
+
+    assert result.exit_code == 0
+    with sqlite3.connect(get_cache_db_path()) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+    rows = _csv_rows(result.stdout)
+    assert rows[0] == ["file", "gpt-4", "gpt-5"]
+    assert len(rows) == 14
+    for path, gpt_4, gpt_5 in rows[1:]:
+        content = Path(path).read_text()
+        # Every count the run reported is readable again under its own model, so no
+        # write landed under another thread's key or was lost to a locked database.
+        assert get_cached_count(content, "gpt-4") == int(gpt_4)
+        assert get_cached_count(content, "gpt-5") == int(gpt_5)
+
+
+def test_jobs_below_one_is_rejected(tmp_path):
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(["--jobs", "0", str(tree)])
+
+    assert result.exit_code == 2
+    assert "is not in the range" in _normalize_cli_output(result.stderr)
+
+
+def test_jobs_above_the_cap_is_rejected(tmp_path):
+    """An absurd -j is a usage error, not a thousand threads."""
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(["--jobs", str(MAX_JOBS + 1), str(tree)])
+
+    assert result.exit_code == 2
+    assert "is not in the range" in _normalize_cli_output(result.stderr)

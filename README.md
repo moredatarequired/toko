@@ -113,11 +113,11 @@ toko --exclude '**/__pycache__/*' src/
 ```txt
 File                                   gpt-5
 src/toko/__init__.py                     378
-src/toko/cache.py                        773
-src/toko/cli.py                        4,586
+src/toko/cache.py                        863
+src/toko/cli.py                        5,112
 src/toko/config.py                     1,374
 src/toko/cost.py                       1,387
-src/toko/counter.py                    6,318
+src/toko/counter.py                    6,495
 src/toko/data/__init__.py                  8
 src/toko/data/models.toml              2,952
 src/toko/data/openrouter_models.json     359
@@ -129,11 +129,12 @@ src/toko/price_update.py               1,414
 src/toko/py.typed                          0
 src/toko/result.py                       107
 src/toko/sort_order.py                    50
-TOTAL                                 32,103
+TOTAL                                 32,896
 ```
 
 - Directories are processed recursively by default and honor `.gitignore`.
 - Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Counting files runs eight counts at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` (1 to 64) to change that, or `--jobs 1` to count one at a time. It has no effect on `--text` or piped stdin, and URLs are still fetched one after another.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.
 - The default is `--sort input`, which leaves the rows in the order the paths were read.

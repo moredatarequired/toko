@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import threading
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 from urllib.parse import quote
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
-    from transformers import PreTrainedTokenizerBase
 
 
 # Check for optional dependencies without importing them
@@ -55,18 +55,45 @@ def _configure_transformers_logging() -> None:
 # Cache tokenizers at module level to avoid reloading on every call
 _TOKENIZER_CACHE: dict[str, object] = {}
 
+# Counts run concurrently, so the miss below has to be held under a lock: threads that
+# all miss the same key would otherwise each build and keep their own tokenizer, and a
+# tokenizer is hundreds of megabytes. One lock per key rather than one for the cache,
+# so a slow load -- a first-time HuggingFace download -- only blocks the threads that
+# want that same tokenizer.
+_TOKENIZER_LOCKS: dict[str, threading.Lock] = {}
+_TOKENIZER_LOCKS_LOCK = threading.Lock()
+
+
+def _cached_tokenizer[T](cache_key: str, load: Callable[[], T]) -> T:
+    cached = _TOKENIZER_CACHE.get(cache_key)
+    if cached is None:
+        with _TOKENIZER_LOCKS_LOCK:
+            lock = _TOKENIZER_LOCKS.setdefault(cache_key, threading.Lock())
+        with lock:
+            cached = _TOKENIZER_CACHE.get(cache_key)
+            if cached is None:
+                cached = _TOKENIZER_CACHE[cache_key] = load()
+    return cast("T", cached)
+
+
 # (warning kind, model name) pairs already emitted, so counting a directory does not
 # repeat the same notice once per file. The kind is part of the key so that two
 # different warnings about one model cannot suppress each other.
 _WARNED_ONCE: set[tuple[str, str]] = set()
 
+# Counts run concurrently, so the test and the insert below have to be one step: two
+# threads that both miss the set would otherwise both print the same notice, and two
+# printing at once can interleave halfway through a line.
+_WARN_LOCK = threading.Lock()
+
 
 def _warn_once(kind: str, model_name: str, message: str) -> None:
     key = (kind, model_name)
-    if key in _WARNED_ONCE:
-        return
-    _WARNED_ONCE.add(key)
-    print(f"Warning: {message}", file=sys.stderr)
+    with _WARN_LOCK:
+        if key in _WARNED_ONCE:
+            return
+        _WARNED_ONCE.add(key)
+        print(f"Warning: {message}", file=sys.stderr)
 
 
 # Below this length a "key" is more likely to be a common substring than a secret,
@@ -393,15 +420,14 @@ def _count_xai_via_transformers(text: str) -> int:
 
     _configure_transformers_logging()
 
-    cache_key = "transformers:xai:grok-1"
-    if cache_key not in _TOKENIZER_CACHE:
-        from transformers import AutoTokenizer  # noqa: PLC0415
+    from transformers import AutoTokenizer  # noqa: PLC0415
 
-        _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
+    tokenizer = _cached_tokenizer(
+        "transformers:xai:grok-1",
+        lambda: AutoTokenizer.from_pretrained(
             "Xenova/grok-1-tokenizer", trust_remote_code=True
-        )
-
-    tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
+        ),
+    )
     tokens = tokenizer.encode(text)
     return len(tokens)
 
@@ -533,10 +559,9 @@ def _count_mistral(text: str, model_info: ModelInfo) -> TokenCount:
     spec = known or MISTRAL_FALLBACK_TOKENIZER
     caveat = None if known else _warn_mistral_approximate(model_info.name)
 
-    cache_key = f"mistral:{spec}"
-    if cache_key not in _TOKENIZER_CACHE:
-        _TOKENIZER_CACHE[cache_key] = _load_mistral_tokenizer(spec)
-    tokenizer = cast("MistralTokenizer", _TOKENIZER_CACHE[cache_key])
+    tokenizer = _cached_tokenizer(
+        f"mistral:{spec}", lambda: _load_mistral_tokenizer(spec)
+    )
     request = ChatCompletionRequest(messages=[UserMessage(content=text)])
     tokens = tokenizer.encode_chat_completion(request).tokens
     if caveat is not None:
@@ -554,15 +579,14 @@ def _count_transformers(text: str, model_info: ModelInfo) -> TokenCount:
     _configure_transformers_logging()
 
     try:
-        cache_key = f"transformers:{model_info.name}"
-        if cache_key not in _TOKENIZER_CACHE:
-            from transformers import AutoTokenizer  # noqa: PLC0415
+        from transformers import AutoTokenizer  # noqa: PLC0415
 
-            _TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
+        tokenizer = _cached_tokenizer(
+            f"transformers:{model_info.name}",
+            lambda: AutoTokenizer.from_pretrained(
                 model_info.name, trust_remote_code=True
-            )
-
-        tokenizer = cast("PreTrainedTokenizerBase", _TOKENIZER_CACHE[cache_key])
+            ),
+        )
         tokens = tokenizer.encode(text)
     except Exception as e:
         error_str = str(e)

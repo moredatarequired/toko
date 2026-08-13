@@ -1,5 +1,7 @@
 """Tests for cache module."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 from toko.cache import cache_count, clear_cache, get_cache_db_path, get_cached_count
 
 
@@ -88,3 +90,16 @@ def test_get_cache_db_path(cache_dir):
     path = get_cache_db_path()
     assert path.name == "token_cache.db"
     assert path.parent == cache_dir
+
+
+def test_counts_racing_for_one_message_all_survive():
+    """Several models counted concurrently against one text share a single row."""
+    text = "hello world"
+    models = [f"model-{index}" for index in range(16)]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda model: cache_count(text, model, len(model)), models))
+
+    assert {model: get_cached_count(text, model) for model in models} == {
+        model: len(model) for model in models
+    }

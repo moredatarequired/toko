@@ -2,9 +2,10 @@
 
 import contextlib
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 import typer
 from typer.core import TyperGroup, TyperOption
@@ -24,12 +25,22 @@ from toko.price_update import (
     refresh_prices,
     update_prices_if_stale,
 )
+from toko.result import TokenCount
 from toko.sort_order import SortOrder
 
-if TYPE_CHECKING:
-    from toko.result import TokenCount
-
 _SUBCOMMAND_META_KEY = "toko.subcommand"
+
+# Counting a file is almost all waiting: an HTTP round trip for the API-backed providers,
+# and a Rust call that drops the GIL for the local tokenizers. Eight threads hide that
+# latency on a large directory while staying modest enough not to look like a burst to a
+# provider's rate limiter, and it does not scale with the machine, so a three-file run
+# does not start thirty threads to do three counts.
+DEFAULT_JOBS = 8
+
+# Well past the point where more threads buy anything -- the counts are bounded by the
+# providers, not by this machine -- and low enough that a mistyped `-j 1000` is a usage
+# error rather than a thousand threads and a thousand simultaneous API requests.
+MAX_JOBS = 64
 
 
 def is_stdout_tty() -> bool:
@@ -202,6 +213,16 @@ def main(
             help="Include retired models in --list-models output (no other effect)",
         ),
     ] = False,
+    jobs: Annotated[
+        int,
+        typer.Option(
+            "--jobs",
+            "-j",
+            min=1,
+            max=MAX_JOBS,
+            help="Counts to run concurrently when counting files (1 is sequential)",
+        ),
+    ] = DEFAULT_JOBS,
 ) -> None:
     """Toko - Token counter for LLMs."""
     # If a subcommand was invoked, don't run default behavior
@@ -223,6 +244,7 @@ def main(
         list_models,
         include_retired=include_retired,
         sort_order=sort_order,
+        jobs=jobs,
     )
 
 
@@ -461,24 +483,51 @@ def _handle_text_input(
     typer.echo(output)
 
 
+def _count_one(job: tuple[str, str]) -> TokenCount | str:
+    """Count one (content, model) pair, returning the failure message instead of raising.
+
+    A worker cannot report the failure itself: the warning for it names how many files
+    the model failed on, which is only known once every count is in.
+    """
+    content, model_name = job
+    try:
+        return count_tokens(content, model=model_name)
+    except ValueError as exc:
+        return str(exc)
+
+
 def _collect_file_counts(
-    models: list[str], files: list[tuple[str, str]]
+    models: list[str], files: list[tuple[str, str]], *, jobs: int = DEFAULT_JOBS
 ) -> tuple[dict[str, dict[str, TokenCount]], dict[str, dict[str, str]], dict[str, str]]:
+    # Flattened so that one file counted against several API models parallelises too,
+    # rather than only files being spread across workers.
+    work = [(content, model_name) for _, content in files for model_name in models]
+    workers = min(jobs, len(work))
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # map yields in submission order, so everything below -- the row order, the
+            # per-file column order, and which failure a model reports -- is decided by
+            # the input and not by which count happened to finish first.
+            counted = list(pool.map(_count_one, work))
+    else:
+        counted = [_count_one(job) for job in work]
+
     file_results: dict[str, dict[str, TokenCount]] = {}
     file_errors: dict[str, dict[str, str]] = {}
     model_errors: dict[str, str] = {}
+    outcomes = iter(counted)
 
-    for display_name, content in files:
+    for display_name, _ in files:
         results = file_results.setdefault(display_name, {})
         errors = file_errors.setdefault(display_name, {})
 
         for model_name in models:
-            try:
-                results[model_name] = count_tokens(content, model=model_name)
-            except ValueError as exc:
-                error_msg = str(exc)
-                errors[model_name] = error_msg
-                model_errors.setdefault(model_name, error_msg)
+            outcome = next(outcomes)
+            if isinstance(outcome, TokenCount):
+                results[model_name] = outcome
+            else:
+                errors[model_name] = outcome
+                model_errors.setdefault(model_name, outcome)
 
     return file_results, file_errors, model_errors
 
@@ -508,8 +557,11 @@ def _handle_file_inputs(
     include_costs: bool,
     include_header: bool,
     sort_order: SortOrder = SortOrder.INPUT,
+    jobs: int = DEFAULT_JOBS,
 ) -> None:
-    file_results, file_errors, model_errors = _collect_file_counts(models, files)
+    file_results, file_errors, model_errors = _collect_file_counts(
+        models, files, jobs=jobs
+    )
 
     if model_errors:
         _emit_model_error_summary(model_errors, file_errors)
@@ -590,6 +642,7 @@ def _do_count(
     *,
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
+    jobs: int = DEFAULT_JOBS,
 ) -> None:
     config = _load_runtime_config()
     _prepare_prices(config)
@@ -624,6 +677,7 @@ def _do_count(
         include_costs=cost,
         include_header=include_header,
         sort_order=sort_order,
+        jobs=jobs,
     )
     # Results for the readable inputs are already printed; signal the bad ones.
     if inputs.had_failures:

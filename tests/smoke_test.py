@@ -41,9 +41,12 @@ MISTRAL_MODEL = "mistral-small-latest"
 TRANSFORMERS_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
 CORE_PROVIDERS = {"anthropic", "google", "openai", "xai"}
-# The only optional gate in `list_models` is `_has_module("transformers")`; installing
-# mistral-common changes the listing not at all, so no `mistral` provider ever appears
-# and the Mistral model name has to come from `OPTIONAL_GROUPS`.
+# `list_models` gates one group per optional extra, each on the importability of the
+# module rather than on the extra's name, so the expectation is built the same way rather
+# than as one branch over "any extra at all": 4 providers bare, 5 with mistral-common
+# alone, 8 with transformers alone, 9 with both. The release installs the first and the
+# last of those; the middle two are reachable and so are asserted the same way.
+MISTRAL_PROVIDERS = {"mistral"}
 TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 
 # A tokenizer load reaches the Hugging Face Hub, which refuses anonymous callers with 429
@@ -63,7 +66,16 @@ TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 # `_count_transformers` funnels every failure into a ValueError but raises it `from` the
 # original, every branch of transformers' `utils/hub.py` re-raises `from e`, and
 # huggingface_hub's `_raise_on_head_call_error` raises
-# `LocalEntryNotFoundError(...) from head_call_error`. Both halves of an outage survive:
+# `LocalEntryNotFoundError(...) from head_call_error`.
+#
+# `from` is not the whole story, though, and that is why `_causes` follows `__context__`
+# as well. Neither transport re-raises its own layers explicitly: measured, a requests
+# chain reaches urllib3 through `__context__`, an httpx chain reaches httpcore's cause the
+# same way, and a load that tries a second file after the first fails reaches the earlier
+# failure through `__context__` too. What those edges lead to can decide a release: on
+# both stacks the `ssl` error under an intercepted connection is reachable only across
+# one, so following `__cause__` alone would stop short of it. Dropping them is not a
+# simplification. Both halves of an outage survive:
 #
 #   - The HEAD call fails. `_raise_on_head_call_error` converts 429, every 5xx, a refused
 #     connection, a failed DNS lookup, a timeout and HF_HUB_OFFLINE=1 alike into
@@ -88,16 +100,24 @@ TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 # the Hub rather than the release. The whole 5xx range rather than the 500 and 503 that
 # were induced, because "the server failed" is what the class of code means and the Hub
 # sits behind a CDN that has its own; picking out individual codes would draw a line no
-# measurement supports. 401, 403 and 404 are deliberately absent, and are the reason this
-# is a set of codes rather than "any status at all": those are a bad token, a gated repo
-# and a wrong model name, and each has to fail the release.
+# measurement supports.
+#
+# 401, 403 and 404 are deliberately absent, but only 401 is actually decided here. An
+# unauthorized HEAD is re-raised unconverted, so its status is still on the chain when the
+# rules read it and leaving it out of this set is what fails the release. 403 and 404 are
+# a weaker claim than they look: tagged, they arrive as `GatedRepoError` or
+# `RepositoryNotFoundError` and are re-raised the same way, but an untagged one — a CDN, a
+# WAF, a proxy, or `HF_ENDPOINT` pointed at something that answers — is converted to
+# `LocalEntryNotFoundError` by `_raise_on_head_call_error` before any status is consulted,
+# so `_hub_reported_downtime` excuses it whatever this set says. Measured on both stacks,
+# and the corpus pins all three so the difference stays visible.
 HUB_OUTAGE_STATUS = frozenset({429, *range(500, 600)})
 
 # The longest chain measured is 11 links — a count that tried two files before giving up,
-# the second failure chaining the first through `__context__` — so the cap is a runaway
-# guard rather than a policy, set well clear of a load that reaches for more files. It has
-# to be generous in that direction: the `ssl.SSLError` that denies a broken runner sat at
-# link 6 of 6, and a cap that stopped short of it would excuse a release that never
+# the second failure reaching the first through `__context__` — so the cap is a runaway
+# guard rather than a policy, and 200 sits about eighteen times clear of that. Being
+# generous is the safe direction: the deepest `ssl` link that denies a broken runner sits
+# at link 6 of 11, and a cap that stopped short of it would excuse a release that never
 # reached the Hub. `_causes` therefore refuses to judge a chain it could not read to the
 # end rather than ruling on a partial view.
 _CHAIN_LIMIT = 200
@@ -147,10 +167,20 @@ def _hub_returned_an_outage_status(link: BaseException) -> bool:
     `requests.exceptions.HTTPError` under 0.36. Every request in this code path goes to
     the Hub, so a status is the Hub's answer whoever is holding it.
     """
-    response = getattr(link, "response", None)
-    return getattr(response, "status_code", None) in HUB_OUTAGE_STATUS
+    status = getattr(getattr(link, "response", None), "status_code", None)
+    # isinstance ahead of the lookup: `status_code` is whatever the object happens to
+    # carry, and an unhashable one would raise TypeError out of a guard whose whole job
+    # is to return an answer.
+    return isinstance(status, int) and status in HUB_OUTAGE_STATUS
 
 
+# There is no rule for a 429 answered off a warm cache because at release there is nothing
+# left to catch. transformers 5.15 asks the Hub whether the repo is a Mistral base model
+# on a network path that is still live, and swallows whatever comes back — a bare
+# `except Exception` at `tokenization_utils_tokenizers.py:1375`, commented "Never block
+# tokenizer init on a Hub error". So that immunity is upstream's broad catch over a call
+# still being made, not a code path that went away; measured, and dev's transformers
+# 4.57.3 has neither the call nor the catch.
 HUB_OUTAGE_RULES = (_hub_reported_downtime, _hub_returned_an_outage_status)
 
 
@@ -167,6 +197,18 @@ HUB_OUTAGE_RULES = (_hub_reported_downtime, _hub_returned_an_outage_status)
 # anyway. No proxy class is named here — a proxy failure is never converted into
 # `LocalEntryNotFoundError` by either version and carries no status, so no outage rule
 # reaches it and nothing has to hold it back.
+#
+# Naming the base class also denies TLS faults that are the remote end's rather than the
+# runner's, and that is left as it is rather than narrowed to
+# `SSLCertVerificationError`. An unexpected EOF mid-handshake arrives as `ssl.SSLEOFError`
+# on both stacks, and on the release stack it comes wrapped in the
+# `LocalEntryNotFoundError` that would otherwise excuse it, so this tuple is what decides
+# it. A release gate should fail closed on TLS: nothing here can tell a hostile middlebox
+# from a remote that hung up, and the cost of guessing wrong is asymmetric. The corpus
+# carries the three remote-side shapes that were measured — a handshake alert, a TLS-level
+# close and an unexpected EOF — so what failing closed costs is pinned rather than left to
+# omission. Not all three reach this tuple: a TLS-level close carries no `ssl` link at all
+# on either stack, and on the dev stack it is excused as an outage.
 BROKEN_RUNNER_TYPES: tuple[type[BaseException], ...] = (ssl.SSLError,)
 
 
@@ -222,9 +264,11 @@ def check_core() -> None:
 def check_listing() -> None:
     models_by_provider = list_models()
     providers = set(models_by_provider)
-    expected = CORE_PROVIDERS
+    expected = set(CORE_PROVIDERS)
+    if importlib.util.find_spec("mistral_common") is not None:
+        expected |= MISTRAL_PROVIDERS
     if importlib.util.find_spec("transformers") is not None:
-        expected = CORE_PROVIDERS | TRANSFORMERS_PROVIDERS
+        expected |= TRANSFORMERS_PROVIDERS
     assert providers == expected, providers
     assert len(models_by_provider["anthropic"]) > 5
     assert len(models_by_provider["openai"]) > 5

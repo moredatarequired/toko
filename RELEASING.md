@@ -65,15 +65,15 @@ The tag push is what releases. Nothing is published until it lands.
 1. **Smoke test, wheel, all extras** — the same file with `[all]`, which is what
    reaches the optional tokenizers. Each check gates on `importlib.util.find_spec`, so
    the bare run above skips the Mistral and transformers counts rather than failing
-   them, and the provider listing is asserted against 4 providers there and 8 here.
+   them, and the provider listing is asserted against 4 providers there and 9 here.
 1. **Smoke test, sdist, all extras** — the same check against the `.tar.gz`, which is
    what catches a file that the wheel happens to carry but the sdist omits.
 1. **Publish** — `uv publish` to PyPI.
 
 A bare install lists exactly 4 providers, and either extra adds to that on its own.
 `transformers` registers `llama`, `deepseek`, `qwen`, and `huggingface`, taking the count
-to 8; `mistral-common` registers `mistral`, taking it to 5. `[all]`, which is what the
-smoke steps install, gets both and lists 9.
+to 8; `mistral-common` registers `mistral`, taking it to 5. `[all]`, which is what the two
+all-extras steps install, gets both and lists 9.
 
 The job sets `XDG_CACHE_HOME` under the workspace so both `[all]` steps share one
 Hugging Face download. The transformers count is the one check allowed to skip on its

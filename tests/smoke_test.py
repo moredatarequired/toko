@@ -45,40 +45,37 @@ TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 
 # A tokenizer load reaches the Hugging Face Hub, which refuses anonymous callers with 429
 # on its own schedule. `_count_transformers` funnels every failure into a ValueError, so
-# what the Hub did is only visible in the message; anything these do not cover — a gated
-# repo, a missing model, a broken tokenizer — is a real failure and still fails the
-# release.
+# what the Hub did is only visible in the message; anything below does not cover — a gated
+# repo, a missing model, a broken tokenizer, a runner that cannot make an HTTPS request at
+# all — is a real failure and still fails the release.
 #
-# The status code is almost never in that message. `hf_hub_download` and
-# `snapshot_download` both convert a 429 or a 5xx HEAD failure into a bare
-# `LocalEntryNotFoundError` (only 401, gated and repo-not-found keep their
-# `HfHubHTTPError`), and transformers then reports that as "We couldn't connect to ...".
-# Against a live endpoint returning 429, 500 or 503 alike, and under HF_HUB_OFFLINE=1
-# with a cold cache, the whole of what arrives here is:
+# Every shape below was induced and captured; `tests/test_release_smoke.py` holds the
+# verbatim strings and pins each half of the guard to one. An outage arrives in exactly
+# two shapes, because the HEAD call and the GET call fail differently:
 #
-#     Failed to count tokens for Qwen model Qwen/Qwen2.5-7B-Instruct: We couldn't
-#     connect to 'https://huggingface.co' to load the files, and couldn't find them in
-#     the cached files.
-#     Check your internet connection or see how to run the library in offline mode at
-#     'https://huggingface.co/docs/transformers/installation#offline-mode'.
+#   - The HEAD call fails. `huggingface_hub._raise_on_head_call_error` converts 429, 500,
+#     503, a refused connection, a failed DNS lookup, a timeout and HF_HUB_OFFLINE=1 alike
+#     into a bare `LocalEntryNotFoundError` — only 401, gated and repo-not-found keep
+#     their `HfHubHTTPError`, and `_count_transformers` intercepts those by name first.
+#     Transformers reports it as "We couldn't connect to '<endpoint>' to load the files".
+#     The status code does not survive, so the marker is the whole of what excuses this.
+#   - The HEAD call succeeds and the GET fails. Nothing converts that, so the
+#     `HfHubHTTPError` reaches transformers intact as "There was a specific connection
+#     error when trying to load <repo>:\n503 Server Error: ...". Here the status code is
+#     all there is, which is what `_HUB_STATUS` reads. It is anchored on the phrase
+#     requests puts after the code, because a bare `\b5\d\d\b` also matches "expected 512
+#     tokens, got 7" — turning a genuinely broken tokenizer into a printed skip, which is
+#     the one thing this guard must never do.
 #
-# So the markers, not the status pattern, are what actually excuses an outage. The
-# pattern stays for the paths that do pass an `HfHubHTTPError` through verbatim, and is
-# anchored on the phrase requests puts after the code, because a bare `\b5\d\d\b` also
-# matches "expected 512 tokens, got 7" — turning a genuinely broken tokenizer into a
-# printed skip, which is the one thing this guard must never do.
+# A TLS or proxy failure is deliberately not excused. Both `file_download` and
+# `_snapshot_download` re-raise `requests.exceptions.SSLError` and `ProxyError` ahead of
+# the conversion above, so a junk CA bundle, an endpoint whose certificate does not verify
+# and a dead proxy each arrive here as their own "Max retries exceeded ... (Caused by
+# SSLError(...))" text. A "connection" marker matched all three — through
+# "HTTPSConnectionPool" — and would have printed a green "skipped" for a runner that never
+# reached the Hub at all.
 _HUB_STATUS = re.compile(r"\b(?:429|5\d\d) (?:client|server) error\b")
-HUB_UNAVAILABLE_MARKERS = (
-    # Both the "local cache" and the "disk cache" wording of LocalEntryNotFoundError.
-    "cannot find the requested files",
-    "connection",
-    "couldn't connect",
-    "name resolution",
-    "rate limit",
-    "timed out",
-    "timeout",
-    "too many requests",
-)
+HUB_UNAVAILABLE_MARKERS = ("couldn't connect",)
 
 
 @contextlib.contextmanager

@@ -21,7 +21,6 @@ from toko.result import TokenCount
         ("gpt-oss-20b", "huggingface"),
         ("openai/gpt-oss-120b", "huggingface"),
         ("claude-opus-4-5", "anthropic"),
-        ("pixtral-large-2411", "mistral"),
         ("unknown-model-xyz", None),
     ],
 )

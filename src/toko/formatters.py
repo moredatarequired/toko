@@ -2,7 +2,7 @@
 
 import csv
 import json
-import shutil
+import os
 import sys
 from dataclasses import replace
 from io import StringIO
@@ -27,19 +27,47 @@ def _plain_table(*, include_header: bool) -> Table:
     )
 
 
-def _render_table(table: Table, *, width: int | None = None) -> str:
-    """Render at `width`, or at the real terminal's width when none is given.
+# rich probes stdin, stdout and stderr in that order, and only the output streams on
+# Windows (rich.console._STD_STREAMS).
+_SIZE_DESCRIPTORS = (1, 2) if sys.platform == "win32" else (0, 1, 2)
 
-    Rich reports a hardcoded 80x25 for a dumb terminal unless *both* width and height
-    are set, so passing a height is what stops TERM from reshaping the table.
-    """
-    terminal = shutil.get_terminal_size()
+
+def _terminal_size() -> tuple[int, int]:
+    # Resolves the size the way rich does for a terminal it does not consider dumb, so
+    # that spelling it out below changes nothing under an ordinary TERM. shutil's
+    # get_terminal_size() will not do: it consults only sys.__stdout__, and so misses a
+    # terminal on stdin or stderr when stdout is redirected.
+    width: int | None = None
+    height: int | None = None
+    for descriptor in _SIZE_DESCRIPTORS:
+        try:
+            width, height = os.get_terminal_size(descriptor)
+        except (AttributeError, ValueError, OSError):  # probably not a terminal
+            pass
+        else:
+            break
+    columns = os.environ.get("COLUMNS")
+    if columns is not None and columns.isdigit():
+        width = int(columns)
+    lines = os.environ.get("LINES")
+    if lines is not None and lines.isdigit():
+        height = int(lines)
+    # Like rich, treat a 0 from either source as unknown: a pseudo-terminal can report
+    # one, and COLUMNS=0 is accepted by isdigit().
+    return width or 80, height or 25
+
+
+def _render_table(table: Table, *, width: int | None = None) -> str:
+    terminal_width, height = _terminal_size()
     output = StringIO()
+    # The height is what keeps TERM from reshaping the table: rich reports a hardcoded
+    # 80x25 for a dumb terminal unless *both* dimensions are set (rich.console.Console.
+    # size), and then truncates the columns to fit.
     console = Console(
         file=output,
         force_terminal=True,
-        width=width if width is not None else terminal.columns,
-        height=terminal.lines,
+        width=terminal_width if width is None else width,
+        height=height,
     )
     console.print(table)
     return output.getvalue().rstrip()

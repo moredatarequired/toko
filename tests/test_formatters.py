@@ -568,7 +568,11 @@ def test_model_table_width_follows_the_terminal_not_term(monkeypatch):
 
 @pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
 def test_the_cli_file_table_fills_a_wide_dumb_terminal(tmp_path):
-    """End to end: a real 200-column terminal, with TERM the only thing out of the way."""
+    """End to end: TERM=dumb must not shrink the file table off its pinned 200 columns.
+
+    The terminal is only there to keep the CLI on the text format; its own width never
+    reaches this table, so the assertions below hold at any window size.
+    """
     nested = tmp_path / "a_directory_whose_name_pads_the_paths_past_eighty_columns"
     nested.mkdir()
     first = nested / "first_file_with_a_long_basename.txt"
@@ -593,3 +597,35 @@ def test_the_cli_file_table_fills_a_wide_dumb_terminal(tmp_path):
     rows = [line for line in output.splitlines() if ".txt" in line]
     assert len(rows) == 2
     assert rows[0] != rows[1]
+
+
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
+def test_the_model_table_uses_the_terminal_on_stdin_when_stdout_is_a_pipe(tmp_path):
+    """A redirected stdout must not cost us the terminal that stdin and stderr still are."""
+    wide_model = f"a-model-with-an-implausibly-long-name{'-and-more' * 10}"
+    assert len(wide_model) > 80
+
+    script = tmp_path / "model_table_driver.py"
+    script.write_text(
+        "from toko.formatters import format_output\n"
+        "from toko.result import TokenCount\n\n"
+        f"model = {wide_model!r}\n"
+        # A lone result prints as a bare count, so there has to be a second row.
+        "print(\n"
+        "    format_output(\n"
+        "        {\n"
+        "            model: TokenCount(count=12, model=model, provider='openai'),\n"
+        "            'gpt-5': TokenCount(count=1234, model='gpt-5', provider='openai'),\n"
+        "        }\n"
+        "    )\n"
+        ")\n"
+    )
+    env = dict(os.environ, TERM="xterm-256color")
+    env.pop("LINES", None)
+    env.pop("COLUMNS", None)
+
+    output = _ANSI.sub("", run_under_pty(str(script), env, pipe_stdout=True))
+
+    assert wide_model in output
+    assert "…" not in output
+    assert max(len(line) for line in output.splitlines()) > 80

@@ -42,4 +42,4 @@ pre-commit:
       stage_fixed: true
 
     - name: scan for secrets
-      run: uv run --group dev detect-secrets-hook --baseline .secrets.baseline
+      run: uv run --group dev detect-secrets-hook --baseline .secrets.baseline {all_files}

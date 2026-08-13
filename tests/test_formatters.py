@@ -566,6 +566,21 @@ def test_model_table_width_follows_the_terminal_not_term(monkeypatch):
     assert any(wide_model in line for line in dumb)
 
 
+def test_a_dumb_terminal_still_gets_no_escape_sequences(monkeypatch):
+    """Sizing the table ourselves must not cost rich its own reading of TERM."""
+    monkeypatch.delenv("LINES", raising=False)
+    results = {"gpt-5": _counted(1234), "gpt-5-mini": _counted(12, model="gpt-5-mini")}
+
+    monkeypatch.setenv("TERM", "dumb")
+    dumb = format_output(results)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    smart = format_output(results)
+
+    assert "\x1b[" not in dumb
+    # Otherwise the assertion above would hold for a table that is never styled at all.
+    assert "\x1b[" in smart
+
+
 @pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
 def test_the_cli_file_table_fills_a_wide_dumb_terminal(tmp_path):
     """End to end: TERM=dumb must not shrink the file table off its pinned 200 columns.

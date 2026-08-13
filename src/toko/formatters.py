@@ -2,7 +2,6 @@
 
 import csv
 import json
-import os
 import sys
 from dataclasses import replace
 from io import StringIO
@@ -27,47 +26,18 @@ def _plain_table(*, include_header: bool) -> Table:
     )
 
 
-# rich probes stdin, stdout and stderr in that order, and only the output streams on
-# Windows (rich.console._STD_STREAMS).
-_SIZE_DESCRIPTORS = (1, 2) if sys.platform == "win32" else (0, 1, 2)
-
-
-def _terminal_size() -> tuple[int, int]:
-    # Resolves the size the way rich does for a terminal it does not consider dumb, so
-    # that spelling it out below changes nothing under an ordinary TERM. shutil's
-    # get_terminal_size() will not do: it consults only sys.__stdout__, and so misses a
-    # terminal on stdin or stderr when stdout is redirected.
-    width: int | None = None
-    height: int | None = None
-    for descriptor in _SIZE_DESCRIPTORS:
-        try:
-            width, height = os.get_terminal_size(descriptor)
-        except (AttributeError, ValueError, OSError):  # probably not a terminal
-            pass
-        else:
-            break
-    columns = os.environ.get("COLUMNS")
-    if columns is not None and columns.isdigit():
-        width = int(columns)
-    lines = os.environ.get("LINES")
-    if lines is not None and lines.isdigit():
-        height = int(lines)
-    # Like rich, treat a 0 from either source as unknown: a pseudo-terminal can report
-    # one, and COLUMNS=0 is accepted by isdigit().
-    return width or 80, height or 25
-
-
 def _render_table(table: Table, *, width: int | None = None) -> str:
-    terminal_width, height = _terminal_size()
     output = StringIO()
-    # The height is what keeps TERM from reshaping the table: rich reports a hardcoded
-    # 80x25 for a dumb terminal unless *both* dimensions are set (rich.console.Console.
-    # size), and then truncates the columns to fit.
+    # Rich reports a hardcoded 80x25 for a dumb terminal unless it is given both a width
+    # and a height, which discards the width we ask for. A console that is not a terminal
+    # is never dumb, so this throwaway one resolves the size rich itself would have used
+    # (rich.console.Console.size) without writing anything.
+    size = Console(file=output, force_terminal=False).size
     console = Console(
         file=output,
         force_terminal=True,
-        width=terminal_width if width is None else width,
-        height=height,
+        width=size.width if width is None else width,
+        height=size.height,
     )
     console.print(table)
     return output.getvalue().rstrip()

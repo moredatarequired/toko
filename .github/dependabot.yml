@@ -7,11 +7,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    # One PR for all four actions rather than four.
+    # Routine bumps arrive as one PR; a major (checkout v6, say) comes on its own,
+    # since a grouped PR can't be partially merged.
     groups:
       actions:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "ci"
       include: "scope"

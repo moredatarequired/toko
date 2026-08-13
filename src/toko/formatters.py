@@ -26,6 +26,23 @@ def _plain_table(*, include_header: bool) -> Table:
     )
 
 
+def _render_table(table: Table, *, width: int | None = None) -> str:
+    output = StringIO()
+    # Rich reports a hardcoded 80x25 for a dumb terminal unless it is given both a width
+    # and a height, which discards the width we ask for. A console that is not a terminal
+    # is never dumb, so this throwaway one resolves the size rich itself would have used
+    # (rich.console.Console.size) without writing anything.
+    size = Console(file=output, force_terminal=False).size
+    console = Console(
+        file=output,
+        force_terminal=True,
+        width=size.width if width is None else width,
+        height=size.height,
+    )
+    console.print(table)
+    return output.getvalue().rstrip()
+
+
 def format_table(
     results: dict[str, TokenCount],
     *,
@@ -46,11 +63,7 @@ def format_table(
             row.append(format_cost(counted.cost))
         table.add_row(*row)
 
-    # Render to string
-    output = StringIO()
-    console = Console(file=output, force_terminal=True)
-    console.print(table)
-    return output.getvalue().rstrip()
+    return _render_table(table)
 
 
 def format_text(
@@ -346,10 +359,7 @@ def _format_file_table_text(
                 total_row.append(format_cost(totals[model].cost))
         table.add_row(*total_row, style="bold")
 
-    output = StringIO()
-    console = Console(file=output, force_terminal=True, width=200)
-    console.print(table)
-    return output.getvalue().rstrip()
+    return _render_table(table, width=200)
 
 
 def _build_table_rows(

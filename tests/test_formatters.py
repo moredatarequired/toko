@@ -3,10 +3,12 @@
 import csv
 import io
 import json
+import os
 import re
 
 import pytest
 
+from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.formatters import format_file_table, format_output
 from toko.result import TokenCount
 
@@ -531,3 +533,119 @@ def test_sort_leaves_a_total_only_run_alone():
 def test_an_unknown_sort_order_is_rejected():
     with pytest.raises(ValueError, match="Unknown sort order: size"):
         format_file_table(_three_files(), output_format="csv", sort_order="size")
+
+
+# TERM must not change the layout: rich reports a hardcoded 80x25 for a dumb terminal
+# unless the console is given both a width and a height (rich.console.Console.size).
+# These tests drop LINES because rich takes it as that height in Console.__init__, which
+# satisfies the both-dimensions case and hides the bug entirely.
+
+
+def test_file_text_table_keeps_its_width_under_a_dumb_terminal(monkeypatch):
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.delenv("LINES", raising=False)
+    wide_name = f"{'nested/' * 15}a_file_with_a_long_basename.txt"
+    assert len(wide_name) > 80
+
+    output = format_file_table({wide_name: {"gpt-5": _counted(4)}})
+
+    assert wide_name in _ANSI.sub("", output)
+
+
+def test_model_table_width_follows_the_terminal_not_term(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "200")
+    monkeypatch.delenv("LINES", raising=False)
+    # A console that reads FORCE_COLOR is a terminal whatever it writes to, so this keeps
+    # the size probe honest: it has to opt out of being a terminal to escape TERM=dumb.
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    wide_model = f"a-model-with-an-implausibly-long-name{'-and-more' * 10}"
+    assert len(wide_model) > 80
+    results = {wide_model: _counted(12, model=wide_model), "gpt-5": _counted(1234)}
+
+    monkeypatch.setenv("TERM", "dumb")
+    dumb = _plain_lines(format_output(results))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    smart = _plain_lines(format_output(results))
+
+    assert dumb == smart
+    assert any(wide_model in line for line in dumb)
+
+
+def test_a_dumb_terminal_still_gets_no_escape_sequences(monkeypatch):
+    """Sizing the table ourselves must not cost rich its own reading of TERM."""
+    monkeypatch.delenv("LINES", raising=False)
+    results = {"gpt-5": _counted(1234), "gpt-5-mini": _counted(12, model="gpt-5-mini")}
+
+    monkeypatch.setenv("TERM", "dumb")
+    dumb = format_output(results)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    smart = format_output(results)
+
+    assert "\x1b[" not in dumb
+    # Otherwise the assertion above would hold for a table that is never styled at all.
+    assert "\x1b[" in smart
+
+
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
+def test_the_cli_file_table_fills_a_wide_dumb_terminal(tmp_path):
+    """End to end: TERM=dumb must not shrink the file table off its pinned 200 columns.
+
+    The terminal is only there to keep the CLI on the text format; its own width never
+    reaches this table, so the assertions below hold at any window size.
+    """
+    nested = tmp_path / "a_directory_whose_name_pads_the_paths_past_eighty_columns"
+    nested.mkdir()
+    first = nested / "first_file_with_a_long_basename.txt"
+    second = nested / "second_file_with_a_long_basename.txt"
+    first.write_text("hello world one\n")
+    second.write_text("hello world two three four\n")
+    # Otherwise an 80-column fallback would render these in full and prove nothing.
+    assert len(str(nested)) > 80
+
+    script = tmp_path / "file_table_driver.py"
+    script.write_text(
+        f"from toko.cli import app\n\napp([{str(first)!r}, {str(second)!r}])\n"
+    )
+    env = dict(os.environ, TERM="dumb")
+    env.pop("LINES", None)
+    env.pop("COLUMNS", None)
+
+    output = _ANSI.sub("", run_under_pty(str(script), env))
+
+    assert first.name in output
+    assert second.name in output
+    rows = [line for line in output.splitlines() if ".txt" in line]
+    assert len(rows) == 2
+    assert rows[0] != rows[1]
+
+
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
+def test_the_model_table_uses_the_terminal_on_stdin_when_stdout_is_a_pipe(tmp_path):
+    """A redirected stdout must not cost us the terminal that stdin and stderr still are."""
+    wide_model = f"a-model-with-an-implausibly-long-name{'-and-more' * 10}"
+    assert len(wide_model) > 80
+
+    script = tmp_path / "model_table_driver.py"
+    script.write_text(
+        "from toko.formatters import format_output\n"
+        "from toko.result import TokenCount\n\n"
+        f"model = {wide_model!r}\n"
+        # A lone result prints as a bare count, so there has to be a second row.
+        "print(\n"
+        "    format_output(\n"
+        "        {\n"
+        "            model: TokenCount(count=12, model=model, provider='openai'),\n"
+        "            'gpt-5': TokenCount(count=1234, model='gpt-5', provider='openai'),\n"
+        "        }\n"
+        "    )\n"
+        ")\n"
+    )
+    env = dict(os.environ, TERM="xterm-256color")
+    env.pop("LINES", None)
+    env.pop("COLUMNS", None)
+
+    output = _ANSI.sub("", run_under_pty(str(script), env, pipe_stdout=True))
+
+    assert wide_model in output
+    assert "…" not in output
+    assert max(len(line) for line in output.splitlines()) > 80

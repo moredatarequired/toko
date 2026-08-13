@@ -27,9 +27,7 @@ typecheck *args:
     uv run --group dev ty check {{args}}
 
 scan-secrets:
-    #!/usr/bin/env bash
-    set -o pipefail
-    git ls-files -z | xargs -0 uv run --group dev detect-secrets-hook --baseline .secrets.baseline
+    git ls-files -z | xargs -0 -r uv run --group dev detect-secrets-hook --baseline .secrets.baseline
 
 update-readme:
     uv run python scripts/update_readme_examples.py

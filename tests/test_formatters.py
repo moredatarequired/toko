@@ -537,6 +537,8 @@ def test_an_unknown_sort_order_is_rejected():
 
 # TERM must not change the layout: rich reports a hardcoded 80x25 for a dumb terminal
 # unless the console is given both a width and a height (rich.console.Console.size).
+# These tests drop LINES because rich takes it as that height in Console.__init__, which
+# satisfies the both-dimensions case and hides the bug entirely.
 
 
 def test_file_text_table_keeps_its_width_under_a_dumb_terminal(monkeypatch):
@@ -553,6 +555,9 @@ def test_file_text_table_keeps_its_width_under_a_dumb_terminal(monkeypatch):
 def test_model_table_width_follows_the_terminal_not_term(monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.delenv("LINES", raising=False)
+    # A console that reads FORCE_COLOR is a terminal whatever it writes to, so this keeps
+    # the size probe honest: it has to opt out of being a terminal to escape TERM=dumb.
+    monkeypatch.setenv("FORCE_COLOR", "1")
     wide_model = f"a-model-with-an-implausibly-long-name{'-and-more' * 10}"
     assert len(wide_model) > 80
     results = {wide_model: _counted(12, model=wide_model), "gpt-5": _counted(1234)}

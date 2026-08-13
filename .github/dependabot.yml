@@ -1,0 +1,17 @@
+version: 2
+
+updates:
+  # Only the actions: the Python dependency ranges are hand-reasoned (see the
+  # genai-prices upper bound in pyproject.toml) and are not on an automated bump.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # One PR for all four actions rather than four.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+      include: "scope"

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import shutil
 import sys
 from dataclasses import replace
 from io import StringIO
@@ -26,6 +27,24 @@ def _plain_table(*, include_header: bool) -> Table:
     )
 
 
+def _render_table(table: Table, *, width: int | None = None) -> str:
+    """Render at `width`, or at the real terminal's width when none is given.
+
+    Rich reports a hardcoded 80x25 for a dumb terminal unless *both* width and height
+    are set, so passing a height is what stops TERM from reshaping the table.
+    """
+    terminal = shutil.get_terminal_size()
+    output = StringIO()
+    console = Console(
+        file=output,
+        force_terminal=True,
+        width=width if width is not None else terminal.columns,
+        height=terminal.lines,
+    )
+    console.print(table)
+    return output.getvalue().rstrip()
+
+
 def format_table(
     results: dict[str, TokenCount],
     *,
@@ -46,11 +65,7 @@ def format_table(
             row.append(format_cost(counted.cost))
         table.add_row(*row)
 
-    # Render to string
-    output = StringIO()
-    console = Console(file=output, force_terminal=True)
-    console.print(table)
-    return output.getvalue().rstrip()
+    return _render_table(table)
 
 
 def format_text(
@@ -346,10 +361,7 @@ def _format_file_table_text(
                 total_row.append(format_cost(totals[model].cost))
         table.add_row(*total_row, style="bold")
 
-    output = StringIO()
-    console = Console(file=output, force_terminal=True, width=200)
-    console.print(table)
-    return output.getvalue().rstrip()
+    return _render_table(table, width=200)
 
 
 def _build_table_rows(

@@ -3,12 +3,7 @@
 import inspect
 import json
 import os
-import select
-import struct
-import subprocess
-import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -19,6 +14,7 @@ import respx
 from typer.testing import CliRunner
 
 import toko.counter as counter
+from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cli import app
 from toko.counter import (
     GOOGLE_COUNT_URL_BASE,
@@ -26,15 +22,6 @@ from toko.counter import (
     _redact_key,
     count_tokens,
 )
-
-try:
-    import fcntl
-    import pty
-    import termios
-
-    HAS_PTY = True
-except ImportError:  # pty, termios and fcntl are POSIX-only
-    HAS_PTY = False
 
 runner = CliRunner()
 
@@ -330,52 +317,7 @@ app(["raise-for-test"])
 """
 
 
-_PTY_READ_TIMEOUT = 60.0
-
-
-def _run_under_pty(script: str, env: dict[str, str]) -> str:
-    """Run a script attached to a terminal, since Rich renders differently without one."""
-    primary, secondary = pty.openpty()
-    fcntl.ioctl(secondary, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-    process = subprocess.Popen(  # noqa: S603
-        [sys.executable, script],
-        stdin=subprocess.DEVNULL,
-        stdout=secondary,
-        stderr=secondary,
-        env=env,
-    )
-    os.close(secondary)
-    chunks = []
-    deadline = time.monotonic() + _PTY_READ_TIMEOUT
-    timed_out = False
-    try:
-        while True:
-            # A child hanging with the pty still open never reaches EIO, and an untimed
-            # read would then hang the whole suite instead of failing this one test.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                break
-            if not select.select([primary], [], [], remaining)[0]:
-                continue
-            try:
-                data = os.read(primary, 65536)
-            except OSError:  # the terminal reports EIO once the child is gone
-                break
-            if not data:
-                break
-            chunks.append(data)
-    finally:
-        os.close(primary)
-        if timed_out:
-            process.kill()
-        process.wait(timeout=10)
-    if timed_out:
-        pytest.fail(f"child did not exit within {_PTY_READ_TIMEOUT}s")
-    return b"".join(chunks).decode(errors="replace")
-
-
-@pytest.mark.skipif(not HAS_PTY, reason="pty, termios and fcntl are POSIX-only")
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
 def test_a_rendered_traceback_does_not_show_frame_locals(tmp_path):
     """An unhandled error must not print the api_key held by the frame that raised."""
     script = tmp_path / "traceback_driver.py"
@@ -387,7 +329,7 @@ def test_a_rendered_traceback_does_not_show_frame_locals(tmp_path):
         TERM="xterm-256color",
     )
 
-    output = _run_under_pty(str(script), env)
+    output = run_under_pty(str(script), env)
 
     # Without this the leak assertion below would pass for want of a traceback.
     assert "RuntimeError" in output

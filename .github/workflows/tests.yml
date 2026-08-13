@@ -32,6 +32,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          # Exact, so setup-uv installs it without asking the GitHub releases API
+          # which version "latest" is. The other two workflows pin the same version;
+          # all three have to be bumped together.
+          version: "0.12.3"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 

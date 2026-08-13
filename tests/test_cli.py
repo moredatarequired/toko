@@ -1,5 +1,6 @@
 """Tests for the CLI."""
 
+import ast
 import json
 import os
 import re
@@ -60,6 +61,64 @@ def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.stdout.strip().startswith("toko version ")
+
+
+SRC_ROOT = Path(__file__).resolve().parent.parent / "src" / "toko"
+
+
+def _imports_click(source: str) -> bool:
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            # `from .click import x` resolves inside toko, not to the click package.
+            if node.level:
+                continue
+            names = [node.module or ""]
+        else:
+            continue
+        if any(name.split(".")[0] == "click" for name in names):
+            return True
+    return False
+
+
+def test_no_module_imports_click_directly():
+    """Click is reached through typer, which vendored it in 0.26, and is not declared.
+
+    Scanned rather than imported because whether the undeclared import fails is an
+    accident of the resolution: with the [all] extras, huggingface-hub 1.x installs
+    click whatever toko declares, and only a bare install breaks.
+    """
+    modules = sorted(SRC_ROOT.rglob("*.py"))
+    offenders = [
+        str(path.relative_to(SRC_ROOT))
+        for path in modules
+        if _imports_click(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+    # A scan that found nothing to read passes for the wrong reason.
+    assert modules, f"no modules under {SRC_ROOT}"
+
+
+# A tripwire that stops recognising the import is a tripwire that silently passes.
+@pytest.mark.parametrize(
+    ("source", "imported"),
+    [
+        ("import click", True),
+        ("import os, click", True),
+        ("import sys; import click", True),
+        ("from click import Option", True),
+        ("from click.core import Context", True),
+        ('"""\nimport click\n"""', False),
+        ("import typer\nfrom typer.core import TyperOption", False),
+        ("import clicky\nfrom toko.clicker import thing", False),
+        # Relative, so it names a toko submodule however much it reads like the package.
+        ("from .click import Option", False),
+        ("from ..click.core import Context", False),
+    ],
+)
+def test_the_click_scan_reads_imports_not_text(source, imported):
+    assert _imports_click(source) is imported
 
 
 def test_list_models(monkeypatch):

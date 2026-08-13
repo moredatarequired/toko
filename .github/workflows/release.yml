@@ -16,19 +16,36 @@ jobs:
     permissions:
       id-token: write
       contents: read
+
+    env:
+      # Both [all] steps load the same Hugging Face tokenizer. Without this they each
+      # get a fresh temp cache and download it again, doubling the anonymous Hub
+      # traffic in the one job that treats a 429 as a skip. huggingface_hub reads
+      # XDG_CACHE_HOME, and so does the smoke test, whose setdefault leaves this in
+      # place; its own clear-cache dispatch only ever removes toko's own files.
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.3"
       - name: Install Python 3.14
         run: uv python install 3.14
       - name: Build
         run: uv build
-      # Check that basic features work and we didn't miss to include crucial files
-      - name: Smoke test (wheel)
+      # Check that basic features work and we didn't miss to include crucial files.
+      # The no-extras install comes first because it is the only one that can catch a
+      # dependency toko imports but never declares: [all] pulls transformers, which
+      # pulls huggingface-hub, which depends on click, so a re-added direct click
+      # import would resolve there no matter what toko declares.
+      - name: Smoke test (wheel, no extras)
+        run: uv run --isolated --no-project --with "$(ls dist/*.whl)" tests/smoke_test.py
+      - name: Smoke test (wheel, all extras)
         run: uv run --isolated --no-project --with "$(ls dist/*.whl)[all]" tests/smoke_test.py
-      - name: Smoke test (source distribution)
+      - name: Smoke test (source distribution, all extras)
         run: uv run --isolated --no-project --with "$(ls dist/*.tar.gz)[all]" tests/smoke_test.py
       - name: Publish
         run: uv publish

@@ -37,6 +37,11 @@ _SUBCOMMAND_META_KEY = "toko.subcommand"
 # does not start thirty threads to do three counts.
 DEFAULT_JOBS = 8
 
+# Well past the point where more threads buy anything -- the counts are bounded by the
+# providers, not by this machine -- and low enough that a mistyped `-j 1000` is a usage
+# error rather than a thousand threads and a thousand simultaneous API requests.
+MAX_JOBS = 64
+
 
 def is_stdout_tty() -> bool:
     """Check if stdout is connected to a TTY (not piped)."""
@@ -214,6 +219,7 @@ def main(
             "--jobs",
             "-j",
             min=1,
+            max=MAX_JOBS,
             help="Counts to run concurrently when counting files (1 is sequential)",
         ),
     ] = DEFAULT_JOBS,

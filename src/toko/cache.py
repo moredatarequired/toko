@@ -9,6 +9,12 @@ from pathlib import Path
 
 _CACHE_DIR_OVERRIDE: Path | None = None
 
+# How long to wait for another writer to release the database. Well above sqlite3's
+# 5-second default because the writers are not just this run's threads: several toko
+# processes counting at once all serialise on the one file, and a wait that expires is
+# a dropped cache entry, since the failure is deliberately swallowed below.
+_BUSY_TIMEOUT_SECONDS = 30.0
+
 
 def _default_cache_root() -> Path:
     xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
@@ -72,7 +78,7 @@ def get_cached_count(text: str, model: str) -> int | None:
     message_hash = _hash_message(text)
 
     try:
-        with sqlite3.connect(cache_path) as conn:
+        with sqlite3.connect(cache_path, timeout=_BUSY_TIMEOUT_SECONDS) as conn:
             cursor = conn.execute(
                 "SELECT counts_json FROM token_counts WHERE message_hash = ?",
                 (message_hash,),
@@ -93,7 +99,7 @@ def cache_count(text: str, model: str, count: int) -> None:
     message_hash = _hash_message(text)
 
     try:
-        with sqlite3.connect(cache_path) as conn:
+        with sqlite3.connect(cache_path, timeout=_BUSY_TIMEOUT_SECONDS) as conn:
             _init_db(conn)
 
             # Merged in SQL rather than read here and written back, because counts run

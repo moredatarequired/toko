@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
-from toko.cli import DEFAULT_JOBS, app
+from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
@@ -940,8 +940,10 @@ def test_concurrent_counting_matches_a_sequential_run(tmp_path):
     # Two encodings, so a count landing under the wrong model would change the row.
     args = ["--header", "--format", "csv", "-m", "gpt-5", "-m", "gpt-4", str(tree)]
 
-    sequential = _invoke_cli([*args, "--jobs", "1"])
+    # Concurrent first: counts are cached, so running the sequential pass first would
+    # leave the concurrent one replaying that cache instead of counting anything.
     concurrent = _invoke_cli(args)
+    sequential = _invoke_cli([*args, "--jobs", "1"])
 
     assert sequential.exit_code == 0
     assert concurrent.exit_code == 0
@@ -979,9 +981,13 @@ def test_concurrent_counting_reports_failures_like_a_sequential_run(
     assert sequential.exit_code == 0
     assert concurrent.exit_code == 0
     assert concurrent.stdout == sequential.stdout
-    # The summary names the file count and one example file, both of which come from the
-    # input order rather than from whichever worker failed first.
-    assert concurrent.stderr == sequential.stderr
+    # Compared line by line after sorting rather than verbatim: notices are printed by
+    # whichever worker reaches them, so once two models have something to say their
+    # order on stderr is whoever got there first. The content of every line is still
+    # pinned; only the sequence between them is left free.
+    assert sorted(concurrent.stderr.splitlines()) == sorted(
+        sequential.stderr.splitlines()
+    )
     assert (
         "Failed to count tokens for claude-opus-4-5 on 13 file(s)" in concurrent.stderr
     )
@@ -1039,6 +1045,16 @@ def test_jobs_below_one_is_rejected(tmp_path):
     tree = _write_tree(tmp_path)
 
     result = _invoke_cli(["--jobs", "0", str(tree)])
+
+    assert result.exit_code == 2
+    assert "is not in the range" in _normalize_cli_output(result.stderr)
+
+
+def test_jobs_above_the_cap_is_rejected(tmp_path):
+    """An absurd -j is a usage error, not a thousand threads."""
+    tree = _write_tree(tmp_path)
+
+    result = _invoke_cli(["--jobs", str(MAX_JOBS + 1), str(tree)])
 
     assert result.exit_code == 2
     assert "is not in the range" in _normalize_cli_output(result.stderr)

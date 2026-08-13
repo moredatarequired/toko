@@ -72,11 +72,8 @@ toko --model gpt-5 LICENSE
 ```
 
 ```txt
-┏━━━━━━━━━┳━━━━━━━┓
-┃ File    ┃ gpt-5 ┃
-┡━━━━━━━━━╇━━━━━━━┩
-│ LICENSE │   223 │
-└─────────┴───────┘
+File     gpt-5
+LICENSE    223
 ```
 
 Token counts will change if the file contents change.
@@ -114,23 +111,24 @@ toko --exclude '**/__pycache__/*' src/
 ```
 
 ```txt
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
-┃ File                                 ┃  gpt-5 ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-│ src/toko/__init__.py                 │     11 │
-│ src/toko/cache.py                    │    758 │
-│ src/toko/cli.py                      │  3,372 │
-│ src/toko/config.py                   │    584 │
-│ src/toko/cost.py                     │  1,325 │
-│ src/toko/counter.py                  │  3,445 │
-│ src/toko/data/__init__.py            │      8 │
-│ src/toko/data/openrouter_models.json │    359 │
-│ src/toko/file_reader.py              │  1,120 │
-│ src/toko/formatters.py               │  2,226 │
-│ src/toko/models.py                   │  4,211 │
-│ src/toko/price_update.py             │    403 │
-│ TOTAL                                │ 17,822 │
-└──────────────────────────────────────┴────────┘
+File                                   gpt-5
+src/toko/__init__.py                     378
+src/toko/cache.py                        773
+src/toko/cli.py                        4,446
+src/toko/config.py                     1,374
+src/toko/cost.py                       1,387
+src/toko/counter.py                    6,318
+src/toko/data/__init__.py                  8
+src/toko/data/models.toml              2,952
+src/toko/data/openrouter_models.json     359
+src/toko/file_reader.py                1,170
+src/toko/formatters.py                 3,551
+src/toko/models.py                     7,175
+src/toko/output_format.py                 53
+src/toko/price_update.py               1,414
+src/toko/py.typed                          0
+src/toko/result.py                       107
+TOTAL                                 31,465
 ```
 
 - Directories are processed recursively by default and honor `.gitignore`.

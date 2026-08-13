@@ -168,11 +168,29 @@ _MISTRAL_EXACT_ID_EXCLUSIONS = frozenset(
 )
 
 
+# The data spells release numbers both ways -- mistral-medium-3-5 with a dash sits next
+# to mistral-medium-3.1 with a dot -- so a name typed in the other convention misses the
+# set and falls onto a size-word rate: mistral-medium-3.5 billed as Medium 3, 3.75x under
+# its own entry. Both spellings are looked up, the typed one first. Rewriting every query
+# to dashes instead would turn a hit into a miss for the dotted ids that have no dashed
+# twin, and a Mistral miss lands on a plausible-looking rate rather than on nothing.
+_MISTRAL_EXACT_IDS_BY_DASHED = {
+    model_id.replace(".", "-"): model_id for model_id in _MISTRAL_EXACT_IDS
+}
+
+
+def _mistral_exact_id(bare_name: str) -> str | None:
+    if bare_name in _MISTRAL_EXACT_IDS:
+        return bare_name
+    return _MISTRAL_EXACT_IDS_BY_DASHED.get(bare_name.replace(".", "-"))
+
+
 def _convert_mistral_name(model_name: str) -> str:
     lower = model_name.lower()
     bare = lower.rsplit("/", 1)[-1]
-    if bare in _MISTRAL_EXACT_IDS:
-        return f"mistralai/{bare}"
+    exact = _mistral_exact_id(bare)
+    if exact:
+        return f"mistralai/{exact}"
     # Left to the size-word branches below, each of these families lands on an unrelated
     # release: open-mixtral-8x7b matches "7b" and bills as mistral-7b-instruct, and any
     # name matching no size word at all falls through to the mistral-small default.

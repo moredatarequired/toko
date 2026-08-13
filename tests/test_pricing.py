@@ -200,17 +200,18 @@ class TestPricingCoverage:
         assert reachable - _MISTRAL_EXACT_IDS == _MISTRAL_EXACT_ID_EXCLUSIONS
         assert available >= _MISTRAL_EXACT_IDS
 
-    def test_pixtral_large_resolves_to_its_own_id(self):
-        """The one family member no price differential can catch.
+    @pytest.mark.parametrize("model_id", sorted(_MISTRAL_EXACT_IDS))
+    def test_every_exact_id_resolves_to_itself(self, model_id):
+        """Ids that bill alike need the id asserted; no price comparison can see them.
 
-        pixtral-large-2411 and mistral-large carry identical rates in the shipped data,
-        so collapsing the former onto the latter costs nothing and every comparison
-        above would still pass. Asserting the id is the only way to see it.
+        Several members of the set share both rates: pixtral-large-2411 with
+        mistral-large, and codestral-2501 with codestral-2508, which differ only on the
+        cache read rate estimate_cost is never asked about above. Collapsing either onto
+        its twin costs nothing and every comparison above still passes. Covering the
+        whole set rather than the pairs that happen to coincide today keeps that true
+        when a price update makes two more of them agree.
         """
-        assert (
-            _convert_mistral_name("pixtral-large-2411")
-            == "mistralai/pixtral-large-2411"
-        )
+        assert _convert_mistral_name(model_id) == f"mistralai/{model_id}"
 
     @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):

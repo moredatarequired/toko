@@ -11,12 +11,14 @@ blocked release.
 """
 
 import contextlib
+import importlib
 import importlib.util
 import io
 import os
-import re
 import shutil
+import ssl
 import tempfile
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import toko
@@ -26,6 +28,7 @@ from toko.models import OPTIONAL_GROUPS, list_models
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import ModuleType
 
     from toko.result import TokenCount
 
@@ -44,38 +47,127 @@ CORE_PROVIDERS = {"anthropic", "google", "openai", "xai"}
 TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 
 # A tokenizer load reaches the Hugging Face Hub, which refuses anonymous callers with 429
-# on its own schedule. `_count_transformers` funnels every failure into a ValueError, so
-# what the Hub did is only visible in the message; anything below does not cover — a gated
-# repo, a missing model, a broken tokenizer, a runner that cannot make an HTTPS request at
-# all — is a real failure and still fails the release.
+# on its own schedule. An outage there is not a reason to block a release, so it prints
+# "skipped" — but a gated repo, a missing model, a broken tokenizer, or a runner that
+# cannot make an HTTPS request at all is a real failure and still fails the release.
 #
-# Every shape below was induced and captured; `tests/test_release_smoke.py` holds the
-# verbatim strings and pins each half of the guard to one. An outage arrives in exactly
-# two shapes, because the HEAD call and the GET call fail differently:
+# The guard reads exception classes, not message text, because the release does not run
+# the libraries this repository is locked to. The dev lockfile pins huggingface_hub 0.36
+# on requests with transformers 4.57; the release smoke steps install unlocked and
+# resolve huggingface_hub 1.27 on httpx with transformers 5.15. The two word the same
+# outage differently — 0.36 says "429 Client Error", 1.27 says "429 Too Many Requests",
+# and httpx underneath it says "Client error '429 Too Many Requests'" — so any wording
+# pinned from one environment is wrong in the other. The classes are identical in both.
 #
-#   - The HEAD call fails. `huggingface_hub._raise_on_head_call_error` converts 429, 500,
-#     503, a refused connection, a failed DNS lookup, a timeout and HF_HUB_OFFLINE=1 alike
-#     into a bare `LocalEntryNotFoundError` — only 401, gated and repo-not-found keep
-#     their `HfHubHTTPError`, and `_count_transformers` intercepts those by name first.
-#     Transformers reports it as "We couldn't connect to '<endpoint>' to load the files".
-#     The status code does not survive, so the marker is the whole of what excuses this.
-#   - The HEAD call succeeds and the GET fails. Nothing converts that, so the
-#     `HfHubHTTPError` reaches transformers intact as "There was a specific connection
-#     error when trying to load <repo>:\n503 Server Error: ...". Here the status code is
-#     all there is, which is what `_HUB_STATUS` reads. It is anchored on the phrase
-#     requests puts after the code, because a bare `\b5\d\d\b` also matches "expected 512
-#     tokens, got 7" — turning a genuinely broken tokenizer into a printed skip, which is
-#     the one thing this guard must never do.
+# Reading them is possible because nothing in the stack flattens the chain:
+# `_count_transformers` funnels every failure into a ValueError but raises it `from` the
+# original, every branch of transformers' `utils/hub.py` re-raises `from e`, and
+# huggingface_hub's `_raise_on_head_call_error` raises
+# `LocalEntryNotFoundError(...) from head_call_error`. Both halves of an outage survive:
 #
-# A TLS or proxy failure is deliberately not excused. Both `file_download` and
-# `_snapshot_download` re-raise `requests.exceptions.SSLError` and `ProxyError` ahead of
-# the conversion above, so a junk CA bundle, an endpoint whose certificate does not verify
-# and a dead proxy each arrive here as their own "Max retries exceeded ... (Caused by
-# SSLError(...))" text. A "connection" marker matched all three — through
-# "HTTPSConnectionPool" — and would have printed a green "skipped" for a runner that never
-# reached the Hub at all.
-_HUB_STATUS = re.compile(r"\b(?:429|5\d\d) (?:client|server) error\b")
-HUB_UNAVAILABLE_MARKERS = ("couldn't connect",)
+#   - The HEAD call fails. `_raise_on_head_call_error` converts 429, every 5xx, a refused
+#     connection, a failed DNS lookup, a timeout and HF_HUB_OFFLINE=1 alike into
+#     `LocalEntryNotFoundError`, re-raising 401, gated and repo-not-found unconverted
+#     instead. So the class alone means "the Hub could not be reached".
+#   - The HEAD call succeeds and the GET fails. Nothing converts that, so the HTTP error
+#     arrives intact and carries the status code the Hub answered with.
+#
+# One shape is not distinguishable here, and is deliberately left excused rather than
+# guessed at. A proxy that refuses the TCP connection reaches us as
+# `LocalEntryNotFoundError` -> `httpx.ConnectError` -> `ConnectionRefusedError`, which is
+# link for link what the Hub itself refusing the connection produces; nothing in the
+# chain names the proxy, and nothing in the message does either. So on a release runner
+# whose proxy is down, this prints "skipped" and the release publishes. Reading the
+# environment's own proxy variables to tell the two apart would be a guess about which
+# host the refusal came from, so the guard does not: a runner misconfigured that way is
+# outside what a smoke test can catch. Only the release stack has this gap — under
+# requests, huggingface_hub 0.36 raises `ProxyError` instead of converting, so no outage
+# rule ever reaches it and it fails the release on its own.
+
+# 429 is the Hub rate-limiting an anonymous caller and 5xx is the Hub failing; both are
+# the Hub rather than the release. The whole 5xx range rather than the 500 and 503 that
+# were induced, because "the server failed" is what the class of code means and the Hub
+# sits behind a CDN that has its own; picking out individual codes would draw a line no
+# measurement supports. 401, 403 and 404 are deliberately absent, and are the reason this
+# is a set of codes rather than "any status at all": those are a bad token, a gated repo
+# and a wrong model name, and each has to fail the release.
+HUB_OUTAGE_STATUS = frozenset({429, *range(500, 600)})
+
+# The longest chain measured is 11 links — a count that tried two files before giving up,
+# the second failure chaining the first through `__context__` — so the cap is a runaway
+# guard rather than a policy, set well clear of a load that reaches for more files. It has
+# to be generous in that direction: the `ssl.SSLError` that denies a broken runner sat at
+# link 6 of 6, and a cap that stopped short of it would excuse a release that never
+# reached the Hub. `_causes` therefore refuses to judge a chain it could not read to the
+# end rather than ruling on a partial view.
+_CHAIN_LIMIT = 200
+
+
+def _causes(error: BaseException) -> list[BaseException]:
+    """Walk from `error` through everything it was raised from, outermost first.
+
+    `__context__` can point back into a chain already walked, so the walk is both
+    cycle-safe and bounded. Overrunning the bound returns nothing, which fails the
+    release: an unread chain may hold the SSL cause `BROKEN_RUNNER_TYPES` looks for.
+    """
+    links: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if len(links) == _CHAIN_LIMIT:
+            return []
+        seen.add(id(current))
+        links.append(current)
+        current = current.__cause__ or current.__context__
+    return links
+
+
+@lru_cache(maxsize=1)
+def _hub_errors() -> ModuleType:
+    """huggingface_hub's error classes.
+
+    Imported lazily: the no-extras release step installs neither transformers nor
+    huggingface_hub, and never reaches a call that could need them.
+    """
+    return importlib.import_module("huggingface_hub.errors")
+
+
+def _hub_reported_downtime(link: BaseException) -> bool:
+    """huggingface_hub's own verdict that it could not reach the Hub and had no cache."""
+    return isinstance(link, _hub_errors().LocalEntryNotFoundError)
+
+
+def _hub_returned_an_outage_status(link: BaseException) -> bool:
+    """Report a status the Hub answered with, off whichever exception carries it.
+
+    Deliberately not tied to `HfHubHTTPError`: huggingface_hub wraps the transport's
+    error in its own class on some paths and lets requests' or httpx's through on others,
+    and which one arrives differs between the two resolved stacks — a GET refused with
+    503 arrives as `HfHubHTTPError` under 1.27 but as a bare
+    `requests.exceptions.HTTPError` under 0.36. Every request in this code path goes to
+    the Hub, so a status is the Hub's answer whoever is holding it.
+    """
+    response = getattr(link, "response", None)
+    return getattr(response, "status_code", None) in HUB_OUTAGE_STATUS
+
+
+HUB_OUTAGE_RULES = (_hub_reported_downtime, _hub_returned_an_outage_status)
+
+
+# The runner's own TLS being broken is the one failure that an outage rule would
+# otherwise excuse, so it is denied ahead of them. huggingface_hub 1.x re-raises only
+# `httpx.ProxyError` before the downtime conversion and lets a certificate failure through
+# as an `httpx.ConnectError`, so a self-signed endpoint arrives wearing
+# `LocalEntryNotFoundError` and reads as "We couldn't connect" — excused by the outage
+# rules, and by any wording a message could be matched on. Walking to the end of the chain
+# is what finds the `ssl.SSLError` under it.
+#
+# One class, because one class is all any measured failure needs. It covers both stacks:
+# under requests the chain runs `requests.exceptions.SSLError` -> urllib3 -> `ssl.SSLError`
+# anyway. No proxy class is named here — a proxy failure is never converted into
+# `LocalEntryNotFoundError` by either version and carries no status, so no outage rule
+# reaches it and nothing has to hold it back.
+BROKEN_RUNNER_TYPES: tuple[type[BaseException], ...] = (ssl.SSLError,)
 
 
 @contextlib.contextmanager
@@ -149,11 +241,14 @@ def check_mistral() -> None:
     print(f"mistral ({MISTRAL_MODEL}): {counted.count} tokens")
 
 
-def hub_was_unavailable(reason: str) -> bool:
-    lowered = reason.lower()
-    if _HUB_STATUS.search(lowered):
-        return True
-    return any(marker in lowered for marker in HUB_UNAVAILABLE_MARKERS)
+def hub_was_unavailable(error: BaseException) -> bool:
+    """Whether `error` is the Hub being down rather than anything about this release."""
+    links = _causes(error)
+    # Denial first: huggingface_hub 1.x converts a certificate failure into the same
+    # class it uses for genuine downtime, so the outage rules would otherwise excuse it.
+    if any(isinstance(link, BROKEN_RUNNER_TYPES) for link in links):
+        return False
+    return any(rule(link) for link in links for rule in HUB_OUTAGE_RULES)
 
 
 def check_transformers() -> None:
@@ -164,10 +259,9 @@ def check_transformers() -> None:
     try:
         counted = count_tokens(SAMPLE, model=TRANSFORMERS_MODEL, use_cache=False)
     except ValueError as error:
-        reason = str(error)
-        if not hub_was_unavailable(reason):
+        if not hub_was_unavailable(error):
             raise
-        print(f"transformers ({TRANSFORMERS_MODEL}): skipped: {reason}")
+        print(f"transformers ({TRANSFORMERS_MODEL}): skipped: {error}")
         return
     _assert_plausible(counted)
     print(f"transformers ({TRANSFORMERS_MODEL}): {counted.count} tokens")

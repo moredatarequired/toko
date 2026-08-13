@@ -96,7 +96,7 @@ def test_env_var_enables_auto_update(write_config, monkeypatch):
 
 
 def test_non_table_api_keys_is_rejected(write_config):
-    write_config('[toko]\napi_keys = "oops"\n')
+    write_config('[toko]\napi_keys = "oops"\n')  # pragma: allowlist secret
     with pytest.raises(ValueError, match=r"Invalid api_keys .*expected a table"):
         load_config()
 

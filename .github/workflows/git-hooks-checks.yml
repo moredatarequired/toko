@@ -18,6 +18,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.3"
+          checksum: "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101" # pragma: allowlist secret
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 

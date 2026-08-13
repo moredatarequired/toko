@@ -28,6 +28,21 @@ def test_detect_provider(name, provider):
     assert models.detect_provider(name) == provider
 
 
+def test_every_keyed_mistral_tokenizer_is_reachable_by_name():
+    """A table entry detection cannot route to Mistral is dead weight.
+
+    The lookup runs only after resolution has already picked the provider, so a name
+    detection misses fails outright instead of counting -- which is how eight entries
+    named for the codestral, ministral and pixtral families came to be unreachable.
+    """
+    unreachable = {
+        name
+        for name in counter.MISTRAL_TOKENIZERS
+        if models.detect_provider(name) != "mistral"
+    }
+    assert not unreachable
+
+
 def test_unknown_openai_model_carries_no_verified_encoding():
     assert models.get_model("gpt-6") == models.ModelInfo(
         name="gpt-6", provider="openai", encoding=None
@@ -70,6 +85,18 @@ def test_optional_groups_use_module_detection(monkeypatch):
     extra_status = {g["extra"]: g["installed"] for g in groups}
     assert extra_status["mistral"] is True
     assert extra_status["transformers"] is False
+
+
+def test_mistral_models_are_listed_only_when_mistral_common_is_installed(monkeypatch):
+    monkeypatch.setattr(models, "_has_module", lambda name: name == "mistral_common")
+    listed = models.list_models()
+    assert set(listed["mistral"]) == set(models.MISTRAL_MODELS)
+    # The caveat on an approximate count names a dated release to reach for, so that
+    # name has to be one --list-models shows.
+    assert "mistral-large-2411" in listed["mistral"]
+
+    monkeypatch.setattr(models, "_has_module", lambda _: False)
+    assert "mistral" not in models.list_models()
 
 
 def test_current_models_are_listed_and_retired_ones_are_hidden():

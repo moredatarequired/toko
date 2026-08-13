@@ -111,14 +111,148 @@ def _convert_llama_name(model_name: str) -> str:
     return "meta-llama/llama-3.2-1b-instruct"
 
 
+# Every mistralai/* release genai-prices carries its own entry for, keyed by the bare
+# name a user types. The size-word branches below match on substrings, so each one
+# swallows the whole tier behind it: without this set mistral-medium-3-5 bills as
+# Medium 3 at 27% of its rate and mistral-large-2512 as the four times dearer
+# mistral-large. Preferring the exact entry closes that off for every dated release at
+# once, including ones added to the data later, rather than one branch at a time.
+# test_mistral_exact_ids_cover_the_price_data holds this in step with the shipped data.
+_MISTRAL_EXACT_IDS = frozenset(
+    {
+        "codestral-2501",
+        "codestral-2508",
+        "codestral-mamba",
+        "ministral-3b",
+        "ministral-3b-2512",
+        "ministral-8b",
+        "ministral-8b-2512",
+        "ministral-14b-2512",
+        "mistral-7b-instruct",
+        "mistral-7b-instruct-v0.1",
+        "mistral-7b-instruct-v0.2",
+        "mistral-large",
+        "mistral-large-2512",
+        "mistral-medium-3",
+        "mistral-medium-3-5",
+        "mistral-medium-3.1",
+        "mistral-nemo",
+        "mistral-saba",
+        "mistral-small",
+        "mistral-small-24b-instruct-2501",
+        "mistral-small-2603",
+        "mistral-small-3.1-24b-instruct",
+        "mistral-small-3.2-24b-instruct",
+        "mistral-tiny",
+        "mixtral-8x22b-instruct",
+        "mixtral-8x7b-instruct",
+        "pixtral-12b",
+        "pixtral-large-2411",
+    }
+)
+
+# mistralai/* ids deliberately kept out of the set above. The bare name mistral-medium
+# means Medium 3 on Mistral's API and in the native data, which prices any
+# mistral-medium* name as Medium 3; OpenRouter's unprefixed entry is instead the retired
+# December 2023 release at nearly seven times that, so only mistral-medium-2312 may
+# reach it. The ":free" ids are OpenRouter routing suffixes rather than model names, and
+# they carry no rate at all.
+_MISTRAL_EXACT_ID_EXCLUSIONS = frozenset(
+    {
+        "mistral-medium",
+        "mistral-7b-instruct:free",
+        "mistral-nemo:free",
+        "mistral-small-24b-instruct-2501:free",
+        "mistral-small-3.1-24b-instruct:free",
+    }
+)
+
+
+# The data spells release numbers both ways -- mistral-medium-3-5 with a dash sits next
+# to mistral-medium-3.1 with a dot -- so a name typed in the other convention misses the
+# set and falls onto a size-word rate: mistral-medium-3.5 billed as Medium 3, 3.75x under
+# its own entry. Both spellings are looked up, the typed one first. Rewriting every query
+# to dashes instead would turn a hit into a miss for the dotted ids that have no dashed
+# twin, and a Mistral miss lands on a plausible-looking rate rather than on nothing.
+_MISTRAL_EXACT_IDS_BY_DASHED = {
+    model_id.replace(".", "-"): model_id for model_id in _MISTRAL_EXACT_IDS
+}
+
+
+def _mistral_exact_id(bare_name: str) -> str | None:
+    if bare_name in _MISTRAL_EXACT_IDS:
+        return bare_name
+    return _MISTRAL_EXACT_IDS_BY_DASHED.get(bare_name.replace(".", "-"))
+
+
 def _convert_mistral_name(model_name: str) -> str:
     lower = model_name.lower()
+    bare = lower.rsplit("/", 1)[-1]
+    exact = _mistral_exact_id(bare)
+    if exact:
+        return f"mistralai/{exact}"
+    # Left to the size-word branches below, each of these families lands on an unrelated
+    # release: open-mixtral-8x7b matches "7b" and bills as mistral-7b-instruct, and any
+    # name matching no size word at all falls through to the mistral-small default.
+    if "pixtral" in lower:
+        return (
+            "mistralai/pixtral-large-2411"
+            if "large" in lower
+            else "mistralai/pixtral-12b"
+        )
+    # "embed" excluded: codestral-embed-2505 is an embedding model and matching here
+    # billed it as the codestral chat release, $0.30/Mtok against its real $0.15. The
+    # OpenRouter namespace carries no Mistral embedding entry at all, so it lands on the
+    # same mistral-small fallback mistral-embed already uses rather than on a rate that
+    # belongs to a different kind of model.
+    if "codestral" in lower and "embed" not in lower:
+        if "mamba" in lower:
+            return "mistralai/codestral-mamba"
+        if "2501" in lower:
+            return "mistralai/codestral-2501"
+        # A rolling codestral name still has to resolve to some release, and the newest
+        # one carried beats the mistral-small fallback. codestral-2405 and codestral-22b
+        # fall through to that fallback on purpose: neither release is in the data, and
+        # 2501/2508 are different models rather than later names for them.
+        if "2405" not in lower and "22b" not in lower:
+            return "mistralai/codestral-2508"
+    if "ministral" in lower and "8b" in lower:
+        return "mistralai/ministral-8b"
+    if "ministral" in lower and "3b" in lower:
+        return "mistralai/ministral-3b"
+    if "mixtral" in lower:
+        return (
+            "mistralai/mixtral-8x22b-instruct"
+            if "8x22b" in lower
+            else "mistralai/mixtral-8x7b-instruct"
+        )
     if "large" in lower:
         return "mistralai/mistral-large"
     if "medium" in lower:
-        return "mistralai/mistral-medium"
+        # The unversioned mistralai/mistral-medium is the retired 2312 release at nearly
+        # seven times Medium 3's rate, so only 2312 itself may have it. mistral-medium-3
+        # is where the native data sends every other mistral-medium* name, its Medium 3
+        # entry matching the prefix, and that is also the only rate native offers for
+        # mistral-medium-latest: it has no alias entry and no 3.5 entry to contradict it.
+        return (
+            "mistralai/mistral-medium"
+            if "2312" in lower
+            else "mistralai/mistral-medium-3"
+        )
     if "small" in lower:
-        return "mistralai/mistral-small"
+        # Same shape one tier down, but only the rolling name moved on: the dated small
+        # releases really are the unversioned entry, while native carries a dedicated
+        # mistral-small-latest entry named "Mistral Small 3.2", so the alias means that
+        # release. Native prices its alias at $0.10/$0.30 rather than the $0.075/$0.20
+        # of its own mistral-small-3.2-24b-instruct entry; toko stays in the OpenRouter
+        # namespace, where 3.2 has one rate and the alias and the explicit name agree.
+        return (
+            "mistralai/mistral-small-3.2-24b-instruct"
+            if "latest" in lower
+            else "mistralai/mistral-small"
+        )
+    if "tiny" in lower:
+        return "mistralai/mistral-tiny"
     if "nemo" in lower:
         return "mistralai/mistral-nemo"
     if "7b" in lower:

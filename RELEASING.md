@@ -64,11 +64,11 @@ The tag push is what releases. Nothing is published until it lands.
 1. **Publish** — `uv publish` to PyPI.
 
 The extras are required, not incidental: `tests/smoke_test.py` asserts
-`len(models_by_provider) > 4`, and a bare install lists exactly 4 providers. Installing
-`transformers` is what clears the bar — `list_models()` then also registers `llama`,
-`deepseek`, `qwen`, and `huggingface`, taking the count to 8. `mistral-common` does not
-move it: `list_models()` has no `mistral_common` branch, so the `mistral` extra rides
-along in `[all]` for counting Mistral models, not for this assertion.
+`len(models_by_provider) > 4`, and a bare install lists exactly 4 providers. Either
+extra now clears the bar on its own. `transformers` also registers `llama`, `deepseek`,
+`qwen`, and `huggingface`, taking the count to 8; `mistral-common` also registers
+`mistral`, taking it to 5. `[all]`, which is what the smoke steps install, gets both and
+lists 9.
 
 Publishing uses [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/), so
 there is no API token to rotate. The workflow's `pypi` environment supplies the OIDC

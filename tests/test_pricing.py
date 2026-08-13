@@ -1,14 +1,23 @@
 """Comprehensive pricing tests for all supported models."""
 
 import pytest
+from genai_prices.data import providers
 
 from toko import models
-from toko.cost import estimate_cost
+from toko.cost import (
+    _MISTRAL_EXACT_ID_EXCLUSIONS,
+    _MISTRAL_EXACT_IDS,
+    _MISTRAL_EXACT_IDS_BY_DASHED,
+    _convert_mistral_name,
+    _mistral_exact_id,
+    estimate_cost,
+)
 from toko.models import (
     ANTHROPIC_MODELS,
     GOOGLE_MODELS,
     RETIRED_OPENAI_MODELS,
     XAI_MODELS,
+    detect_provider,
     list_models,
 )
 
@@ -94,6 +103,199 @@ class TestPricingCoverage:
             pytest.fail(
                 f"The following current OpenAI models lack pricing data: {', '.join(failures)}"
             )
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "mistral-large-2411",
+            "mistral-small-2409",
+            "mistral-nemo",
+            "open-mistral-7b",
+            "codestral-latest",
+            "codestral-2501",
+            "codestral-2508",
+            "codestral-mamba-2407",
+            "ministral-3b",
+            "ministral-8b-2410",
+            "mistral-medium-latest",
+            "mistral-small-latest",
+            "mistral-tiny-2407",
+            "open-mixtral-8x7b",
+            "open-mixtral-8x22b",
+            "pixtral-12b-2409",
+            "pixtral-large-2411",
+            "mistral-medium-3-5",
+            "mistral-large-2512",
+            "mistral-small-2603",
+            "mistral-small-3.1-24b-instruct",
+            "ministral-14b-2512",
+            "codestral-embed-2505",
+        ],
+    )
+    def test_mistral_family_models_have_pricing(self, model_name):
+        """Every OpenRouter id _convert_mistral_name can produce has to be a real one.
+
+        genai-prices matches these exactly, so an id that only looks plausible prices
+        nothing at all.
+        """
+        assert estimate_cost(1_000_000, model_name) is not None
+
+    @pytest.mark.parametrize(
+        ("model_name", "other_name"),
+        [
+            ("ministral-3b", "mistral-small-2409"),
+            ("mistral-tiny-2407", "mistral-small-2409"),
+            ("open-mixtral-8x7b", "open-mistral-7b"),
+            ("open-mixtral-8x22b", "mistral-small-2409"),
+            ("codestral-2501", "codestral-2405"),
+            ("mistral-medium-latest", "mistral-medium-2312"),
+            ("mistral-small-latest", "mistral-small-2409"),
+            ("pixtral-12b-2409", "mistral-small-2409"),
+            # A dated release must not collapse onto the rolling name of its tier: each
+            # of these matched the tier's size word and billed as the wrong release.
+            ("mistral-medium-3-5", "mistral-medium-latest"),
+            ("mistral-large-2512", "mistral-large-2411"),
+            ("mistral-small-2603", "mistral-small-2409"),
+            ("mistral-small-3.1-24b-instruct", "mistral-small-2409"),
+            ("mistral-small-3.1-24b-instruct", "mistral-small-3.2-24b-instruct"),
+            ("mistral-small-24b-instruct-2501", "mistral-small-2409"),
+            ("ministral-3b-2512", "ministral-3b"),
+            ("ministral-8b-2512", "ministral-8b-2410"),
+            ("ministral-14b-2512", "mistral-small-2409"),
+            ("mistral-7b-instruct-v0.2", "mistral-7b-instruct"),
+            # An embedding model must not be billed at its family's chat rate.
+            ("codestral-embed-2505", "codestral-2508"),
+        ],
+    )
+    def test_mistral_family_models_are_not_priced_as_each_other(
+        self, model_name, other_name
+    ):
+        """Distinct models must not collapse onto one id, which pricing alone hides.
+
+        Every name here used to fall through _convert_mistral_name onto the id its
+        partner resolves to, so each priced to something and the swap went unnoticed.
+        Comparing the two survives a price update in a way a hardcoded rate would not.
+        Both directions are priced because some pairs share an input rate and differ
+        only on output, ministral-14b-2512 against the mistral-small fallback among them.
+        """
+        assert estimate_cost(1_000_000, model_name, output_tokens=1_000_000) != (
+            estimate_cost(1_000_000, other_name, output_tokens=1_000_000)
+        )
+
+    def test_mistral_exact_ids_cover_the_price_data(self):
+        """_MISTRAL_EXACT_IDS has to keep up with the shipped price data.
+
+        A mistralai/* release the set misses falls back to a size-word branch and bills
+        as the wrong member of its tier, which is the defect the set exists to prevent,
+        so a data update adding one has to fail here rather than pass quietly.
+        """
+        available = {
+            model.id.removeprefix("mistralai/")
+            for provider in providers
+            if provider.id == "openrouter"
+            for model in provider.models
+            if model.id.startswith("mistralai/")
+        }
+        # devstral and voxtral share the namespace but not the naming, so the bare ids
+        # this set is keyed by match no detect_provider pattern and never reach
+        # _convert_mistral_name. Their mistralai/* spellings do detect as Mistral and
+        # land on the mistral-small fallback; pricing those properly is #57.
+        reachable = {name for name in available if detect_provider(name) == "mistral"}
+        assert reachable - _MISTRAL_EXACT_IDS == _MISTRAL_EXACT_ID_EXCLUSIONS
+        assert available >= _MISTRAL_EXACT_IDS
+
+    @pytest.mark.parametrize("model_id", sorted(_MISTRAL_EXACT_IDS))
+    def test_every_exact_id_resolves_to_itself(self, model_id):
+        """Ids that bill alike need the id asserted; no price comparison can see them.
+
+        Several members of the set share both rates: pixtral-large-2411 with
+        mistral-large, and codestral-2501 with codestral-2508, which differ only on the
+        cache read rate estimate_cost is never asked about above. Collapsing either onto
+        its twin costs nothing and every comparison above still passes. Covering the
+        whole set rather than the pairs that happen to coincide today keeps that true
+        when a price update makes two more of them agree.
+        """
+        assert _convert_mistral_name(model_id) == f"mistralai/{model_id}"
+
+    @pytest.mark.parametrize(
+        ("model_name", "expected_id"),
+        [
+            ("pixtral-large", "mistralai/pixtral-large-2411"),
+            ("pixtral-large-latest", "mistralai/pixtral-large-2411"),
+            ("pixtral", "mistralai/pixtral-12b"),
+            ("pixtral-12b-2409", "mistralai/pixtral-12b"),
+            ("codestral-mamba-2407", "mistralai/codestral-mamba"),
+            # The dated releases are all in the set, so the 2501 arm is only reachable
+            # through a vendor spelling of one; the data spells Bedrock's Large this way.
+            ("mistral.codestral-2501-v1:0", "mistralai/codestral-2501"),
+            ("codestral-latest", "mistralai/codestral-2508"),
+            ("codestral", "mistralai/codestral-2508"),
+            # The two releases genai-prices does not carry keep the fallback.
+            ("codestral-2405", "mistralai/mistral-small"),
+            ("codestral-22b", "mistralai/mistral-small"),
+            ("ministral-8b-2410", "mistralai/ministral-8b"),
+            ("mistral.ministral-3-3b-instruct", "mistralai/ministral-3b"),
+            ("open-mixtral-8x22b", "mistralai/mixtral-8x22b-instruct"),
+            ("open-mixtral-8x7b", "mistralai/mixtral-8x7b-instruct"),
+            ("mistral-large-2411", "mistralai/mistral-large"),
+            ("mistral-medium-2312", "mistralai/mistral-medium"),
+            ("mistral-medium-latest", "mistralai/mistral-medium-3"),
+            ("mistral-small-latest", "mistralai/mistral-small-3.2-24b-instruct"),
+            ("mistral-small-2409", "mistralai/mistral-small"),
+            ("mistral-tiny-2407", "mistralai/mistral-tiny"),
+            ("open-mistral-nemo-2407", "mistralai/mistral-nemo"),
+            ("open-mistral-7b", "mistralai/mistral-7b-instruct"),
+            # The trailing fallback, which no size word reaches.
+            ("mistral-embed", "mistralai/mistral-small"),
+            ("codestral-embed-2505", "mistralai/mistral-small"),
+        ],
+    )
+    def test_size_word_branches_resolve_names_the_exact_ids_miss(
+        self, model_name, expected_id
+    ):
+        """One name per size-word branch, none of them answered by the exact-id set.
+
+        The set is consulted first, so an assertion whose subject is a member tests the
+        lookup and leaves the branch behind it free to return anything. That is how three
+        of these branches lost their cover: pixtral-large-2411, codestral-2501 and
+        ministral-3b each guarded one until they joined the set. The membership check
+        below fails rather than goes quiet if a later addition steals a subject the same
+        way. Ids are asserted rather than prices because several branches return rates
+        that coincide, on the output side especially.
+        """
+        assert _mistral_exact_id(model_name.rsplit("/", 1)[-1]) is None
+        assert _convert_mistral_name(model_name) == expected_id
+
+    @pytest.mark.parametrize(
+        ("model_name", "expected_id"),
+        [
+            ("mistral-medium-3-5", "mistralai/mistral-medium-3-5"),
+            ("mistral-medium-3.5", "mistralai/mistral-medium-3-5"),
+            ("mistral-medium-3.1", "mistralai/mistral-medium-3.1"),
+            ("mistral-medium-3-1", "mistralai/mistral-medium-3.1"),
+            (
+                "mistral-small-3-2-24b-instruct",
+                "mistralai/mistral-small-3.2-24b-instruct",
+            ),
+            (
+                "mistralai/mistral-7b-instruct-v0-2",
+                "mistralai/mistral-7b-instruct-v0.2",
+            ),
+        ],
+    )
+    def test_release_numbers_resolve_in_either_spelling(self, model_name, expected_id):
+        """The data uses both conventions, so a release has to answer to both.
+
+        mistral-medium-3-5 is dashed and mistral-medium-3.1 dotted, and typing the other
+        spelling used to miss the set entirely: mistral-medium-3.5 billed as Medium 3 at
+        27% of its own rate. The dotted-only ids are here so that a one-way rewrite to
+        dashes, which would drop them back onto a size-word branch, fails.
+        """
+        assert _convert_mistral_name(model_name) == expected_id
+
+    def test_dotted_and_dashed_spellings_do_not_collide(self):
+        """Two ids differing only in dots would leave one spelling unreachable."""
+        assert len(_MISTRAL_EXACT_IDS_BY_DASHED) == len(_MISTRAL_EXACT_IDS)
 
     @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):

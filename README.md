@@ -230,7 +230,7 @@ count instead, so check `approximate` on those before treating a count as exact:
 - An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
   unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
   the call raises instead.
-- A Mistral name that is not one dated release — a rolling alias such as
+- A Mistral name Toko has no pinned tokenizer for — a rolling alias such as
   `mistral-large-latest`, or a release newer than the tokenizers `mistral-common` ships —
   is counted with the bundled tekken tokenizer, whose vocabulary every Mistral model
   since Nemo shares. An exact count needs a release `mistral-common` bundles a tokenizer
@@ -304,7 +304,7 @@ OpenAI needs no key at all; those counts are computed locally with `tiktoken`.
 Some providers use tokenizers available on Hugging Face; these may need authentication to download the appropriate tokenizer.
 
 - **HuggingFace-hosted models (Llama, DeepSeek, Qwen)** – install `toko[transformers]` and ensure `huggingface-cli login` (or set `HF_TOKEN`) if the model needs authentication.
-- **Mistral** – install `toko[mistral]`; no API key is required for offline tokenization. `mistral-common` bundles the tokenizers up to Mistral Large 2411, so counts for newer models and for `-latest` aliases are marked approximate.
+- **Mistral** – install `toko[mistral]`; no API key is required for offline tokenization. `mistral-common` bundles the tokenizers up to Mistral Large 2411, so counts for newer models and for `-latest` aliases are marked approximate. Once the extra is installed, `--list-models` shows the Mistral names, including `mistral-large-2411` for an exact count.
 
 Environment variables can be exported directly, stored in a `.env` file and loaded with `uv run --env-file`, or placed in the config file described below.
 

@@ -325,6 +325,12 @@ OPENAI_MODEL_ENCODINGS = {
 
 _OPENAI_NAME_PATTERN = re.compile(r"gpt-|o\d")
 
+# Mistral ships whole families whose names contain neither "mistral" nor "mixtral", so
+# matching those two alone leaves codestral-2405, ministral-8b-2410 and the pixtral
+# releases with no provider at all -- they fail before any Mistral code runs, even though
+# MISTRAL_TOKENIZERS keys them.
+_MISTRAL_NAME_PATTERNS = ("mistral", "mixtral", "codestral", "ministral", "pixtral")
+
 
 def detect_provider(model: str) -> str | None:
     """Detect provider from model name using pattern matching."""
@@ -352,7 +358,7 @@ def detect_provider(model: str) -> str | None:
         return "xai"
 
     # Mistral models
-    if "mistral" in model_lower or "mixtral" in model_lower:
+    if any(pattern in model_lower for pattern in _MISTRAL_NAME_PATTERNS):
         return "mistral"
 
     # Llama models (including fine-tunes)
@@ -526,6 +532,17 @@ TRANSFORMERS_MODELS: tuple[str, ...] = (
     "NousResearch/Hermes-3-Llama-3.1-8B",
 )
 
+# The Mistral names --list-models advertises once mistral-common is installed. The
+# "-latest" aliases are the names users type and they do count, but only approximately,
+# so the list also carries the newest release mistral-common bundles a tokenizer for --
+# otherwise the caveat sends users to an exact name the tool never shows them.
+MISTRAL_MODELS: tuple[str, ...] = (
+    "mistral-small-latest",
+    "mistral-medium-latest",
+    "mistral-large-latest",
+    "mistral-large-2411",
+)
+
 # Names tiktoken still carries in MODEL_TO_ENCODING that --list-models should not
 # advertise. They tokenize fine, so counting is untouched; they are only hidden from
 # the default listing. As of 2026-08-11 that covers OpenAI engines already shut down,
@@ -630,11 +647,7 @@ OPTIONAL_GROUPS: tuple[OptionalGroupDef, ...] = (
         extra="mistral",
         module="mistral_common",
         providers=("mistral",),
-        models=(
-            "mistral-small-latest",
-            "mistral-medium-latest",
-            "mistral-large-latest",
-        ),
+        models=MISTRAL_MODELS,
     ),
     OptionalGroupDef(
         extra="transformers",
@@ -790,6 +803,9 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
         if provider is None:
             provider = "openai"
         providers[provider].add(model_name)
+
+    if _has_module("mistral_common"):
+        providers["mistral"].update(MISTRAL_MODELS)
 
     if _has_module("transformers"):
         for model_name in TRANSFORMERS_MODELS:

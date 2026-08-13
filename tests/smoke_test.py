@@ -102,24 +102,26 @@ TRANSFORMERS_PROVIDERS = {"deepseek", "huggingface", "llama", "qwen"}
 # sits behind a CDN that has its own; picking out individual codes would draw a line no
 # measurement supports.
 #
-# 401, 403 and 404 are deliberately absent, but only 401 is actually decided here. An
-# unauthorized HEAD is re-raised unconverted, so its status is still on the chain when the
-# rules read it and leaving it out of this set is what fails the release. 403 and 404 are
-# a weaker claim than they look: tagged, they arrive as `GatedRepoError` or
-# `RepositoryNotFoundError` and are re-raised the same way, but an untagged one — a CDN, a
-# WAF, a proxy, or `HF_ENDPOINT` pointed at something that answers — is converted to
+# 401, 403 and 404 are deliberately absent, and which of them this set actually decides
+# turns on whether the Hub tagged its answer. An unauthorized HEAD, a gated repo tagged
+# `X-Error-Code: GatedRepo` and a missing one tagged `RepoNotFound` are re-raised
+# unconverted — as `HfHubHTTPError`, `GatedRepoError` and `RepositoryNotFoundError` — so
+# their status is still on the chain when the rules read it, and leaving all three out of
+# this set is what fails the release. An untagged 403 or 404 — a CDN, a WAF, a proxy, or
+# `HF_ENDPOINT` pointed at something that answers — is converted to
 # `LocalEntryNotFoundError` by `_raise_on_head_call_error` before any status is consulted,
 # so `_hub_reported_downtime` excuses it whatever this set says. Measured on both stacks,
-# and the corpus pins all three so the difference stays visible.
+# and the corpus pins the tagged and untagged shapes as separate rows, so widening this set
+# costs a red PR and the difference between the two stays visible.
 HUB_OUTAGE_STATUS = frozenset({429, *range(500, 600)})
 
 # The longest chain measured is 11 links — a count that tried two files before giving up,
 # the second failure reaching the first through `__context__` — so the cap is a runaway
 # guard rather than a policy, and 200 sits about eighteen times clear of that. Being
-# generous is the safe direction: the deepest `ssl` link that denies a broken runner sits
-# at link 6 of 11, and a cap that stopped short of it would excuse a release that never
-# reached the Hub. `_causes` therefore refuses to judge a chain it could not read to the
-# end rather than ruling on a partial view.
+# generous is the safe direction: the deepest `ssl` link that denies a broken runner is the
+# eleventh of eleven, and a cap that stopped short of it would deny every chain that outran
+# it, a genuine outage included. `_causes` therefore refuses to judge a chain it could not
+# read to the end rather than ruling on a partial view.
 _CHAIN_LIMIT = 200
 
 
@@ -179,8 +181,12 @@ def _hub_returned_an_outage_status(link: BaseException) -> bool:
 # on a network path that is still live, and swallows whatever comes back — a bare
 # `except Exception` at `tokenization_utils_tokenizers.py:1375`, commented "Never block
 # tokenizer init on a Hub error". So that immunity is upstream's broad catch over a call
-# still being made, not a code path that went away; measured, and dev's transformers
-# 4.57.3 has neither the call nor the catch.
+# still being made, not a code path that went away. Dev's transformers 4.57.3 makes the same
+# call — `model_info` at `tokenization_utils_base.py:2432` — and lacks only the catch, so
+# there a warm-cache 429 is raised rather than swallowed: dev is the less immune of the two,
+# not the safer. Measured on both, against a warm cache and a stand-in answering 429 to
+# `GET /api/models/...`: 5.15 counts anyway, 4.57.3 fails, and what it fails with carries
+# the 429 the rules above already read off the chain.
 HUB_OUTAGE_RULES = (_hub_reported_downtime, _hub_returned_an_outage_status)
 
 
@@ -206,9 +212,15 @@ HUB_OUTAGE_RULES = (_hub_reported_downtime, _hub_returned_an_outage_status)
 # it. A release gate should fail closed on TLS: nothing here can tell a hostile middlebox
 # from a remote that hung up, and the cost of guessing wrong is asymmetric. The corpus
 # carries the three remote-side shapes that were measured — a handshake alert, a TLS-level
-# close and an unexpected EOF — so what failing closed costs is pinned rather than left to
-# omission. Not all three reach this tuple: a TLS-level close carries no `ssl` link at all
-# on either stack, and on the dev stack it is excused as an outage.
+# close and an unexpected EOF — but only one of those six rows turns on this tuple: the
+# release stack's unexpected EOF, the one with `LocalEntryNotFoundError` sitting above the
+# `ssl` link offering to excuse it. Four of the rest deny with this tuple emptied out too,
+# because no outage rule matches them either, and the sixth — a TLS-level close on dev — is
+# excused, carrying no `ssl` link at all on either stack. So those five rows mostly record
+# which classes upstream raises for a remote-side fault rather than anything this tuple
+# decides, which is the point of keeping them: the version that starts routing one of them
+# through `LocalEntryNotFoundError` is the version where this tuple becomes all that stands
+# between it and a published release, and that change shows up here as a red PR.
 BROKEN_RUNNER_TYPES: tuple[type[BaseException], ...] = (ssl.SSLError,)
 
 

@@ -139,6 +139,18 @@ CAPTURES = {
         ),
         excused=False,
     ),
+    (DEV, "head-403-tagged"): Capture(
+        message=(
+            "Model 'Qwen/Qwen2.5-7B-Instruct' is gated on Hugging Face. Accept the license and provide HF_TOKEN or run: huggingface-cli login"
+        ),
+        chain=(
+            ("builtins.ValueError", None, "cause"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.GatedRepoError", 403, "cause"),
+            ("requests.exceptions.HTTPError", 403, None),
+        ),
+        excused=False,
+    ),
     (DEV, "head-403-untagged"): Capture(
         message=(
             "Failed to count tokens for Qwen model Qwen/Qwen2.5-7B-Instruct: We couldn't connect to 'http://127.0.0.1:55121' to load the files, and couldn't find them in the cached files.\n"
@@ -152,6 +164,18 @@ CAPTURES = {
             ("requests.exceptions.HTTPError", 403, None),
         ),
         excused=True,
+    ),
+    (DEV, "head-404-tagged"): Capture(
+        message=(
+            "Model 'Qwen/Qwen2.5-7B-Instruct' not found on HuggingFace. Use the full model path (org/model-name). Try: Qwen/Qwen3-8B, Qwen/Qwen2.5-7B"
+        ),
+        chain=(
+            ("builtins.ValueError", None, "cause"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.RepositoryNotFoundError", 404, "cause"),
+            ("requests.exceptions.HTTPError", 404, None),
+        ),
+        excused=False,
     ),
     (DEV, "head-404-untagged"): Capture(
         message=(
@@ -425,6 +449,21 @@ CAPTURES = {
         ),
         excused=False,
     ),
+    (RELEASE, "head-403-tagged"): Capture(
+        message=(
+            "Model 'Qwen/Qwen2.5-7B-Instruct' is gated on Hugging Face. Accept the license and provide HF_TOKEN or run: huggingface-cli login"
+        ),
+        chain=(
+            ("builtins.ValueError", None, "cause"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.GatedRepoError", 403, "cause"),
+            ("httpx.HTTPStatusError", 403, "context"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.GatedRepoError", 403, "cause"),
+            ("httpx.HTTPStatusError", 403, None),
+        ),
+        excused=False,
+    ),
     (RELEASE, "head-403-untagged"): Capture(
         message=(
             "Failed to count tokens for Qwen model Qwen/Qwen2.5-7B-Instruct: We couldn't connect to 'http://127.0.0.1:51919' to load the files, and couldn't find them in the cached files.\n"
@@ -442,6 +481,21 @@ CAPTURES = {
             ("httpx.HTTPStatusError", 403, None),
         ),
         excused=True,
+    ),
+    (RELEASE, "head-404-tagged"): Capture(
+        message=(
+            "Model 'Qwen/Qwen2.5-7B-Instruct' not found on HuggingFace. Use the full model path (org/model-name). Try: Qwen/Qwen3-8B, Qwen/Qwen2.5-7B"
+        ),
+        chain=(
+            ("builtins.ValueError", None, "cause"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.RepositoryNotFoundError", 404, "cause"),
+            ("httpx.HTTPStatusError", 404, "context"),
+            ("builtins.OSError", None, "cause"),
+            ("huggingface_hub.errors.RepositoryNotFoundError", 404, "cause"),
+            ("httpx.HTTPStatusError", 404, None),
+        ),
+        excused=False,
     ),
     (RELEASE, "head-404-untagged"): Capture(
         message=(

@@ -114,7 +114,7 @@ toko --exclude '**/__pycache__/*' src/
 File                                   gpt-5
 src/toko/__init__.py                     378
 src/toko/cache.py                        773
-src/toko/cli.py                        4,446
+src/toko/cli.py                        4,586
 src/toko/config.py                     1,374
 src/toko/cost.py                       1,387
 src/toko/counter.py                    6,318
@@ -122,17 +122,32 @@ src/toko/data/__init__.py                  8
 src/toko/data/models.toml              2,952
 src/toko/data/openrouter_models.json     359
 src/toko/file_reader.py                1,170
-src/toko/formatters.py                 3,551
+src/toko/formatters.py                 3,999
 src/toko/models.py                     7,175
 src/toko/output_format.py                 53
 src/toko/price_update.py               1,414
 src/toko/py.typed                          0
 src/toko/result.py                       107
-TOTAL                                 31,465
+src/toko/sort_order.py                    50
+TOTAL                                 32,103
 ```
 
 - Directories are processed recursively by default and honor `.gitignore`.
 - Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Use `--sort count` to put the biggest files first, which is the quick way to find
+  whatever is filling a context window. `--sort path` sorts the rows by path instead.
+- The default is `--sort input`, which leaves the rows in the order the paths were read.
+
+`--sort path` compares the paths as the `File` column shows them, so files in the same
+directory stay together. A directory scan already arrives in near-path order, but not the
+same one: the scan compares path components, so `src/toko.py` lands after everything under
+`src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
+model column, which belongs to the model whose name sorts first as a string rather than to
+the first `--model` you passed; files the model could not be counted for keep their `N/A`
+and sort last. The `TOTAL` row stays at the bottom whichever order you pick, and the order
+applies to every format, not just the text table, so `--sort count --format json` yields
+keys in the same order the table would show. Runs that count `--text` or stdin have no file
+rows, and neither does `--total-only`, so the option is accepted and ignored there.
 
 ## Machine-readable output
 

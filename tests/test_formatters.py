@@ -353,3 +353,181 @@ def test_every_text_table_variant_is_unruled_and_flush_left(
     # With costs the header spans two lines and its first one is blank under "File", so
     # the row that proves nothing indents the body is the last one.
     assert lines[-1].startswith("TOTAL")
+
+
+def _row_labels(output: str) -> list[str]:
+    # The first cell of every row the table drew, with the borders taken out so the
+    # assertion is about the order of the rows and not the shape of the frame.
+    words = [_BOX_DRAWING.sub(" ", line).split() for line in _plain_lines(output)]
+    return [row[0] for row in words if row]
+
+
+def _three_files() -> dict[str, dict[str, TokenCount]]:
+    return {
+        "a.txt": {"gpt-5": _counted(1)},
+        "b.txt": {"gpt-5": _counted(30)},
+        "c.txt": {"gpt-5": _counted(7)},
+    }
+
+
+def _mixed_paths() -> dict[str, dict[str, TokenCount]]:
+    # Insertion order is neither path order nor count order, so each --sort value lands
+    # on a different arrangement and no test can pass by accident.
+    return {
+        "src/b.txt": {"gpt-5": _counted(30)},
+        "a.txt": {"gpt-5": _counted(7)},
+        "src/a.txt": {"gpt-5": _counted(1)},
+    }
+
+
+def test_rows_keep_their_input_order_by_default():
+    output = format_file_table(_three_files(), output_format="csv")
+    assert _csv_rows(output)[1:] == [["a.txt", "1"], ["b.txt", "30"], ["c.txt", "7"]]
+
+
+def test_input_sort_is_the_default():
+    assert format_file_table(
+        _mixed_paths(), output_format="csv", sort_order="input"
+    ) == format_file_table(_mixed_paths(), output_format="csv")
+
+
+def test_input_sort_leaves_paths_that_are_out_of_order_alone():
+    output = format_file_table(_mixed_paths(), output_format="csv", sort_order="input")
+    assert [row[0] for row in _csv_rows(output)[1:]] == [
+        "src/b.txt",
+        "a.txt",
+        "src/a.txt",
+    ]
+
+
+def test_path_sort_orders_rows_by_the_path_string():
+    # A plain string sort, which is what keeps src/a.txt next to src/b.txt.
+    output = format_file_table(_mixed_paths(), output_format="csv", sort_order="path")
+    assert [row[0] for row in _csv_rows(output)[1:]] == [
+        "a.txt",
+        "src/a.txt",
+        "src/b.txt",
+    ]
+
+
+def test_path_sort_reorders_json_keys_the_same_way():
+    payload = json.loads(
+        format_file_table(_mixed_paths(), output_format="json", sort_order="path")
+    )
+    assert list(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
+
+
+def test_path_sort_reorders_tsv_the_same_way():
+    output = format_file_table(
+        _mixed_paths(), output_format="tsv", sort_order="path", include_header=False
+    )
+    assert output.splitlines() == ["a.txt\t7", "src/a.txt\t1", "src/b.txt\t30"]
+
+
+def test_path_sort_reorders_the_text_table_and_leaves_the_total_last():
+    output = format_file_table(_mixed_paths(), sort_order="path", include_header=False)
+    assert _row_labels(output) == ["a.txt", "src/a.txt", "src/b.txt", "TOTAL"]
+
+
+def test_count_sort_puts_the_largest_file_first():
+    output = format_file_table(_three_files(), output_format="csv", sort_order="count")
+    assert _csv_rows(output)[1:] == [["b.txt", "30"], ["c.txt", "7"], ["a.txt", "1"]]
+
+
+def test_count_sort_reorders_json_keys_the_same_way():
+    payload = json.loads(
+        format_file_table(_three_files(), output_format="json", sort_order="count")
+    )
+    assert list(payload) == ["b.txt", "c.txt", "a.txt"]
+
+
+def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
+    output = format_file_table(_three_files(), sort_order="count", include_header=False)
+    assert _row_labels(output) == ["b.txt", "c.txt", "a.txt", "TOTAL"]
+
+
+def test_count_sort_ranks_by_the_leftmost_model_column():
+    # Columns are ordered by model name, so the leftmost one here is claude-opus-4-5,
+    # and ranking by gpt-5 instead would put b.txt first.
+    file_results = {
+        "a.txt": {
+            "gpt-5": _counted(1),
+            "claude-opus-4-5": _counted(50, model="claude-opus-4-5"),
+        },
+        "b.txt": {
+            "gpt-5": _counted(90),
+            "claude-opus-4-5": _counted(2, model="claude-opus-4-5"),
+        },
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert _csv_rows(output) == [
+        ["file", "claude-opus-4-5", "gpt-5"],
+        ["a.txt", "50", "1"],
+        ["b.txt", "2", "90"],
+    ]
+
+
+def test_count_sort_puts_a_file_the_leading_model_missed_last():
+    file_results = {
+        "missed.txt": {"gpt-5": _counted(3)},
+        "counted.txt": {
+            "gpt-5": _counted(4),
+            "claude-opus-4-5": _counted(1, model="claude-opus-4-5"),
+        },
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert _csv_rows(output)[1:] == [
+        ["counted.txt", "1", "4"],
+        ["missed.txt", "N/A", "3"],
+    ]
+
+
+def test_count_sort_breaks_a_tie_on_the_path():
+    file_results = {
+        "z.txt": {"gpt-5": _counted(5)},
+        "m.txt": {"gpt-5": _counted(5)},
+        "a.txt": {"gpt-5": _counted(5)},
+    }
+    output = format_file_table(file_results, output_format="csv", sort_order="count")
+    assert [row[0] for row in _csv_rows(output)[1:]] == ["a.txt", "m.txt", "z.txt"]
+
+
+def _differently_caveated_files() -> dict[str, dict[str, TokenCount]]:
+    # Two files that failed differently, the larger count second so a count sort would
+    # swap them and a path sort would not.
+    return {
+        "b.txt": _caveated_column(3, "the xAI token API was unavailable (429)"),
+        "a.txt": _caveated_column(400, "the xAI token API was unavailable (503)"),
+    }
+
+
+def test_sort_leaves_a_total_only_run_alone():
+    """--sort orders the per-file rows, so it must not rewrite the TOTAL row's caveat.
+
+    _compute_totals joins the per-file caveats in iteration order, so sorting a run that
+    prints no file rows would still show through, in the one row it does print.
+    """
+    unsorted = format_file_table(
+        _differently_caveated_files(), output_format="json", total_only=True
+    )
+    for sort_order in ("input", "path", "count"):
+        assert (
+            format_file_table(
+                _differently_caveated_files(),
+                output_format="json",
+                total_only=True,
+                sort_order=sort_order,
+            )
+            == unsorted
+        )
+    # Not vacuous: the caveats are in the order the files arrived, which is the order
+    # both other values would have changed.
+    assert json.loads(unsorted)["grok-4.5"]["caveat"] == (
+        "the xAI token API was unavailable (429); "
+        "the xAI token API was unavailable (503)"
+    )
+
+
+def test_an_unknown_sort_order_is_rejected():
+    with pytest.raises(ValueError, match="Unknown sort order: size"):
+        format_file_table(_three_files(), output_format="csv", sort_order="size")

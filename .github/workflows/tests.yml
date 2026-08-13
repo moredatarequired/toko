@@ -27,15 +27,18 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           # Exact, so setup-uv installs it without asking the GitHub releases API
           # which version "latest" is. v6 has no built-in hash for 0.12.3 and skips
-          # verification silently without an explicit checksum. The other two workflows
-          # pin the same pair; all three have to be bumped together.
+          # verification silently without an explicit checksum. This step is
+          # duplicated in git-hooks-checks.yml and release.yml: the action SHA, the
+          # version and the checksum have to match across all three. Dependabot
+          # bumps the action SHA and nothing else, so the version and checksum are
+          # hand-maintained.
           version: "0.12.3"
           checksum: "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101" # pragma: allowlist secret
           enable-cache: true
@@ -45,14 +48,14 @@ jobs:
         run: uv sync --all-groups --all-extras
 
       - name: Install just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3.1.0
 
       # Keyed on a manual version suffix, not on uv.lock: the tokenizers are
       # pinned by model id in the tests, not by any dependency. actions/cache
       # skips the save on an exact key hit, so bump the suffix when a test
       # starts pulling a tokenizer that isn't in the cache yet.
       - name: Cache tokenizer downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ${{ github.workspace }}/.cache/tiktoken

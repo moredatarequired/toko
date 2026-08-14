@@ -123,6 +123,7 @@ _MISTRAL_EXACT_IDS = frozenset(
         "codestral-2501",
         "codestral-2508",
         "codestral-mamba",
+        "devstral-2512",
         "ministral-3b",
         "ministral-3b-2512",
         "ministral-8b",
@@ -148,6 +149,7 @@ _MISTRAL_EXACT_IDS = frozenset(
         "mixtral-8x7b-instruct",
         "pixtral-12b",
         "pixtral-large-2411",
+        "voxtral-small-24b-2507",
     }
 )
 
@@ -185,12 +187,29 @@ def _mistral_exact_id(bare_name: str) -> str | None:
     return _MISTRAL_EXACT_IDS_BY_DASHED.get(bare_name.replace(".", "-"))
 
 
+# Families that carry the same size words as the mistral-* tiers while sharing none of
+# their rates, so the branches below read those words as belonging to another model:
+# devstral-medium-2507 would bill as mistral-medium-3 and voxtral-mini as mistral-small.
+# They skip the ladder and are looked up under the bare name, which is also the spelling
+# their entries have -- the OpenRouter data holds devstral-small and the magistral pair
+# unprefixed, beside the mistralai/* pair in the set above. A release with no entry
+# either way then matches nothing and is reported without a cost, which is the honest
+# answer where a neighbouring tier's rate is not. The family word is looked for in that
+# bare segment alone, since the branch returns it: matching the whole name would let a
+# family word in the org segment turn any last segment into an OpenRouter lookup, so
+# devstral/mistral-medium would reach the retired 2312 entry the exclusions above exist
+# to keep out.
+_MISTRAL_OFF_LADDER_FAMILIES = ("devstral", "magistral", "voxtral")
+
+
 def _convert_mistral_name(model_name: str) -> str:
     lower = model_name.lower()
     bare = lower.rsplit("/", 1)[-1]
     exact = _mistral_exact_id(bare)
     if exact:
         return f"mistralai/{exact}"
+    if any(family in bare for family in _MISTRAL_OFF_LADDER_FAMILIES):
+        return bare
     # Left to the size-word branches below, each of these families lands on an unrelated
     # release: open-mixtral-8x7b matches "7b" and bills as mistral-7b-instruct, and any
     # name matching no size word at all falls through to the mistral-small default.

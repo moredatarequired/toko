@@ -21,6 +21,17 @@ from toko.result import TokenCount
         ("gpt-oss-20b", "huggingface"),
         ("openai/gpt-oss-120b", "huggingface"),
         ("claude-opus-4-5", "anthropic"),
+        # Mistral families named after neither mistral nor mixtral. Detection is what
+        # decides whether these count at all, and each of the three used to fail here.
+        ("mistral-large-2411", "mistral"),
+        ("devstral-2512", "mistral"),
+        ("devstral-medium-2507", "mistral"),
+        ("magistral-small-2506", "mistral"),
+        ("voxtral-small-24b-2507", "mistral"),
+        # Three more families named "-stral" is a coincidence to leave alone: the
+        # patterns are whole family names, so an unrelated model sharing the tail keeps
+        # failing loudly rather than being counted on a Mistral tokenizer.
+        ("austral-7b", None),
         ("unknown-model-xyz", None),
     ],
 )

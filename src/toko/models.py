@@ -328,8 +328,20 @@ _OPENAI_NAME_PATTERN = re.compile(r"gpt-|o\d")
 # Mistral ships whole families whose names contain neither "mistral" nor "mixtral", so
 # matching those two alone leaves codestral-2405, ministral-8b-2410 and the pixtral
 # releases with no provider at all -- they fail before any Mistral code runs, even though
-# MISTRAL_TOKENIZERS keys them.
-_MISTRAL_NAME_PATTERNS = ("mistral", "mixtral", "codestral", "ministral", "pixtral")
+# MISTRAL_TOKENIZERS keys them. devstral, magistral and voxtral are the same story one
+# generation later: mistral-common bundles no tokenizer for them, so they count
+# approximately on tekken rather than exactly, but an approximate count beats the "could
+# not detect provider" they used to get.
+_MISTRAL_NAME_PATTERNS = (
+    "mistral",
+    "mixtral",
+    "codestral",
+    "ministral",
+    "pixtral",
+    "devstral",
+    "magistral",
+    "voxtral",
+)
 
 
 def detect_provider(model: str) -> str | None:

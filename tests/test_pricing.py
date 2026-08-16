@@ -8,6 +8,7 @@ from toko.cost import (
     _MISTRAL_EXACT_ID_EXCLUSIONS,
     _MISTRAL_EXACT_IDS,
     _MISTRAL_EXACT_IDS_BY_DASHED,
+    _MISTRAL_OFF_LADDER_FAMILIES,
     _convert_mistral_name,
     _mistral_exact_id,
     estimate_cost,
@@ -32,6 +33,20 @@ _VERSION_ALIASES = [
     )
     for alias, canonical in sorted(alias_map.items())
 ]
+
+
+# The devstral, magistral and voxtral ids the OpenRouter data carries a rate for, taken
+# from the data so a release added to it is covered without touching this file. The
+# ":free" ids are routing suffixes rather than models, as _MISTRAL_EXACT_ID_EXCLUSIONS
+# explains, and carry no rate to assert.
+_OFF_LADDER_PRICED_IDS = sorted(
+    model.id
+    for provider in providers
+    if provider.id == "openrouter"
+    for model in provider.models
+    if ":" not in model.id
+    and any(family in model.id for family in _MISTRAL_OFF_LADDER_FAMILIES)
+)
 
 
 def _current(registry):
@@ -130,6 +145,11 @@ class TestPricingCoverage:
             "mistral-small-3.1-24b-instruct",
             "ministral-14b-2512",
             "codestral-embed-2505",
+            "devstral-2512",
+            "devstral-small",
+            "magistral-small-2506",
+            "magistral-medium-2506",
+            "voxtral-small-24b-2507",
         ],
     )
     def test_mistral_family_models_have_pricing(self, model_name):
@@ -165,6 +185,13 @@ class TestPricingCoverage:
             ("mistral-7b-instruct-v0.2", "mistral-7b-instruct"),
             # An embedding model must not be billed at its family's chat rate.
             ("codestral-embed-2505", "codestral-2508"),
+            # The families that share the tier words without sharing the tiers: each of
+            # these reads as a mistral-small or mistral-medium to the size-word branches.
+            ("devstral-2512", "mistral-small-2409"),
+            ("devstral-small", "mistral-small-2409"),
+            ("magistral-small-2506", "mistral-small-2409"),
+            ("magistral-medium-2506", "mistral-medium-latest"),
+            ("voxtral-small-24b-2507", "mistral-small-2409"),
         ],
     )
     def test_mistral_family_models_are_not_priced_as_each_other(
@@ -196,12 +223,12 @@ class TestPricingCoverage:
             for model in provider.models
             if model.id.startswith("mistralai/")
         }
-        # devstral and voxtral share the namespace but not the naming, so the bare ids
-        # this set is keyed by match no detect_provider pattern and never reach
-        # _convert_mistral_name. Their mistralai/* spellings do detect as Mistral and
-        # land on the mistral-small fallback; pricing those properly is #57.
-        reachable = {name for name in available if detect_provider(name) == "mistral"}
-        assert reachable - _MISTRAL_EXACT_IDS == _MISTRAL_EXACT_ID_EXCLUSIONS
+        # Every bare id in the namespace now detects as Mistral and so reaches
+        # _convert_mistral_name, which is what lets the whole set be asserted against.
+        # A family the patterns miss lands in the difference below rather than being
+        # quietly filtered out of it.
+        assert all(detect_provider(name) == "mistral" for name in available)
+        assert available - _MISTRAL_EXACT_IDS == _MISTRAL_EXACT_ID_EXCLUSIONS
         assert available >= _MISTRAL_EXACT_IDS
 
     @pytest.mark.parametrize("model_id", sorted(_MISTRAL_EXACT_IDS))
@@ -296,6 +323,81 @@ class TestPricingCoverage:
     def test_dotted_and_dashed_spellings_do_not_collide(self):
         """Two ids differing only in dots would leave one spelling unreachable."""
         assert len(_MISTRAL_EXACT_IDS_BY_DASHED) == len(_MISTRAL_EXACT_IDS)
+
+    def test_the_off_ladder_families_are_all_represented_in_the_price_data(self):
+        """A family with no entries left would make the test below pass with no cases."""
+        assert {
+            family
+            for family in _MISTRAL_OFF_LADDER_FAMILIES
+            for model_id in _OFF_LADDER_PRICED_IDS
+            if family in model_id
+        } == set(_MISTRAL_OFF_LADDER_FAMILIES)
+
+    @pytest.mark.parametrize("model_id", _OFF_LADDER_PRICED_IDS)
+    def test_every_off_ladder_id_in_the_price_data_is_priced(self, model_id):
+        """These three families are the ones the data spells inconsistently.
+
+        mistralai/devstral-2512 carries the prefix every other Mistral id there has and
+        magistral-small-2506 does not, while a model_ref matches by exact id, so each id
+        has to be produced in its own spelling. Enumerating the data rather than listing
+        names means a release it gains has to be spelled right too.
+        """
+        assert estimate_cost(1_000_000, model_id) is not None
+
+    def test_a_family_word_in_the_org_segment_is_not_a_passthrough(self):
+        """The branch returns the last segment, so it has to match on that segment.
+
+        Reading the whole name instead let any devstral/* org hand an unrelated id
+        straight to the OpenRouter lookup, mistral-medium among them -- the one entry
+        _MISTRAL_EXACT_ID_EXCLUSIONS exists to reserve for mistral-medium-2312.
+        """
+        foreign = [
+            model.id
+            for provider in providers
+            if provider.id == "openrouter"
+            for model in provider.models
+            if "/" not in model.id
+            and not any(family in model.id for family in _MISTRAL_OFF_LADDER_FAMILIES)
+        ]
+        assert foreign
+        assert not [
+            model_id
+            for model_id in foreign
+            if _convert_mistral_name(f"devstral/{model_id}") == model_id
+        ]
+        assert (
+            _convert_mistral_name("devstral/mistral-medium")
+            == "mistralai/mistral-medium-3"
+        )
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "devstral-small-2505",
+            "devstral-small-2507",
+            "devstral-medium-2507",
+            "magistral-medium-2507",
+            "magistral-medium-2509",
+            "voxtral-mini-2507",
+            "voxtral-small-2507",
+        ],
+    )
+    def test_off_ladder_releases_the_price_data_lacks_cost_nothing(self, model_name):
+        """No price is the honest answer for these; a neighbouring tier's rate is not.
+
+        Each is a real release genai-prices carries no entry for, and each reads as a
+        mistral-small or mistral-medium to the size-word branches -- which is what they
+        billed as when detection first started routing them to Mistral. The 2505 name is
+        here rather than under the priced ids because the data's devstral-small row
+        entered in June 2025, before 1.1 existed, and still carries 2505's description,
+        but OpenRouter has since reassigned that slug to 1.1 and the row was never
+        re-scraped: its $0.06/$0.12 aggregate is wrong for both releases, which Mistral
+        priced alike at $0.10/$0.30. estimate_cost is asserted rather
+        than the converter's id: what a miss has to produce is no cost, and only the
+        whole path shows that a miss stays a miss.
+        """
+        assert detect_provider(model_name) == "mistral"
+        assert estimate_cost(1_000_000, model_name, output_tokens=1_000_000) is None
 
     @requires_current_prices("anthropic")
     def test_anthropic_models_have_pricing(self):

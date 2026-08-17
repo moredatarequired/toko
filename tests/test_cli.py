@@ -18,10 +18,10 @@ from typer.testing import CliRunner
 from tests.hf_hub import skip_if_rate_limited
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
-from toko.cli import DEFAULT_JOBS, MAX_JOBS, _retirement_candidates, app
+from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
-from toko.models import RETIRED_OPENAI_MODELS
+from toko.models import RETIRED_OPENAI_MODELS, retirement_for_requested
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
 runner = CliRunner()
@@ -362,20 +362,20 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
 @pytest.mark.parametrize(
     "requested",
     [
-        # A leading slash left the prefix empty, which skipped the provider check
-        # entirely and let a shut-down engine count as an o200k_base guess.
+        # A leading slash left the prefix empty, which skipped the prefix check
+        # entirely and let a shut-down engine count as an o200k_base guess. No Hub
+        # repo can have an empty owner, so this names the engine and nothing else.
         "/text-davinci-003",
-        # A router path, which has to behave like openrouter/xai/grok-3 rather than
-        # turning on whether the middle segment happens to spell a provider.
+        # Router paths, which address a provider rather than owning a repo.
         "openrouter/text-davinci-003",
         "openrouter/openai/text-davinci-003",
-        # detect_provider reads only the last segment for a tiktoken name, so this is
-        # OpenAI's shut-down curie however the prefix reads.
+        # anthropic/ is addressing too, so what is being named is OpenAI's curie. The
+        # reviewer grounded this one specifically: no Hub repo owns the name.
         "anthropic/curie",
     ],
 )
-def test_a_prefix_that_does_not_move_the_provider_is_stripped(requested):
-    """The prefix is dropped when the whole name and its last segment detect alike."""
+def test_a_routing_prefix_is_stripped(requested):
+    """A prefix built only of provider names addresses a model; it does not own a repo."""
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 1
@@ -383,18 +383,33 @@ def test_a_prefix_that_does_not_move_the_provider_is_stripped(requested):
     assert f"model '{requested}' is retired (2024-01-04)" in result.stderr
 
 
-def test_a_prefix_that_moves_the_provider_is_kept():
-    """google/gemma-2 is a HuggingFace repo, not Google's gemma-2, so it is not one.
+# Live public Hugging Face repos whose last segment is an OpenAI engine's name. Each was
+# confirmed against https://huggingface.co/api/models/<id> rather than assumed: calling
+# any of them retired is a false statement about a repo that is still served. This is
+# what the round-two rule got wrong -- it compared detect_provider on the whole name and
+# on its last segment, which agrees for all 53 reachable retired names, so it stripped
+# essentially always and refused Xenova/text-davinci-003 as "retired (2024-01-04)".
+@pytest.mark.parametrize(
+    "requested", ["Xenova/text-davinci-003", "openai-community/gpt2"]
+)
+def test_a_repo_owner_prefix_is_not_stripped(requested):
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
-    Asserted through _retirement_candidates rather than a run, because counting the
-    repo would reach the Hub. The gate is a pure name decision, so this is the whole
-    of its behaviour for the name.
+    assert result.exit_code == 0
+    assert "retired" not in result.stderr
+
+
+def test_a_google_repo_is_not_read_as_googles_own_model():
+    """google/ owns real Hub repos, so it is a repo owner rather than addressing.
+
+    google/gemma-3-1b-it is a real repo (google/gemma-2, which the round-two rule was
+    documented against, is not). Asserted on the gate's verdict rather than through a
+    run, because every google/gemma-* repo is gated and counting one needs Hub
+    credentials the suite does not have. The gate is a pure name decision, so its
+    verdict is the whole of its behaviour here.
     """
-    assert _retirement_candidates("google/gemma-2") == ["google/gemma-2"]
-    assert _retirement_candidates("openrouter/xai/grok-3") == [
-        "openrouter/xai/grok-3",
-        "grok-3",
-    ]
+    assert retirement_for_requested("google/gemma-3-1b-it") is None
+    assert retirement_for_requested("google/gemma-2-2b-it") is None
 
 
 def test_a_prefixed_retired_name_still_counts_when_opted_in():

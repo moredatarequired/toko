@@ -17,8 +17,8 @@ from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
-from toko.models import detect_provider, get_model, retirement_of
 from toko.models import list_models as get_model_list
+from toko.models import retirement_for_requested
 from toko.output_format import OutputFormat
 from toko.price_update import (
     apply_cached_prices,
@@ -641,54 +641,6 @@ def _retired_model_error(requested: str, retirement: Retirement) -> str:
     )
 
 
-def _retirement_candidates(requested: str) -> list[str]:
-    """Spellings of one ``--model`` that name the same model for retirement purposes.
-
-    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix that
-    ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the way the
-    Anthropic and Google ones do. Testing the stripped spellings here refuses a retired
-    model under the name the user actually typed, and only ever decides whether to
-    refuse -- how a name counts is untouched.
-
-    The prefix is dropped only when dropping it does not move the name: when the whole
-    name and its last segment detect the same provider, everything in front of that
-    segment is inert, so the model being asked for is the segment. That is what makes
-    ``xai/grok-3`` and ``openrouter/xai/grok-3`` the retired ``grok-3``, and it treats
-    a router path the same whatever sits in the middle of it -- ``detect_provider``
-    reads only the last segment for a tiktoken name, so ``openrouter/text-davinci-003``
-    and ``/text-davinci-003`` are the shut-down engine too, and a leading ``/`` is not
-    a way past the gate. Where the prefix does move the name it is kept: ``gemma-2`` is
-    Google's, but ``google/gemma-2`` is a HuggingFace repo, and the repo's retirement
-    is the one that matters. ``openai-community/gpt2`` counts either way, because
-    ``gpt2`` is live.
-    """
-    name = requested.strip()
-
-    bases = [name]
-    tail = name.rpartition("/")[2]
-    if tail and tail != name and detect_provider(tail) == detect_provider(name):
-        bases.append(tail)
-
-    candidates: list[str] = []
-    for base in bases:
-        candidates.append(base)
-        if base.lower().endswith("-latest"):
-            candidates.append(base[: -len("-latest")])
-    return list(dict.fromkeys(candidates))
-
-
-def _retirement_for(requested: str) -> Retirement | None:
-    for candidate in _retirement_candidates(requested):
-        try:
-            model_info = get_model(candidate)
-        except ValueError:
-            continue
-        retirement = retirement_of(model_info)
-        if retirement is not None:
-            return retirement
-    return None
-
-
 def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
     """Refuse a retired model before anything is read or counted.
 
@@ -703,7 +655,7 @@ def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
 
     errors: list[str] = []
     for requested in models:
-        retirement = _retirement_for(requested)
+        retirement = retirement_for_requested(requested)
         if retirement is not None:
             errors.append(_retired_model_error(requested, retirement))
 

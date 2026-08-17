@@ -816,6 +816,91 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
     return None
 
 
+# Segments that route to a provider rather than owning a Hugging Face repo, so anything
+# in front of the model name is addressing and the model being asked for is the last
+# segment. Derived from the providers toko builds models for -- adding a builder covers
+# its prefix too -- plus the router that fronts them, which has no builder because
+# openrouter/<provider>/<model> resolves as the provider's.
+#
+# "google" and "huggingface" are excluded because both are Hub organisations that own
+# real repos (google/gemma-3-1b-it, huggingface/CodeBERTa-small-v1), and detect_provider
+# already reads a leading "google/" as a repo owner rather than as Google. "openai" is
+# kept despite openai/ also being a Hub organisation: --list-models prints the
+# openai/<model> spelling, so refusing to read it as addressing would make the listing's
+# own output unrefusable.
+_ROUTING_PREFIX_SEGMENTS: frozenset[str] = (
+    frozenset(_PROVIDER_BUILDERS) | {"openrouter"}
+) - {"google", "huggingface"}
+
+
+def _routed_model_name(name: str) -> str | None:
+    """Return the model a routing prefix points at, or None if the prefix owns the name.
+
+    Every segment in front of the last has to be routing for the last one to be the model
+    being named. An empty segment counts as routing because no Hub repo can have one:
+    "/text-davinci-003" owns nothing, so the shut-down engine is what it names.
+
+    A prefix that names something else is left alone, which is the whole point of
+    checking. "Xenova/text-davinci-003" and "openai-community/gpt2" are live Hub repos
+    that happen to end in an OpenAI engine's name, and calling either of them retired
+    would be false about a repo that is still there.
+    """
+    prefix, separator, tail = name.rpartition("/")
+    if not separator or not tail:
+        return None
+    if all(
+        not segment or segment.lower() in _ROUTING_PREFIX_SEGMENTS
+        for segment in prefix.split("/")
+    ):
+        return tail
+    return None
+
+
+def retirement_candidates(requested: str) -> list[str]:
+    """Spellings of one ``--model`` that name the same model for retirement purposes.
+
+    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix that
+    ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the way the
+    Anthropic and Google ones do. Normalizing here lets a retired model be recognised
+    under the name the user actually typed. It decides only what is retired -- how a
+    name counts is untouched.
+    """
+    name = requested.strip()
+
+    bases = [name]
+    routed = _routed_model_name(name)
+    if routed is not None:
+        bases.append(routed)
+
+    candidates: list[str] = []
+    for base in bases:
+        candidates.append(base)
+        if base.lower().endswith("-latest"):
+            candidates.append(base[: -len("-latest")])
+    return list(dict.fromkeys(candidates))
+
+
+@lru_cache
+def retirement_for_requested(requested: str) -> Retirement | None:
+    """Report the retirement of a model as spelled, over every equivalent spelling.
+
+    This is the single answer to "is this name retired": the gate refuses on it and the
+    reporter reports it, so a run cannot refuse a name as retired and then describe it as
+    live. Reading the raw name in one place and the normalized one in the other is what
+    made ``--include-retired -m anthropic/curie`` emit ``"retirement": null`` while bare
+    ``curie`` emitted the full object.
+    """
+    for candidate in retirement_candidates(requested):
+        try:
+            model_info = get_model(candidate)
+        except ValueError:
+            continue
+        retirement = retirement_of(model_info)
+        if retirement is not None:
+            return retirement
+    return None
+
+
 def retirement_notice(model_info: ModelInfo) -> str | None:
     """Explain that a model is retired, and what the provider serves instead."""
     retirement = retirement_of(model_info)

@@ -13,6 +13,7 @@ from importlib import resources, util
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
 from toko.config import get_models_path
+from toko.result import Retirement
 
 
 @dataclass
@@ -766,24 +767,43 @@ def get_model(name: str) -> ModelInfo:
     return builder(name)
 
 
-def retirement_notice(model_info: ModelInfo) -> str | None:
-    """Explain that a model is retired, and what the provider serves instead."""
-    if model_info.retired is None:
-        return None
+def retirement_of(model_info: ModelInfo) -> Retirement | None:
+    """Report what toko knows about a model's retirement, across both of its sources.
+
+    The registry carries dates and redirect targets; RETIRED_OPENAI_MODELS is a bare
+    list of OpenAI engines tiktoken still tokenizes, with neither. Callers should not
+    have to know which mechanism caught a name, so both answer here.
+    """
     # Google's canonical names carry the API's "models/" prefix, which is an
     # implementation detail of the endpoint rather than a name users typed.
     name = model_info.name.removeprefix("models/")
+    if model_info.retired is not None:
+        return Retirement(
+            model=name,
+            date=None
+            if model_info.retired == RETIREMENT_DATE_UNKNOWN
+            else model_info.retired,
+            redirects_to=model_info.redirects_to,
+        )
+    if model_info.provider == "openai" and name.lower() in RETIRED_OPENAI_MODELS:
+        return Retirement(model=name.lower())
+    return None
+
+
+def retirement_notice(model_info: ModelInfo) -> str | None:
+    """Explain that a model is retired, and what the provider serves instead."""
+    retirement = retirement_of(model_info)
+    if retirement is None:
+        return None
     when = (
-        "on an unpublished date"
-        if model_info.retired == RETIREMENT_DATE_UNKNOWN
-        else f"on {model_info.retired}"
+        "on an unpublished date" if retirement.date is None else f"on {retirement.date}"
     )
-    notice = f"{name} was retired {when}"
-    if model_info.redirects_to:
+    notice = f"{retirement.model} was retired {when}"
+    if retirement.redirects_to:
         return (
             f"{notice}; {model_info.provider} still answers for it but serves "
-            f"{model_info.redirects_to}, so this count is {model_info.redirects_to}'s, "
-            f"not {name}'s."
+            f"{retirement.redirects_to}, so this count is {retirement.redirects_to}'s, "
+            f"not {retirement.model}'s."
         )
     return f"{notice}; the {model_info.provider} API will reject or redirect it."
 

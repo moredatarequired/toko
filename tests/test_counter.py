@@ -5,7 +5,7 @@ import pytest
 import toko.counter as counter
 from toko.cache import cache_count, get_cached_count
 from toko.counter import count_tokens
-from toko.result import TokenCount
+from toko.result import Caveat, CaveatKind, TokenCount
 
 
 def test_count_tokens_simple_text():
@@ -138,7 +138,7 @@ def test_count_tokens_reports_the_model_and_provider_it_resolved():
 
     assert counted == TokenCount(count=2, model="gpt-5", provider="openai")
     assert counted.approximate is False
-    assert counted.caveat is None
+    assert counted.caveats == ()
     assert counted.cost is None
 
 
@@ -146,9 +146,16 @@ def test_unknown_openai_model_carries_the_caveat_it_printed(capsys):
     counted = count_tokens("hello world", model="gpt-6", use_cache=False)
 
     assert counted.approximate is True
-    assert counted.caveat == "unknown OpenAI model 'gpt-6'; estimating with o200k_base"
-    # The caveat is the sentence stderr already carried, so the two cannot drift.
-    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveat}"
+    assert counted.caveats == (
+        Caveat(
+            kind=CaveatKind.OPENAI_ENCODING_GUESS,
+            model="gpt-6",
+            message="unknown OpenAI model 'gpt-6'; estimating with o200k_base",
+            encoding="o200k_base",
+        ),
+    )
+    # The message is the sentence stderr already carried, so the two cannot drift.
+    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveats[0].message}"
 
 
 def test_a_cache_hit_returns_a_fully_populated_count():

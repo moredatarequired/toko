@@ -13,6 +13,7 @@ from toko.counter import (
     count_tokens,
 )
 from toko.models import OPTIONAL_GROUPS
+from toko.result import CaveatKind
 
 tokenizers = pytest.importorskip("mistral_common.tokens.tokenizers.mistral")
 
@@ -57,11 +58,12 @@ def test_advertised_mistral_model_counts(model):
 def test_rolling_names_are_approximate_and_dated_ones_are_not():
     rolling = count_tokens(TEXT, "mistral-large-latest", use_cache=False)
     assert rolling.approximate
-    assert "approximate" in (rolling.caveat or "")
+    assert rolling.caveats[0].kind is CaveatKind.MISTRAL_TOKENIZER_FALLBACK
+    assert "approximate" in rolling.caveats[0].message
 
     dated = count_tokens(TEXT, "mistral-large-2411", use_cache=False)
     assert not dated.approximate
-    assert dated.caveat is None
+    assert dated.caveats == ()
 
 
 @pytest.mark.parametrize(

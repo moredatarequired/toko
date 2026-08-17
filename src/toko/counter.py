@@ -18,8 +18,8 @@ import httpx
 import tiktoken
 
 from toko.cache import cache_count, get_cached_count
-from toko.models import ModelInfo, get_model, retirement_notice
-from toko.result import TokenCount
+from toko.models import ModelInfo, get_model, retirement_notice, retirement_of
+from toko.result import Caveat, CaveatKind, TokenCount
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -228,16 +228,22 @@ class TokenizerProtocol(Protocol):
 
 
 def _exact(count: int, model_info: ModelInfo) -> TokenCount:
-    return TokenCount(count=count, model=model_info.name, provider=model_info.provider)
+    return TokenCount(
+        count=count,
+        model=model_info.name,
+        provider=model_info.provider,
+        retirement=retirement_of(model_info),
+    )
 
 
-def _approximate(count: int, model_info: ModelInfo, caveat: str) -> TokenCount:
+def _approximate(count: int, model_info: ModelInfo, caveat: Caveat) -> TokenCount:
     return TokenCount(
         count=count,
         model=model_info.name,
         provider=model_info.provider,
         approximate=True,
-        caveat=caveat,
+        caveats=(caveat,),
+        retirement=retirement_of(model_info),
     )
 
 
@@ -285,9 +291,14 @@ def _count_with_provider(text: str, model_info: ModelInfo) -> TokenCount:
     return handler(text, model_info)
 
 
-def _warn_openai_estimate(model_name: str, encoding_name: str) -> str:
-    caveat = f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}"
-    _warn_once("openai-estimate", model_name, caveat)
+def _warn_openai_estimate(model_name: str, encoding_name: str) -> Caveat:
+    caveat = Caveat(
+        kind=CaveatKind.OPENAI_ENCODING_GUESS,
+        model=model_name,
+        message=f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}",
+        encoding=encoding_name,
+    )
+    _warn_once("openai-estimate", model_name, caveat.message)
     return caveat
 
 
@@ -320,12 +331,21 @@ def _warn_if_retired(model_info: ModelInfo) -> None:
         _warn_once("retired", model_info.name, notice)
 
 
-def _warn_approximate(model_name: str, reason: str) -> str:
-    caveat = (
-        f"{reason}, so {model_name} was counted with the Grok-1 Hugging Face "
-        "tokenizer. This count is approximate, not exact."
+XAI_STANDIN_TOKENIZER = "Xenova/grok-1-tokenizer"
+
+
+def _warn_approximate(model_name: str, reason: str) -> Caveat:
+    caveat = Caveat(
+        kind=CaveatKind.XAI_GROK1_STANDIN,
+        model=model_name,
+        message=(
+            f"{reason}, so {model_name} was counted with the Grok-1 Hugging Face "
+            "tokenizer. This count is approximate, not exact."
+        ),
+        tokenizer=XAI_STANDIN_TOKENIZER,
+        reason=reason,
     )
-    _warn_once("xai-approximate", model_name, caveat)
+    _warn_once("xai-approximate", model_name, caveat.message)
     return caveat
 
 
@@ -511,15 +531,20 @@ def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
     return _exact(total_tokens, model_info)
 
 
-def _warn_mistral_approximate(model_name: str) -> str:
-    caveat = (
-        f"mistral-common ships no tokenizer for {model_name}, so it was counted with "
-        "the bundled tekken tokenizer that every Mistral model since Nemo uses. This "
-        "count is approximate, not exact. The bundled tokenizers stop at November 2024, "
-        "so only a release mistral-common has one for, such as mistral-large-2411, "
-        "counts exactly."
+def _warn_mistral_approximate(model_name: str) -> Caveat:
+    caveat = Caveat(
+        kind=CaveatKind.MISTRAL_TOKENIZER_FALLBACK,
+        model=model_name,
+        message=(
+            f"mistral-common ships no tokenizer for {model_name}, so it was counted with "
+            "the bundled tekken tokenizer that every Mistral model since Nemo uses. This "
+            "count is approximate, not exact. The bundled tokenizers stop at November 2024, "
+            "so only a release mistral-common has one for, such as mistral-large-2411, "
+            "counts exactly."
+        ),
+        tokenizer=MISTRAL_FALLBACK_TOKENIZER,
     )
-    _warn_once("mistral-approximate", model_name, caveat)
+    _warn_once("mistral-approximate", model_name, caveat.message)
     return caveat
 
 
@@ -657,7 +682,9 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> TokenCount
     if use_cache:
         cached = get_cached_count(text, model)
         if cached is not None:
-            # Only exact counts are ever stored, so a hit needs no caveat.
+            # Only exact counts are ever stored, so a hit needs no caveat -- but it
+            # still describes a retired model when the name is one, exactly as a
+            # freshly counted number does.
             return _exact(cached, model_info)
 
     result = _count_with_provider(text, model_info)

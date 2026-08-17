@@ -54,15 +54,17 @@ None of this is a commitment yet. Issue
 
 Model coverage and pricing data are outside the versioned surface.
 
-Models come from four places that move independently of a toko release: the packaged
-registry, `MODEL_TO_ENCODING` read out of the installed tiktoken (so upgrading
-tiktoken alone can change `--list-models`), whichever optional tokenizer extras are
-installed, and any `[[model]]` entries in your own config. Adding, hiding or
-re-pointing a model is a normal `feat` or `fix`, never a major-bump break.
+Models come from four places. The packaged registry ships inside the wheel, so it
+moves with a release; the other three move without one: `MODEL_TO_ENCODING` read out
+of the installed tiktoken (so upgrading tiktoken alone can change `--list-models`),
+whichever optional tokenizer extras are installed, and any `[[model]]` entries in
+your own config. Adding, hiding or re-pointing a model is a normal `feat` or `fix`,
+never a major-bump break.
 
 Prices move without any toko release at all. They start from the data bundled inside
-`genai-prices` and refresh from that project's upstream feed into
-`$XDG_CACHE_HOME/toko/prices.json` once you run `toko update-prices` or turn on
+`genai-prices` and refresh from that project's upstream feed into `prices.json` in
+toko's cache directory — `$XDG_CACHE_HOME` when it is set, otherwise the platform's
+own cache location — once you run `toko update-prices` or turn on
 `auto_update_prices`, so two runs of the same toko version can quote different costs.
 Cost output is an estimate that changes under you by design.
 
@@ -102,7 +104,9 @@ What toko does today, in full:
   locally and still return a count; that list only hides them from `--list-models`.
 - `--include-retired` puts both kinds back into the `--list-models` output and does
   nothing else, as its help text says.
-- Nothing fails. There is no flag that turns a retired model into an error.
+- Toko never fails a count for being retired. There is no flag that turns a retired
+  model into an error, though a provider that has dropped the name can still reject
+  the request itself.
 
 Whether a retired name should fail instead, or should redirect and report that in
 the structured output rather than only on stderr, is unresolved and tracked in #28.

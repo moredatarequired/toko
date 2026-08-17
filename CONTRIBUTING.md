@@ -10,9 +10,10 @@ just setup
 
 `just setup` runs `uv sync --all-groups --all-extras` and then installs the Lefthook
 hooks. That second step is the one that matters: the hooks are the only thing that
-runs any check locally, so without `just setup` nothing lints, nothing type checks,
-no test runs on commit, and your commit messages go unvalidated. The first sign of a
-problem is then a red PR, except for the commit message, which CI never checks.
+runs a check automatically, so without `just setup` nothing lints, nothing type
+checks, no test runs on commit, and your commit messages go unvalidated unless you
+remember to run `just check-all` yourself. The first sign of a problem is then a red
+PR, except for the commit message, which CI never checks.
 
 Toko requires Python 3.14 (`requires-python = ">=3.14"`), which uv installs and
 manages for you.
@@ -20,7 +21,7 @@ manages for you.
 ## Running it
 
 ```sh
-uv run toko "some text"
+uv run toko --text "some text"
 uv run --env-file .env toko README.md
 ```
 

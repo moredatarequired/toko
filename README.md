@@ -144,13 +144,13 @@ TOTAL                                 32,896
 directory stay together. A directory scan already arrives in near-path order, but not the
 same one: the scan compares path components, so `src/toko.py` lands after everything under
 `src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
-model column, which is your first `--model`, since model columns run in the order you
-named the models in whatever each file could be counted for; files the model could not
-be counted for keep their `N/A` and sort last. The `TOTAL` row stays at the bottom
-whichever order you pick, and the order applies to every format, not just the text
-table, so `--sort count --format json` lists its sources in the same order the table
-would show. Runs that count `--text` or stdin have no
-file rows, so `--sort` is accepted and ignored there.
+model column: model columns run in the order you named the models in, minus any model no
+file could be counted for, so the leftmost is your first `--model` unless that one failed
+everywhere. Files the model could not be counted for keep their `N/A` and sort last. The
+`TOTAL` row stays at the bottom whichever order you pick, and the order applies to every
+format, not just the text table, so `--sort count --format json` lists its sources in the
+same order the table would show. Runs that count `--text` or stdin have no file rows, so
+`--sort` is accepted and ignored there.
 
 ## Machine-readable output
 

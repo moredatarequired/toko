@@ -924,13 +924,16 @@ def _delimited_costs(stdout: str, separator: str) -> dict[str, float]:
 def test_every_format_reports_one_cost_for_the_same_run(tmp_path):
     """JSON used to leak the float-accumulation noise the delimited cell had shed.
 
-    Two files, so the totals are a sum rather than a copy: 3.75e-06 + 5e-06 lands on
-    8.750000000000001e-06, which JSON printed beside a CSV reading 8.75e-06.
+    Two files, so the totals are a sum rather than a copy, and a pair of token counts
+    whose costs do not sum cleanly: three and four gpt-5 tokens price at 3.75e-06 and
+    5e-06, whose float sum is 8.750000000000001e-06. Without the fix JSON prints that,
+    beside a CSV reading 0.00000875. A pair that happens to sum exactly -- two and
+    three tokens, say -- passes whether the fix is there or not, so it is not a test.
     """
     first = tmp_path / "first.txt"
-    first.write_text("hello world")
+    first.write_text("hello wider world")
     second = tmp_path / "second.txt"
-    second.write_text("hello wider world")
+    second.write_text("hello a wider world")
     args = ["--cost", "-m", "gpt-5", str(first), str(second)]
 
     payload = _envelope(_invoke_cli(["--format", "json", *args]))
@@ -939,6 +942,11 @@ def test_every_format_reports_one_cost_for_the_same_run(tmp_path):
         for entry in payload["results"]
     }
     (total,) = payload["totals"]
+
+    # Spelled out so an edit to the fixture that loses the inexact sum is visible here
+    # rather than quietly turning the assertions below into a tautology.
+    assert sorted(per_file.values()) == [3.75e-06, 5e-06]
+    assert total["cost"] == 8.75e-06
 
     for separator, name in ((",", "csv"), ("\t", "tsv")):
         rows = _invoke_cli(["--format", name, "--header", *args])

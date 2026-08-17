@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
+from toko.cost import format_cost
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
@@ -153,15 +154,81 @@ def test_list_models_hides_retired_engines_without_the_flag():
     assert "openai/gpt-4" in default.stdout.splitlines()
 
 
-def test_retired_models_still_count(tmp_path):
-    """--include-retired only shortens the listing; counting is untouched."""
+def test_a_retired_openai_engine_is_refused_without_the_flag(tmp_path):
+    """RETIRED_OPENAI_MODELS was silent before; naming one is now an error."""
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
 
     result = _invoke_cli(["--format", "csv", "-m", "text-davinci-003", str(sample)])
 
+    assert result.exit_code == 1
+    assert "model 'text-davinci-003' is retired (date unknown)." in result.stderr
+    assert "--include-retired" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_a_retired_openai_engine_counts_when_opted_in(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(
+        ["--include-retired", "--format", "csv", "-m", "text-davinci-003", str(sample)]
+    )
+
     assert result.exit_code == 0
     assert "sample.txt,2" in _strip_ansi(result.stdout)
+
+
+def test_a_retired_registry_model_names_its_redirect_target():
+    result = _invoke_cli(["-m", "grok-3", "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stderr.splitlines()[0] == (
+        "Error: model 'grok-3' is retired (2026-05-15); it redirects to grok-4.3. "
+        "Pass --include-retired to count with it anyway."
+    )
+
+
+def test_a_retired_model_without_a_redirect_target_says_only_that_it_is_retired():
+    result = _invoke_cli(["-m", "claude-3-opus-20240229", "--text", "hello world"])
+
+    assert result.exit_code == 1
+    error = result.stderr.splitlines()[0]
+    assert error.startswith("Error: model 'claude-3-opus-20240229' is retired (2026-")
+    assert "redirects to" not in error
+    assert error.endswith("Pass --include-retired to count with it anyway.")
+
+
+def test_one_retired_model_fails_the_whole_run_before_anything_is_counted(tmp_path):
+    """The run fails whole rather than printing a table with one column missing."""
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    result = _invoke_cli(
+        ["--format", "csv", "-m", "gpt-5", "-m", "grok-3", str(sample)]
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert "grok-3" in result.stderr
+    assert "gpt-5" not in result.stderr
+
+
+def test_an_opted_in_retired_model_carries_its_retirement_into_json(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "")
+
+    result = _invoke_cli(
+        ["--include-retired", "--format", "json", "-m", "grok-3", "--text", "hi"],
+        {"XAI_API_KEY": ""},
+    )
+
+    if result.exit_code != 0:
+        pytest.skip("counting grok-3 needs the xAI API or the Grok-1 tokenizer")
+    assert _only_count(result)["retirement"] == {
+        "model": "grok-3",
+        "date": "2026-05-15",
+        "redirects_to": "grok-4.3",
+    }
 
 
 @pytest.mark.slow
@@ -314,8 +381,11 @@ def test_counting_run_uses_prices_from_an_earlier_update():
     )
 
     assert result.exit_code == 0
-    # 2 tokens at the sentinel $999/Mtok; the bundled price would round to $0.000003.
-    assert "$0.0020" in result.stdout
+    # 2 tokens at the sentinel $999/Mtok; the bundled price would be near $0.000003.
+    # TSV carries the cost as a bare number, so read it as one.
+    assert float(result.stdout.splitlines()[1].split("\t")[2]) == pytest.approx(
+        0.001998
+    )
     assert respx.calls.call_count == 1
 
 
@@ -376,10 +446,63 @@ def test_cost_column_in_tsv():
     assert lines[1].startswith("gpt-5\t")
 
 
-def test_json_omits_cost_without_flag():
+_COUNT_KEYS = {"model", "tokens", "approximate", "cost", "caveats", "retirement"}
+
+
+def _envelope(result) -> dict:
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    return payload
+
+
+def _only_count(result) -> dict:
+    """Return the one count of a single-model run, checking the invariant keys."""
+    payload = _envelope(result)
+    counts = [count for entry in payload["results"] for count in entry["counts"]]
+    for count in [*counts, *payload["totals"]]:
+        assert set(count) == _COUNT_KEYS
+    assert len(counts) == 1
+    return counts[0]
+
+
+def test_json_wraps_a_text_run_in_the_envelope():
     result = _invoke_cli(["--format", "json", "--model", "gpt-5", "--text", "hello"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"gpt-5": 1}
+    assert _envelope(result) == {
+        "schema_version": 1,
+        "results": [
+            {
+                "source": {"kind": "text", "name": None},
+                "counts": [
+                    {
+                        "model": "gpt-5",
+                        "tokens": 1,
+                        "approximate": False,
+                        "cost": None,
+                        "caveats": [],
+                        "retirement": None,
+                    }
+                ],
+            }
+        ],
+        "totals": [
+            {
+                "model": "gpt-5",
+                "tokens": 1,
+                "approximate": False,
+                "cost": None,
+                "caveats": [],
+                "retirement": None,
+            }
+        ],
+    }
+
+
+def test_json_reports_a_null_cost_without_the_flag():
+    """The key is there either way; only the value says whether costing was asked for."""
+    result = _invoke_cli(["--format", "json", "--model", "gpt-5", "--text", "hello"])
+    assert result.exit_code == 0
+    assert _only_count(result)["cost"] is None
 
 
 def test_json_includes_cost_with_flag():
@@ -387,9 +510,18 @@ def test_json_includes_cost_with_flag():
         ["--format", "json", "--model", "gpt-5", "--text", "hello", "--cost"]
     )
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert set(payload["gpt-5"]) == {"tokens", "cost"}
-    assert payload["gpt-5"]["tokens"] == 1
+    count = _only_count(result)
+    assert count["tokens"] == 1
+    assert count["cost"] > 0
+
+
+def test_json_keys_do_not_move_with_the_cost_flag():
+    """The whole point for a jq consumer: no key appears or vanishes on a flag."""
+    without = _invoke_cli(["--format", "json", "-m", "gpt-5", "--text", "hello world"])
+    with_cost = _invoke_cli(
+        ["--format", "json", "--cost", "-m", "gpt-5", "--text", "hello world"]
+    )
+    assert set(_only_count(without)) == set(_only_count(with_cost)) == _COUNT_KEYS
 
 
 def test_json_file_output_includes_cost_with_flag(tmp_path):
@@ -400,65 +532,155 @@ def test_json_file_output_includes_cost_with_flag(tmp_path):
         ["--format", "json", "--model", "gpt-5", "--cost", str(sample)]
     )
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    entry = next(iter(payload.values()))["gpt-5"]
-    assert set(entry) == {"tokens", "cost"}
-    assert entry["tokens"] == 2
+    count = _only_count(result)
+    assert count["tokens"] == 2
+    assert count["cost"] > 0
+
+
+def test_json_names_the_source_a_text_run_and_a_file_run_came_from(tmp_path):
+    """A text run and a file run were indistinguishable before the envelope."""
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hello world")
+
+    from_text = _invoke_cli(["--format", "json", "-m", "gpt-5", "-t", "hello world"])
+    from_file = _invoke_cli(["--format", "json", "-m", "gpt-5", str(sample)])
+
+    assert _envelope(from_text)["results"][0]["source"] == {
+        "kind": "text",
+        "name": None,
+    }
+    assert _envelope(from_file)["results"][0]["source"] == {
+        "kind": "file",
+        "name": str(sample),
+    }
 
 
 def test_json_reports_an_approximate_count_and_the_reason_for_it():
     result = _invoke_cli(["--format", "json", "-m", "gpt-6", "--text", "hello world"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {
-        "gpt-6": {
-            "tokens": 2,
-            "approximate": True,
-            "caveat": "unknown OpenAI model 'gpt-6'; estimating with o200k_base",
+    count = _only_count(result)
+    assert count["tokens"] == 2
+    assert count["approximate"] is True
+    assert count["caveats"] == [
+        {
+            "kind": "openai_encoding_guess",
+            "model": "gpt-6",
+            "message": "unknown OpenAI model 'gpt-6'; estimating with o200k_base",
+            "encoding": "o200k_base",
+            "tokenizer": None,
+            "reason": None,
         }
-    }
+    ]
 
 
-def test_json_keeps_the_bare_count_shape_when_every_count_is_exact():
-    result = _invoke_cli(["--format", "json", "-m", "gpt-5", "--text", "hello world"])
-    assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"gpt-5": 2}
-
-
-def test_json_labels_every_entry_once_any_count_is_approximate():
-    """One document must not mix the bare and object shapes."""
+def test_json_gives_an_exact_and_an_approximate_count_the_same_keys():
+    """One document must never mix shapes."""
     result = _invoke_cli(
         ["--format", "json", "-m", "gpt-5", "-m", "gpt-6", "--text", "hello world"]
     )
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["gpt-5"] == {"tokens": 2, "approximate": False}
-    assert payload["gpt-6"]["approximate"] is True
+    counts = _envelope(result)["results"][0]["counts"]
+    assert [set(count) for count in counts] == [_COUNT_KEYS, _COUNT_KEYS]
+    assert [count["approximate"] for count in counts] == [False, True]
+    assert counts[0]["caveats"] == []
 
 
-def test_json_gains_the_approximate_field_only_when_a_count_is_approximate():
-    """Costs alone must not add the field: --cost stays byte-identical to before."""
-    exact = _invoke_cli(
-        ["--format", "json", "--cost", "-m", "gpt-5", "--text", "hello world"]
+def _caveat_of(count: dict) -> dict:
+    assert len(count["caveats"]) == 1
+    return count["caveats"][0]
+
+
+def test_a_caveat_holding_a_semicolon_survives_a_merged_total(tmp_path):
+    """The real unknown-OpenAI message contains "; ", which used to be the joiner.
+
+    Two files merge into one total, and the caveat has to arrive whole: joining the
+    per-file caveats into one string made the total's punctuation ambiguous, so a
+    consumer splitting it back apart got four fragments out of two caveats.
+    """
+    for name in ("first.txt", "second.txt"):
+        (tmp_path / name).write_text("hello world")
+
+    result = _invoke_cli(
+        ["--format", "json", "--total-only", "-m", "gpt-9-turbo", str(tmp_path)]
     )
-    approximate = _invoke_cli(
+
+    assert result.exit_code == 0
+    (total,) = _envelope(result)["totals"]
+    assert total["tokens"] == 4
+    assert _caveat_of(total) == {
+        "kind": "openai_encoding_guess",
+        "model": "gpt-9-turbo",
+        "message": "unknown OpenAI model 'gpt-9-turbo'; estimating with o200k_base",
+        "encoding": "o200k_base",
+        "tokenizer": None,
+        "reason": None,
+    }
+
+
+def test_distinct_caveats_across_models_merge_without_losing_or_crossing(tmp_path):
+    for name in ("first.txt", "second.txt"):
+        (tmp_path / name).write_text("hello world")
+
+    result = _invoke_cli(
         [
             "--format",
             "json",
-            "--cost",
+            "--total-only",
+            "-m",
+            "gpt-9-turbo",
+            "-m",
+            "gpt-8-turbo",
             "-m",
             "gpt-5",
-            "-m",
-            "gpt-6",
-            "--text",
-            "hello world",
+            str(tmp_path),
         ]
     )
 
-    assert set(json.loads(exact.stdout)["gpt-5"]) == {"tokens", "cost"}
-    labelled = json.loads(approximate.stdout)
-    assert set(labelled["gpt-5"]) == {"tokens", "cost", "approximate"}
-    assert labelled["gpt-5"]["approximate"] is False
-    assert labelled["gpt-6"]["approximate"] is True
+    assert result.exit_code == 0
+    totals = {total["model"]: total for total in _envelope(result)["totals"]}
+    # One caveat per column even though two files contributed it: identical caveats
+    # collapse rather than piling up once per file.
+    assert _caveat_of(totals["gpt-9-turbo"])["model"] == "gpt-9-turbo"
+    assert _caveat_of(totals["gpt-8-turbo"])["model"] == "gpt-8-turbo"
+    # An exact model in the same run is not tarred with its neighbours' caveats.
+    assert totals["gpt-5"]["caveats"] == []
+
+
+def test_csv_and_tsv_costs_are_bare_numbers_and_text_keeps_the_dollar_sign(monkeypatch):
+    args = ["--cost", "--header", "-m", "gpt-5", "--text", "hello world"]
+    csv_run = _invoke_cli(["--format", "csv", *args])
+    tsv_run = _invoke_cli(["--format", "tsv", *args])
+
+    assert csv_run.exit_code == 0
+    assert tsv_run.exit_code == 0
+    csv_cost = csv_run.stdout.splitlines()[1].split(",")[2]
+    tsv_cost = tsv_run.stdout.splitlines()[1].split("\t")[2]
+    assert "$" not in csv_cost
+    assert float(csv_cost) == float(tsv_cost) > 0
+
+    # The text table is the one people read, and it keeps the currency.
+    monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
+    text_run = _invoke_cli(args)
+    assert text_run.exit_code == 0
+    assert "$" in _strip_ansi(text_run.stdout)
+
+
+def test_a_fraction_of_a_cent_keeps_the_precision_the_display_format_drops(tmp_path):
+    sample = tmp_path / "sample.txt"
+    sample.write_text("hi")
+
+    result = _invoke_cli(
+        ["--cost", "--header", "--format", "csv", "-m", "gpt-5", str(sample)]
+    )
+
+    assert result.exit_code == 0
+    cell = result.stdout.splitlines()[1].split(",")[2]
+    cost = float(cell)
+    assert cost > 0
+    # The human format pads to six decimals and loses everything below them, which
+    # is why the machine-readable column cannot borrow it.
+    assert format_cost(cost) == "$0.000001"
+    assert cost != float(format_cost(cost).lstrip("$"))
 
 
 def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():
@@ -777,7 +999,20 @@ def test_total_only_json(tmp_path):
     args = _two_file_args(tmp_path)
     result = _invoke_cli(["--total-only", "--format", "json", *args])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"gpt-5": 6}
+    payload = _envelope(result)
+    # The per-source rows go, the document does not change shape: both keys are
+    # still there, so one reader handles a --total-only run and a full one.
+    assert payload["results"] == []
+    assert payload["totals"] == [
+        {
+            "model": "gpt-5",
+            "tokens": 6,
+            "approximate": False,
+            "cost": None,
+            "caveats": [],
+            "retirement": None,
+        }
+    ]
 
 
 def test_total_only_text(tmp_path, monkeypatch):
@@ -930,11 +1165,10 @@ def test_sort_reaches_json_and_csv_too(tmp_path):
     args = _uneven_file_args(tmp_path)
     by_count = _invoke_cli(["--sort", "count", "--format", "json", *args])
     by_path = _invoke_cli(["--sort", "path", "--format", "csv", *args])
-    assert [key.split("/")[-1] for key in json.loads(by_count.stdout)] == [
-        "c-big.txt",
-        "b-mid.txt",
-        "a-small.txt",
-    ]
+    assert [
+        entry["source"]["name"].split("/")[-1]
+        for entry in _envelope(by_count)["results"]
+    ] == ["c-big.txt", "b-mid.txt", "a-small.txt"]
     assert _row_names(by_path.stdout, ",") == ["a-small.txt", "b-mid.txt", "c-big.txt"]
 
 

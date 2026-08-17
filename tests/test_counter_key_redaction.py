@@ -204,7 +204,7 @@ def test_an_echoed_key_is_redacted_from_the_xai_approximation_warning(
 def test_an_echoed_key_is_redacted_from_the_caveat_json_prints_on_stdout(
     local_api, monkeypatch, tmp_path
 ):
-    """The warning and `TokenCount.caveat` are one string, and JSON puts it on stdout.
+    """The warning and the caveat's message are one string, and JSON puts it on stdout.
 
     Redacting only on the way to stderr would leave the same text leaking through a
     piped, machine-read document -- the likelier place for it to be captured.
@@ -219,9 +219,10 @@ def test_an_echoed_key_is_redacted_from_the_caveat_json_prints_on_stdout(
     assert result.exit_code == 0
     assert SENTINEL not in result.stdout
     # Not vacuous: the caveat is on stdout, it is just redacted.
-    entry = json.loads(result.stdout)["grok-4.5"]
+    entry = json.loads(result.stdout)["totals"][0]
     assert entry["tokens"] == 7
-    assert "***" in entry["caveat"]
+    assert "***" in entry["caveats"][0]["message"]
+    assert "***" in entry["caveats"][0]["reason"]
 
 
 def test_the_xai_approximation_survives_a_key_holding_a_non_utf8_byte(

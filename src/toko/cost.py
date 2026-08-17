@@ -312,3 +312,17 @@ def format_cost(cost: float | None) -> str:
     if cost < 0.01:
         return f"${cost:.4f}"
     return f"${cost:.2f}"
+
+
+def format_cost_value(cost: float | None) -> str:
+    """Render a cost for a machine-readable column: a bare number, or empty for none.
+
+    Not `format_cost`: that one is for people, and its currency symbol and fixed
+    decimals turn a cell into something no reader can parse as a number -- a
+    fraction of a cent rounds to $0.000000, which reads as free. `g` keeps six
+    significant figures wherever the value sits, so the number survives, and
+    `float()` accepts every string this produces.
+    """
+    if cost is None:
+        return ""
+    return f"{cost:.6g}"

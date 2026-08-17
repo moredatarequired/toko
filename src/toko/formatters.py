@@ -4,18 +4,32 @@ import csv
 import json
 import sys
 from dataclasses import replace
+from enum import StrEnum
 from io import StringIO
 from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.table import Table
 
-from toko.cost import format_cost
+from toko.cost import format_cost, format_cost_value
 from toko.output_format import OutputFormat
 from toko.sort_order import SortOrder
 
 if TYPE_CHECKING:
-    from toko.result import TokenCount
+    from toko.result import Caveat, Retirement, TokenCount
+
+# The version of the JSON document this module emits. Every run produces the same
+# envelope -- results, totals, and a count object whose keys never depend on which
+# flags were passed -- so a consumer writes one reader and it keeps working.
+SCHEMA_VERSION = 1
+
+
+class SourceKind(StrEnum):
+    """What a set of counts was taken from."""
+
+    TEXT = "text"
+    FILE = "file"
+    URL = "url"
 
 
 def _plain_table(*, include_header: bool) -> Table:
@@ -85,48 +99,71 @@ def _any_approximate(results: dict[str, TokenCount]) -> bool:
     return any(counted.approximate for counted in results.values())
 
 
-def _any_caveat(results: dict[str, TokenCount]) -> bool:
-    return any(counted.caveat is not None for counted in results.values())
+def _caveat_payload(caveat: Caveat) -> dict[str, object]:
+    return {
+        "kind": caveat.kind.value,
+        "model": caveat.model,
+        "message": caveat.message,
+        "encoding": caveat.encoding,
+        "tokenizer": caveat.tokenizer,
+        "reason": caveat.reason,
+    }
 
 
-def _json_payload(
-    results: dict[str, TokenCount],
-    *,
-    show_costs: bool,
-    show_approximate: bool | None = None,
-    any_caveat: bool | None = None,
-) -> dict[str, object]:
-    # Callers spanning several payloads pass the document-wide answers, so one
-    # annotated count anywhere gives every file the same keys.
-    if show_approximate is None:
-        show_approximate = _any_approximate(results)
-    if any_caveat is None:
-        any_caveat = _any_caveat(results)
-
-    if not show_costs and not show_approximate and not any_caveat:
-        return {model: counted.count for model, counted in results.items()}
-
-    # Costs stay as raw numbers (or null) rather than the display strings the
-    # table formats use, so the output remains machine-readable.
-    payload: dict[str, object] = {}
-    for model, counted in results.items():
-        entry: dict[str, object] = {"tokens": counted.count}
-        if show_costs:
-            entry["cost"] = counted.cost
-        if show_approximate:
-            # Present on every entry even when exact, so one document never mixes shapes.
-            entry["approximate"] = counted.approximate
-        # Independent of the approximate gate: a caveat is worth reporting on its
-        # own, and its visibility should not depend on some sibling model.
-        if counted.caveat is not None:
-            entry["caveat"] = counted.caveat
-        payload[model] = entry
-    return payload
+def _retirement_payload(retirement: Retirement | None) -> dict[str, object] | None:
+    if retirement is None:
+        return None
+    return {
+        "model": retirement.model,
+        "date": retirement.date,
+        "redirects_to": retirement.redirects_to,
+    }
 
 
-def format_json(results: dict[str, TokenCount], *, show_costs: bool = False) -> str:
-    """Format results as JSON."""
-    return json.dumps(_json_payload(results, show_costs=show_costs), indent=2)
+def _count_payload(model: str, counted: TokenCount) -> dict[str, object]:
+    # Every key is present on every count, whatever was asked for: a reader that
+    # tests for a key would otherwise be testing which flags the run was given.
+    # Costs stay raw numbers (or null) rather than the display strings the table
+    # formats use, so the output remains machine-readable.
+    return {
+        "model": model,
+        "tokens": counted.count,
+        "approximate": counted.approximate,
+        "cost": counted.cost,
+        "caveats": [_caveat_payload(caveat) for caveat in counted.caveats],
+        "retirement": _retirement_payload(counted.retirement),
+    }
+
+
+def _counts_payload(results: dict[str, TokenCount]) -> list[dict[str, object]]:
+    return [_count_payload(model, counted) for model, counted in results.items()]
+
+
+def _source_payload(name: str) -> dict[str, object]:
+    # The same test the CLI itself uses to decide whether a path is a URL, applied
+    # to the display name it stored, so the two can never disagree about a source.
+    kind = (
+        SourceKind.URL if name.startswith(("http://", "https://")) else SourceKind.FILE
+    )
+    return {"kind": kind.value, "name": name}
+
+
+def _envelope(results: list[dict[str, object]], totals: list[dict[str, object]]) -> str:
+    return json.dumps(
+        {"schema_version": SCHEMA_VERSION, "results": results, "totals": totals},
+        indent=2,
+    )
+
+
+def format_json(results: dict[str, TokenCount]) -> str:
+    """Format counts of a text input (``--text`` or stdin) as the JSON envelope."""
+    counts = _counts_payload(results)
+    # One source and one count per model, so the totals repeat the results rather
+    # than summing anything. Repeating them keeps the document one shape.
+    return _envelope(
+        [{"source": {"kind": SourceKind.TEXT.value, "name": None}, "counts": counts}],
+        counts,
+    )
 
 
 def _format_delimited(
@@ -152,7 +189,7 @@ def _format_delimited(
     for model, counted in results.items():
         fields = [model, str(counted.count)]
         if show_costs:
-            fields.append(format_cost(counted.cost))
+            fields.append(format_cost_value(counted.cost))
         if show_approximate:
             fields.append(_approximate_field(counted.approximate))
         rows.append(fields)
@@ -214,7 +251,7 @@ def format_output(
             results, show_costs=show_costs, include_header=include_header
         )
     if output_format == OutputFormat.JSON:
-        return format_json(results, show_costs=show_costs)
+        return format_json(results)
     if output_format == OutputFormat.CSV:
         return format_csv(results, include_header=include_header, show_costs=show_costs)
     if output_format == OutputFormat.TSV:
@@ -227,28 +264,19 @@ def _format_file_json(
     *,
     models: list[str],
     total_only: bool,
-    show_costs: bool,
 ) -> str:
-    if total_only:
-        totals = _compute_totals(file_results, models=models)
-        return json.dumps(_json_payload(totals, show_costs=show_costs), indent=2)
-
-    # One annotated count anywhere switches every file to the object form, so a
-    # reader never has to test which shape a given entry took.
-    approximate_anywhere = any(
-        _any_approximate(counts) for counts in file_results.values()
+    totals = _compute_totals(file_results, models=models)
+    # --total-only drops the per-source rows and nothing else: the document keeps
+    # both keys, so it parses with the same reader as a full run.
+    results = (
+        []
+        if total_only
+        else [
+            {"source": _source_payload(filename), "counts": _counts_payload(counts)}
+            for filename, counts in file_results.items()
+        ]
     )
-    caveat_anywhere = any(_any_caveat(counts) for counts in file_results.values())
-    payload = {
-        filename: _json_payload(
-            counts,
-            show_costs=show_costs,
-            show_approximate=approximate_anywhere,
-            any_caveat=caveat_anywhere,
-        )
-        for filename, counts in file_results.items()
-    }
-    return json.dumps(payload, indent=2)
+    return _envelope(results, _counts_payload(totals))
 
 
 def _collect_models(file_results: dict[str, dict[str, TokenCount]]) -> list[str]:
@@ -294,32 +322,37 @@ def _format_file_table_delimited(
         rows.append(total_row)
         return _render_delimited(rows, separator)
 
-    per_model_columns = 1 + int(show_costs) + int(show_approximate)
     for filename, model_counts in file_results.items():
         row: list[str] = [filename]
         for model in models:
-            counted = model_counts.get(model)
-            if counted is None:
-                row.extend(["N/A"] * per_model_columns)
-            else:
-                row.extend(
-                    _delimited_cells(
-                        counted,
-                        show_costs=show_costs,
-                        show_approximate=show_approximate,
-                    )
+            row.extend(
+                _delimited_cells(
+                    model_counts.get(model),
+                    show_costs=show_costs,
+                    show_approximate=show_approximate,
                 )
+            )
         rows.append(row)
 
     return _render_delimited(rows, separator)
 
 
 def _delimited_cells(
-    counted: TokenCount, *, show_costs: bool, show_approximate: bool
+    counted: TokenCount | None, *, show_costs: bool, show_approximate: bool
 ) -> list[str]:
+    if counted is None:
+        # No count at all for this file and model. The cost cell stays empty rather
+        # than saying N/A, so the column holds only numbers and blanks.
+        cells = ["N/A"]
+        if show_costs:
+            cells.append("")
+        if show_approximate:
+            cells.append("N/A")
+        return cells
+
     cells = [str(counted.count)]
     if show_costs:
-        cells.append(format_cost(counted.cost))
+        cells.append(format_cost_value(counted.cost))
     if show_approximate:
         cells.append(_approximate_field(counted.approximate))
     return cells
@@ -404,15 +437,18 @@ def _compute_totals(
     for model in models:
         # Distinct caveats in one column all survive, in encounter order: files can
         # fail differently (the xAI caveat names the error it saw), and dropping the
-        # later ones would hide a failure the total is built from. Repeats collapse,
-        # so the usual column-wide identical caveat reads exactly as one file's does.
-        caveats: list[str] = []
+        # later ones would hide a failure the total is built from. Repeats collapse
+        # on the whole structured record rather than on its wording, so the usual
+        # column-wide identical caveat reads exactly as one file's does -- and they
+        # stay separate objects, so no punctuation has to survive a round trip.
+        caveats: list[Caveat] = []
         for model_counts in file_results.values():
             counted = model_counts.get(model)
             if counted is None:
                 continue
-            if counted.caveat is not None and counted.caveat not in caveats:
-                caveats.append(counted.caveat)
+            for caveat in counted.caveats:
+                if caveat not in caveats:
+                    caveats.append(caveat)
             running = totals.get(model)
             if running is None:
                 totals[model] = counted
@@ -423,9 +459,8 @@ def _compute_totals(
                 cost=_sum_costs(running.cost, counted.cost),
                 approximate=running.approximate or counted.approximate,
             )
-        merged_caveat = "; ".join(caveats) if caveats else None
-        if model in totals and totals[model].caveat != merged_caveat:
-            totals[model] = replace(totals[model], caveat=merged_caveat)
+        if model in totals and totals[model].caveats != tuple(caveats):
+            totals[model] = replace(totals[model], caveats=tuple(caveats))
 
     return totals
 
@@ -486,9 +521,7 @@ def format_file_table(
         )
 
     if output_format == OutputFormat.JSON:
-        return _format_file_json(
-            file_results, models=models, total_only=total_only, show_costs=show_costs
-        )
+        return _format_file_json(file_results, models=models, total_only=total_only)
 
     if output_format in (OutputFormat.CSV, OutputFormat.TSV):
         return _format_file_table_delimited(

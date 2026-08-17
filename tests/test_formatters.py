@@ -9,17 +9,38 @@ import re
 import pytest
 
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
-from toko.formatters import format_file_table, format_output
-from toko.result import TokenCount
+from toko.formatters import SCHEMA_VERSION, format_file_table, format_output
+from toko.result import Caveat, CaveatKind, Retirement, TokenCount
 
 
 def _counted(count: int, *, cost: float | None = None, model: str = "gpt-5"):
     return TokenCount(count=count, model=model, provider="openai", cost=cost)
 
 
-def test_json_matches_plain_mapping_without_costs():
+def _expected(model: str, tokens: int, **overrides):
+    """Build the count object every JSON document carries, keys always present."""
+    count = {
+        "model": model,
+        "tokens": tokens,
+        "approximate": False,
+        "cost": None,
+        "caveats": [],
+        "retirement": None,
+    }
+    return count | overrides
+
+
+def _text_envelope(*counts):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "results": [{"source": {"kind": "text", "name": None}, "counts": list(counts)}],
+        "totals": list(counts),
+    }
+
+
+def test_json_wraps_a_text_run_in_the_envelope():
     payload = json.loads(format_output({"gpt-5": _counted(12)}, output_format="json"))
-    assert payload == {"gpt-5": 12}
+    assert payload == _text_envelope(_expected("gpt-5", 12))
 
 
 def test_json_includes_costs_when_requested():
@@ -30,7 +51,7 @@ def test_json_includes_costs_when_requested():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 12, "cost": 0.000015}}
+    assert payload == _text_envelope(_expected("gpt-5", 12, cost=0.000015))
 
 
 def test_json_reports_unpriced_model_as_null_cost():
@@ -41,7 +62,7 @@ def test_json_reports_unpriced_model_as_null_cost():
             show_costs=True,
         )
     )
-    assert payload == {"mystery-model": {"tokens": 3, "cost": None}}
+    assert payload == _text_envelope(_expected("mystery-model", 3))
 
 
 def test_json_costs_cover_every_model():
@@ -50,35 +71,105 @@ def test_json_costs_cover_every_model():
         "gpt-4.1": _counted(14, cost=0.0002, model="gpt-4.1"),
     }
     payload = json.loads(format_output(results, output_format="json", show_costs=True))
-    assert payload == {
-        "gpt-5": {"tokens": 12, "cost": 0.0001},
-        "gpt-4.1": {"tokens": 14, "cost": 0.0002},
+    assert payload == _text_envelope(
+        _expected("gpt-5", 12, cost=0.0001), _expected("gpt-4.1", 14, cost=0.0002)
+    )
+
+
+def _source_names(payload) -> list[str]:
+    return [result["source"]["name"] for result in payload["results"]]
+
+
+def _caveat(message: str, *, model: str = "grok-4.5") -> Caveat:
+    return Caveat(
+        kind=CaveatKind.XAI_GROK1_STANDIN,
+        model=model,
+        message=message,
+        tokenizer="Xenova/grok-1-tokenizer",
+        reason=message,
+    )
+
+
+def _expected_caveat(message: str, *, model: str = "grok-4.5"):
+    return {
+        "kind": "xai_grok1_standin",
+        "model": model,
+        "message": message,
+        "encoding": None,
+        "tokenizer": "Xenova/grok-1-tokenizer",
+        "reason": message,
     }
 
 
 def test_json_reports_a_caveat_on_an_exact_count():
     """A caveat must not need an approximate sibling to become visible."""
     counted = TokenCount(
-        count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+        count=7,
+        model="gpt-5",
+        provider="openai",
+        caveats=(_caveat("stood in for it", model="gpt-5"),),
     )
     payload = json.loads(format_output({"gpt-5": counted}, output_format="json"))
-    assert payload == {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}}
+    assert payload == _text_envelope(
+        _expected(
+            "gpt-5", 7, caveats=[_expected_caveat("stood in for it", model="gpt-5")]
+        )
+    )
 
 
-def test_file_json_keeps_one_shape_when_only_one_file_has_a_caveat():
+def test_json_reports_a_retired_model_as_an_object():
+    counted = TokenCount(
+        count=7,
+        model="grok-3",
+        provider="xai",
+        retirement=Retirement(
+            model="grok-3", date="2026-06-10", redirects_to="grok-4.3"
+        ),
+    )
+    payload = json.loads(format_output({"grok-3": counted}, output_format="json"))
+    assert payload["totals"][0]["retirement"] == {
+        "model": "grok-3",
+        "date": "2026-06-10",
+        "redirects_to": "grok-4.3",
+    }
+
+
+def test_file_json_gives_every_count_the_same_keys():
     file_results = {
         "a.txt": {
             "gpt-5": TokenCount(
-                count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+                count=7,
+                model="gpt-5",
+                provider="openai",
+                caveats=(_caveat("stood in for it", model="gpt-5"),),
             )
         },
         "b.txt": {"gpt-5": _counted(4)},
     }
     payload = json.loads(format_file_table(file_results, output_format="json"))
-    assert payload == {
-        "a.txt": {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}},
-        "b.txt": {"gpt-5": {"tokens": 4}},
-    }
+    assert [result["source"] for result in payload["results"]] == [
+        {"kind": "file", "name": "a.txt"},
+        {"kind": "file", "name": "b.txt"},
+    ]
+    assert [
+        set(count) for result in payload["results"] for count in result["counts"]
+    ] == [set(_expected("gpt-5", 0)), set(_expected("gpt-5", 0))]
+
+
+def test_file_json_distinguishes_a_url_from_a_path():
+    payload = json.loads(
+        format_file_table(
+            {
+                "https://example.com/a.txt": {"gpt-5": _counted(4)},
+                "a.txt": {"gpt-5": _counted(4)},
+            },
+            output_format="json",
+        )
+    )
+    assert [result["source"] for result in payload["results"]] == [
+        {"kind": "url", "name": "https://example.com/a.txt"},
+        {"kind": "file", "name": "a.txt"},
+    ]
 
 
 def _caveated_column(count: int, caveat: str):
@@ -88,7 +179,7 @@ def _caveated_column(count: int, caveat: str):
             model="grok-4.5",
             provider="xai",
             approximate=True,
-            caveat=caveat,
+            caveats=(_caveat(caveat),),
         )
     }
 
@@ -107,16 +198,18 @@ def test_total_only_json_keeps_every_distinct_caveat():
             total_only=True,
         )
     )
-    assert payload == {
-        "grok-4.5": {
-            "tokens": 7,
-            "approximate": True,
-            "caveat": (
-                "the xAI token API was unavailable (timeout); "
-                "the xAI token API was unavailable (503)"
-            ),
-        }
-    }
+    assert payload["results"] == []
+    assert payload["totals"] == [
+        _expected(
+            "grok-4.5",
+            7,
+            approximate=True,
+            caveats=[
+                _expected_caveat("the xAI token API was unavailable (timeout)"),
+                _expected_caveat("the xAI token API was unavailable (503)"),
+            ],
+        )
+    ]
 
 
 def test_total_only_json_reports_a_column_wide_caveat_once():
@@ -131,14 +224,25 @@ def test_total_only_json_reports_a_column_wide_caveat_once():
             total_only=True,
         )
     )
-    assert payload == {"grok-4.5": {"tokens": 7, "approximate": True, "caveat": caveat}}
+    assert payload["totals"] == [
+        _expected("grok-4.5", 7, approximate=True, caveats=[_expected_caveat(caveat)])
+    ]
 
 
-def test_file_json_matches_plain_mapping_without_costs():
+def test_file_json_wraps_one_file_in_the_envelope():
     payload = json.loads(
         format_file_table({"a.txt": {"gpt-5": _counted(4)}}, output_format="json")
     )
-    assert payload == {"a.txt": {"gpt-5": 4}}
+    assert payload == {
+        "schema_version": SCHEMA_VERSION,
+        "results": [
+            {
+                "source": {"kind": "file", "name": "a.txt"},
+                "counts": [_expected("gpt-5", 4)],
+            }
+        ],
+        "totals": [_expected("gpt-5", 4)],
+    }
 
 
 def test_file_json_includes_costs_when_requested():
@@ -152,10 +256,17 @@ def test_file_json_includes_costs_when_requested():
             show_costs=True,
         )
     )
-    assert payload == {
-        "a.txt": {"gpt-5": {"tokens": 4, "cost": 0.0002}},
-        "b.txt": {"gpt-5": {"tokens": 9, "cost": None}},
-    }
+    assert payload["results"] == [
+        {
+            "source": {"kind": "file", "name": "a.txt"},
+            "counts": [_expected("gpt-5", 4, cost=0.0002)],
+        },
+        {
+            "source": {"kind": "file", "name": "b.txt"},
+            "counts": [_expected("gpt-5", 9)],
+        },
+    ]
+    assert payload["totals"] == [_expected("gpt-5", 13, cost=0.0002)]
 
 
 def test_total_only_json_reports_wholly_unpriced_model_as_null():
@@ -170,7 +281,7 @@ def test_total_only_json_reports_wholly_unpriced_model_as_null():
             show_costs=True,
         )
     )
-    assert payload == {"mystery-model": {"tokens": 13, "cost": None}}
+    assert payload["totals"] == [_expected("mystery-model", 13)]
 
 
 def test_total_only_json_sums_only_the_files_it_could_price():
@@ -185,10 +296,10 @@ def test_total_only_json_sums_only_the_files_it_could_price():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 13, "cost": 0.0002}}
+    assert payload["totals"] == [_expected("gpt-5", 13, cost=0.0002)]
 
 
-def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
+def test_total_only_csv_leaves_a_wholly_unpriced_cost_empty():
     output = format_file_table(
         {
             "a.txt": {
@@ -201,7 +312,7 @@ def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
         show_costs=True,
         include_header=False,
     )
-    assert output == "TOTAL,4,$0.0002,5,N/A"
+    assert output == "TOTAL,4,0.0002,5,"
 
 
 def _csv_rows(output: str) -> list[list[str]]:
@@ -241,7 +352,7 @@ def test_csv_keeps_ordinary_rows_unquoted():
         output_format="csv",
         show_costs=True,
     )
-    assert output == ("file,gpt-5_tokens,gpt-5_cost\na.txt,4,$0.0002\nb.txt,9,N/A")
+    assert output == ("file,gpt-5_tokens,gpt-5_cost\na.txt,4,0.0002\nb.txt,9,")
 
 
 def test_tsv_leaves_a_comma_in_the_path_alone():
@@ -249,7 +360,7 @@ def test_tsv_leaves_a_comma_in_the_path_alone():
     assert output == "file\tgpt-5\na,b.txt\t4"
 
 
-def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
+def test_total_only_tsv_matches_the_per_file_cell_for_a_missing_cost():
     file_results = {
         "a.txt": {"mystery-model": _counted(4, model="mystery-model")},
         "b.txt": {"mystery-model": _counted(9, model="mystery-model")},
@@ -264,8 +375,8 @@ def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
         show_costs=True,
         include_header=False,
     )
-    assert per_file == ["a.txt\t4\tN/A", "b.txt\t9\tN/A"]
-    assert total == "TOTAL\t13\tN/A"
+    assert per_file == ["a.txt\t4\t", "b.txt\t9\t"]
+    assert total == "TOTAL\t13\t"
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -412,11 +523,11 @@ def test_path_sort_orders_rows_by_the_path_string():
     ]
 
 
-def test_path_sort_reorders_json_keys_the_same_way():
+def test_path_sort_reorders_json_results_the_same_way():
     payload = json.loads(
         format_file_table(_mixed_paths(), output_format="json", sort_order="path")
     )
-    assert list(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
+    assert _source_names(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
 
 
 def test_path_sort_reorders_tsv_the_same_way():
@@ -436,11 +547,11 @@ def test_count_sort_puts_the_largest_file_first():
     assert _csv_rows(output)[1:] == [["b.txt", "30"], ["c.txt", "7"], ["a.txt", "1"]]
 
 
-def test_count_sort_reorders_json_keys_the_same_way():
+def test_count_sort_reorders_json_results_the_same_way():
     payload = json.loads(
         format_file_table(_three_files(), output_format="json", sort_order="count")
     )
-    assert list(payload) == ["b.txt", "c.txt", "a.txt"]
+    assert _source_names(payload) == ["b.txt", "c.txt", "a.txt"]
 
 
 def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
@@ -524,10 +635,12 @@ def test_sort_leaves_a_total_only_run_alone():
         )
     # Not vacuous: the caveats are in the order the files arrived, which is the order
     # both other values would have changed.
-    assert json.loads(unsorted)["grok-4.5"]["caveat"] == (
-        "the xAI token API was unavailable (429); "
-        "the xAI token API was unavailable (503)"
-    )
+    assert [
+        caveat["message"] for caveat in json.loads(unsorted)["totals"][0]["caveats"]
+    ] == [
+        "the xAI token API was unavailable (429)",
+        "the xAI token API was unavailable (503)",
+    ]
 
 
 def test_an_unknown_sort_order_is_rejected():

@@ -897,10 +897,13 @@ def retirement_candidates(requested: str) -> list[str]:
     """Spellings of one ``--model`` that name the same model for retirement purposes.
 
     ``get_model`` resolves none of these: it never strips the ``provider/`` prefix that
-    ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the way the
-    Anthropic and Google ones do. Normalizing here lets a retired model be recognised
-    under the name the user actually typed. It decides only what is retired -- how a
-    name counts is untouched.
+    ``--list-models`` prints, and of the three ``-latest`` resolvers only Anthropic's
+    strips the suffix. Google's returns the alias unstripped on purpose -- it sends the
+    alias to ``countTokens`` rather than pin a target that goes stale -- and xAI's has
+    no entry to match it, so an xAI ``-latest`` name reaches nothing that could report
+    a retirement. Normalizing here lets a retired model be recognised under the name
+    the user actually typed. It decides only what is retired -- how a name counts is
+    untouched.
     """
     name = requested.strip()
 

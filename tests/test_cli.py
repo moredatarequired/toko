@@ -227,8 +227,9 @@ def test_a_retired_model_without_a_redirect_target_says_only_that_it_is_retired(
         # sends users to grep.
         ("xai/grok-3", "grok-3"),
         ("openai/text-davinci-003", "text-davinci-003"),
-        # get_model's xAI resolver never strips "-latest" the way the Anthropic and
-        # Google ones do, so this used to resolve to a fresh, unretired ModelInfo.
+        # Only Anthropic's resolver strips "-latest"; Google's leaves the alias for
+        # countTokens and xAI's has no entry for it, so this used to resolve to a
+        # fresh, unretired ModelInfo.
         ("grok-3-latest", "grok-3"),
     ],
 )

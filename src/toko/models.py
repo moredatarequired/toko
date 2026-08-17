@@ -903,7 +903,7 @@ def retirement_for_requested(requested: str) -> Retirement | None:
 
 def retirement_notice(model_info: ModelInfo) -> str | None:
     """Explain that a model is retired, and what the provider serves instead."""
-    retirement = retirement_of(model_info)
+    retirement = retirement_for_requested(model_info.name)
     if retirement is None:
         return None
     when = (

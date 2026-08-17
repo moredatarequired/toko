@@ -426,6 +426,33 @@ def test_a_prefixed_retired_name_still_counts_when_opted_in():
     assert result.stdout.strip() == "openai/text-davinci-003\t2\ttrue"
 
 
+@pytest.mark.parametrize("requested", ["curie", "anthropic/curie"])
+def test_the_opted_in_report_names_the_retirement_the_gate_refused_on(requested):
+    """What the gate refuses on is what the run reports, whichever spelling was typed.
+
+    The gate normalized the name and the reporter read it raw, so one run could refuse
+    `anthropic/curie` as retired and then, once opted in, describe it as live:
+    `"retirement": null` and no warning, while bare `curie` emitted the full object.
+    Asserting only that the run counts is what let that pass, so both halves are pinned
+    here, and both spellings have to produce the same retirement.
+    """
+    result = _invoke_cli(
+        ["--include-retired", "-m", requested, "--format", "json", "--text", "hello"]
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "Warning: curie was retired on 2024-01-04; the openai API will reject or "
+        "redirect it." in result.stderr
+    )
+    payload = json.loads(result.stdout)
+    assert payload["totals"][0]["retirement"] == {
+        "model": "curie",
+        "date": "2024-01-04",
+        "redirects_to": None,
+    }
+
+
 def test_the_gate_leaves_a_live_provider_prefixed_name_resolving_as_it_did():
     """The gate only decides whether to refuse; it fixes none of get_model's gaps.
 

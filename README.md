@@ -406,6 +406,8 @@ That is the point of the flag: `grok-3` still answers, but what answers is `grok
 
 The refusal follows the name rather than one spelling of it: surrounding whitespace, the `provider/model` form `--list-models` prints (`xai/grok-3`), a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. **A prefix is dropped only when every segment of it names a provider toko resolves models for — `openai/`, `anthropic/`, `xai/`, and the `openrouter/<provider>/` router form — because that prefix is addressing rather than a repo owner. So `openrouter/text-davinci-003` and `/text-davinci-003` are the shut-down engine and are refused, while a Hugging Face repo whose last segment happens to be a retired name keeps its prefix and counts: `Xenova/text-davinci-003` and `openai-community/gpt2` are live repos, and calling either retired would be false about them.** `google/` is a repo owner too, so `google/gemma-3-1b-it` stays that repo rather than becoming Google's `gemma-3-1b-it`.
 
+Whatever the gate matched on is what the run reports, so `--include-retired` gives `anthropic/curie` the same `retirement` object and stderr warning that bare `curie` gets.
+
 ```sh
 toko --list-models --include-retired | grep davinci
 ```

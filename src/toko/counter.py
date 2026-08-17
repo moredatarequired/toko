@@ -18,7 +18,12 @@ import httpx
 import tiktoken
 
 from toko.cache import cache_count, get_cached_count
-from toko.models import ModelInfo, get_model, retirement_notice, retirement_of
+from toko.models import (
+    ModelInfo,
+    get_model,
+    retirement_for_requested,
+    retirement_notice,
+)
 from toko.result import Caveat, CaveatKind, TokenCount
 
 if TYPE_CHECKING:
@@ -232,7 +237,7 @@ def _exact(count: int, model_info: ModelInfo) -> TokenCount:
         count=count,
         model=model_info.name,
         provider=model_info.provider,
-        retirement=retirement_of(model_info),
+        retirement=retirement_for_requested(model_info.name),
     )
 
 
@@ -243,7 +248,7 @@ def _approximate(count: int, model_info: ModelInfo, caveat: Caveat) -> TokenCoun
         provider=model_info.provider,
         approximate=True,
         caveats=(caveat,),
-        retirement=retirement_of(model_info),
+        retirement=retirement_for_requested(model_info.name),
     )
 
 

@@ -830,6 +830,10 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
     # implementation detail of the endpoint rather than a name users typed.
     name = model_info.name.removeprefix("models/")
     if model_info.retired is not None:
+        # RETIREMENT_DATE_UNKNOWN has to become None here, because everything downstream
+        # reads a date as a date: passing the sentinel through left all 796 tests green
+        # and printed "is retired (unknown)" for grok-3-mini, as though "unknown" were the
+        # day xAI shut it down. Fenced by test_a_retirement_with_no_published_date_says_so.
         return Retirement(
             model=name,
             date=None
@@ -903,6 +907,11 @@ def _routed_model_name(name: str) -> str | None:
         return None
     # Each segment is case-folded because a user types the provider's branding ("XAI/",
     # "OpenRouter/"), not the lowercase spelling --list-models prints.
+    #
+    # Every segment, not just the first: narrowing this to prefix.split("/")[:1] left all
+    # 796 tests green and flipped `-m openai/Xenova/text-davinci-003` from a count to a
+    # retirement refusal, which is false about a live Hub repo. Fenced by
+    # test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip.
     if all(
         not segment or segment.lower() in _ROUTING_PREFIX_SEGMENTS
         for segment in prefix.split("/")
@@ -955,6 +964,13 @@ def retirement_for_requested(requested: str) -> Retirement | None:
     live. Reading the raw name in one place and the normalized one in the other is what
     made ``--include-retired -m anthropic/curie`` emit ``"retirement": null`` while bare
     ``curie`` emitted the full object.
+
+    The candidate order is what "as spelled" means, so this walk is first-non-None and
+    not any-non-None: the typed spelling is reported when it resolves, and only a
+    normalization of it answers otherwise. Reversing the loop left all 796 tests green
+    while moving the reported retirement on 30 of 2236 probed spellings, 10 of them onto
+    a different date. Fenced by
+    test_the_spelling_as_typed_decides_which_retirement_is_reported.
     """
     for candidate in retirement_candidates(requested):
         try:

@@ -660,6 +660,68 @@ def test_a_huggingface_prefix_leaves_a_retired_tail_unread():
     assert retirement_for_requested("huggingface/text-davinci-003") is None
 
 
+@pytest.mark.parametrize(
+    "requested",
+    [
+        # A router path whose middle segment is a Hub owner rather than a provider.
+        "openai/Xenova/text-davinci-003",
+        "openrouter/Xenova/text-davinci-003",
+    ],
+)
+def test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip(requested):
+    """Every segment has to route, not just the first one.
+
+    Narrowing _routed_model_name's `all(...)` to the leading segment left all 796 tests
+    green -- every other multi-segment case in the suite routes the whole way down -- and
+    flipped `-m openai/Xenova/text-davinci-003` from a count to "retired (2024-01-04)".
+    Xenova/text-davinci-003 is a live Hub repo, so a prefix ending in its owner is not
+    pure addressing however it starts, and refusing it would be false about a repo that
+    is still served. Asserted on the gate rather than a run: whether the Hub answers for
+    the routed spelling is a separate question, and the gate decides on the name alone.
+    """
+    assert retirement_candidates(requested) == [requested]
+    assert retirement_for_requested(requested) is None
+
+
+def test_a_retirement_with_no_published_date_says_so():
+    """RETIREMENT_DATE_UNKNOWN is the registry's stand-in, never a date to print.
+
+    Collapsing retirement_of's `date=None if retired == RETIREMENT_DATE_UNKNOWN` to a
+    plain `date=model_info.retired` kept all 796 tests green and turned this refusal into
+    "is retired (unknown)" -- the sentinel leaking into the message as though "unknown"
+    were the day xAI shut the model down. Three packaged entries carry it (grok-3-mini,
+    grok-2-1212, grok-2-vision-1212) and nothing else asserted on the wording.
+    """
+    result = _invoke_cli(["-m", "grok-3-mini", "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert "model 'grok-3-mini' is retired (date unknown)" in result.stderr
+    assert retirement_for_requested("grok-3-mini").date is None
+
+
+def test_the_spelling_as_typed_decides_which_retirement_is_reported():
+    """First non-None over the candidates, in the order retirement_candidates builds.
+
+    The order is the whole of "as spelled": the typed name comes before its -latest
+    strip, so a spelling that resolves on its own reports its own retirement. Reversing
+    the loop in retirement_for_requested killed nothing across 796 tests while moving the
+    reported retirement on 30 of the 2236 prefixed and -latest spellings probed, 10 of
+    them to a different date. This is one of those 10: Google's -latest pass-through
+    resolves the typed name to the gemini-2.0-flash-001 family it would serve, retired
+    2026-06-01, while the suffix-stripped base is its own registry entry retired
+    2025-11-14. A silently different date is exactly what the gate exists to prevent.
+    """
+    typed = "gemini-2.0-flash-preview-image-generation-latest"
+    stripped = "gemini-2.0-flash-preview-image-generation"
+    assert retirement_candidates(typed) == [typed, stripped]
+
+    reported = retirement_for_requested(typed)
+    assert reported.model == typed
+    assert reported.date == "2026-06-01"
+    assert retirement_for_requested(stripped).date == "2025-11-14"
+
+
 def test_a_prefixed_retired_name_still_counts_when_opted_in():
     """--include-retired is the escape hatch for a name the gate now catches.
 

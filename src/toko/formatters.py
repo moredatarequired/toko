@@ -162,15 +162,19 @@ def _envelope(results: list[dict[str, object]], totals: list[dict[str, object]])
     )
 
 
-def format_json(results: dict[str, TokenCount]) -> str:
+def format_json(results: dict[str, TokenCount], *, total_only: bool = False) -> str:
     """Format counts of a text input (``--text`` or stdin) as the JSON envelope."""
-    counts = _counts_payload(results)
+    counts = _counts_payload(results, list(results))
     # One source and one count per model, so the totals repeat the results rather
     # than summing anything. Repeating them keeps the document one shape.
-    return _envelope(
-        [{"source": {"kind": SourceKind.TEXT.value, "name": None}, "counts": counts}],
-        counts,
+    sources = (
+        []
+        if total_only
+        else [
+            {"source": {"kind": SourceKind.TEXT.value, "name": None}, "counts": counts}
+        ]
     )
+    return _envelope(sources, counts)
 
 
 def _format_delimited(
@@ -247,6 +251,7 @@ def format_output(
     *,
     show_costs: bool = False,
     include_header: bool = True,
+    total_only: bool = False,
 ) -> str:
     """Format token count results according to specified format.
 
@@ -258,7 +263,7 @@ def format_output(
             results, show_costs=show_costs, include_header=include_header
         )
     if output_format == OutputFormat.JSON:
-        return format_json(results)
+        return format_json(results, total_only=total_only)
     if output_format == OutputFormat.CSV:
         return format_csv(results, include_header=include_header, show_costs=show_costs)
     if output_format == OutputFormat.TSV:

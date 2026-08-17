@@ -446,6 +446,7 @@ def _handle_text_input(
     text: str,
     *,
     output_format: OutputFormat,
+    total_only: bool,
     include_costs: bool,
     include_header: bool,
 ) -> None:
@@ -483,6 +484,7 @@ def _handle_text_input(
         output_format=adjusted_format,
         show_costs=include_costs,
         include_header=include_header,
+        total_only=total_only,
     )
     typer.echo(output)
 
@@ -744,6 +746,7 @@ def _do_count(
             models,
             inputs.text,
             output_format=actual_format,
+            total_only=total_only,
             include_costs=cost,
             include_header=include_header,
         )

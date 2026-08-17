@@ -1105,6 +1105,29 @@ def test_total_only_json(tmp_path):
     ]
 
 
+def test_total_only_json_empties_results_for_a_text_run():
+    result = _invoke_cli(
+        ["--total-only", "--format", "json", "-m", "gpt-5", "--text", "hello world"]
+    )
+
+    assert result.exit_code == 0
+    payload = _envelope(result)
+    assert payload["results"] == []
+    assert [total["model"] for total in payload["totals"]] == ["gpt-5"]
+    assert payload["totals"][0]["tokens"] == 2
+
+
+def test_total_only_json_empties_results_for_a_stdin_run():
+    result = _invoke_cli(
+        ["--total-only", "--format", "json", "-m", "gpt-5"], stdin="hello world"
+    )
+
+    assert result.exit_code == 0
+    payload = _envelope(result)
+    assert payload["results"] == []
+    assert payload["totals"][0]["tokens"] == 2
+
+
 def test_total_only_text(tmp_path, monkeypatch):
     monkeypatch.setattr("toko.cli.is_stdout_tty", lambda: True)
     args = _two_file_args(tmp_path)

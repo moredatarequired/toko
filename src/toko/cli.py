@@ -584,6 +584,7 @@ def _handle_file_inputs(
         file_results,
         output_format=output_format,
         total_only=total_only,
+        models=models,
         show_costs=include_costs,
         include_header=include_header,
         sort_order=sort_order,

@@ -14,7 +14,7 @@ from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
 from tests.hf_hub import skip_if_rate_limited
-from toko.cache import get_cache_db_path, get_cached_count
+from toko.cache import cache_count, get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
@@ -1445,6 +1445,97 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         # write landed under another thread's key or was lost to a locked database.
         assert get_cached_count(content, "gpt-4") == int(gpt_4)
         assert get_cached_count(content, "gpt-5") == int(gpt_5)
+
+
+def _tree_failing_the_first_file(tmp_path: Path, monkeypatch) -> Path:
+    """Build a tree claude-opus-4-5 fails on the first file of but not the second.
+
+    Nothing is faked: the API key really is absent, so every count against that model
+    reaches the provider and fails -- except the one the cache answers before the
+    provider runs, which is seeded for the second file only.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a_first.txt").write_text("alpha beta gamma delta\n")
+    later = tree / "b_later.txt"
+    later.write_text("epsilon zeta eta theta\n")
+    cache_count(later.read_text(), "claude-opus-4-5", 7)
+    return tree
+
+
+def test_columns_keep_model_order_when_a_model_fails_on_the_first_file(
+    tmp_path, monkeypatch
+):
+    tree = _tree_failing_the_first_file(tmp_path, monkeypatch)
+
+    result = _invoke_cli(
+        [
+            "--header",
+            "--format",
+            "csv",
+            "-m",
+            "claude-opus-4-5",
+            "-m",
+            "gpt-5",
+            str(tree),
+        ]
+    )
+
+    assert result.exit_code == 0
+    rows = _csv_rows(result.stdout)
+    # The order the models were named, not the order the counts arrived in: the first
+    # file has no claude count at all, so a column order read off the results would
+    # put gpt-5 first.
+    assert rows[0] == ["file", "claude-opus-4-5", "gpt-5"]
+    assert rows[1][1] == "N/A"
+    assert rows[2][1] == "7"
+
+
+def test_json_arrays_and_table_columns_agree_on_one_model_order(tmp_path, monkeypatch):
+    tree = _tree_failing_the_first_file(tmp_path, monkeypatch)
+    args = ["--header", "-m", "claude-opus-4-5", "-m", "gpt-5", str(tree)]
+
+    table = _invoke_cli([*args, "--format", "csv"])
+    document = _invoke_cli([*args, "--format", "json"])
+
+    assert table.exit_code == 0
+    assert document.exit_code == 0
+    columns = _csv_rows(table.stdout)[0][1:]
+    payload = json.loads(document.stdout)
+    assert [count["model"] for count in payload["totals"]] == columns
+    for source in payload["results"]:
+        listed = [count["model"] for count in source["counts"]]
+        # A source keeps only the models it could be counted for, but in the order the
+        # columns use, so the two can be lined up.
+        assert listed == [model for model in columns if model in listed]
+
+
+def test_model_order_is_the_same_at_every_jobs_setting(tmp_path, monkeypatch):
+    tree = _tree_failing_the_first_file(tmp_path, monkeypatch)
+    args = [
+        "--header",
+        "--format",
+        "json",
+        "-m",
+        "claude-opus-4-5",
+        "-m",
+        "gpt-5",
+        "-m",
+        "gpt-4",
+        str(tree),
+    ]
+
+    outputs = [_invoke_cli([*args, "--jobs", str(jobs)]) for jobs in (MAX_JOBS, 8, 1)]
+
+    assert [result.exit_code for result in outputs] == [0, 0, 0]
+    orders = [
+        [count["model"] for count in json.loads(result.stdout)["totals"]]
+        for result in outputs
+    ]
+    assert orders == [["claude-opus-4-5", "gpt-5", "gpt-4"]] * 3
+    assert outputs[0].stdout == outputs[1].stdout == outputs[2].stdout
 
 
 def test_jobs_below_one_is_rejected(tmp_path):

@@ -292,13 +292,23 @@ def _format_file_json(
     return _envelope(results, _counts_payload(totals, models))
 
 
-def _collect_models(file_results: dict[str, dict[str, TokenCount]]) -> list[str]:
-    # First encounter rather than sorted, which is the order the models were named on
-    # the command line: one order for the table columns, the delimited columns and both
-    # JSON arrays, so nothing in a document has to be re-read against a second order.
-    return list(
-        dict.fromkeys(model for counts in file_results.values() for model in counts)
+def _collect_models(
+    file_results: dict[str, dict[str, TokenCount]], requested: list[str] | None = None
+) -> list[str]:
+    # The one order a run's output uses: the table columns, the delimited columns and
+    # both JSON arrays all read it, so nothing in a document has to be re-read against a
+    # second order. `requested` is the order the models were asked for, which is the
+    # order to show them in whichever sources each one could be counted for. Without it
+    # the best available order is first encounter, which is the same order right up
+    # until a model fails on an early source and succeeds on a later one.
+    counted = dict.fromkeys(
+        model for counts in file_results.values() for model in counts
     )
+    if requested is None:
+        return list(counted)
+    # A model no source could be counted for has no column and no total to put in one,
+    # so it drops out; the rest keep the order they were asked in.
+    return [model for model in dict.fromkeys(requested) if model in counted]
 
 
 def _format_file_table_delimited(
@@ -524,12 +534,18 @@ def format_file_table(
     output_format: OutputFormat | str = "text",
     total_only: bool = False,
     *,
+    models: list[str] | None = None,
     show_costs: bool = False,
     include_header: bool = True,
     sort_order: SortOrder | str = SortOrder.INPUT,
 ) -> str:
-    """Format per-file token counts with files as rows and models as columns."""
-    models = _collect_models(file_results)
+    """Format per-file token counts with files as rows and models as columns.
+
+    ``models`` is the order the models were asked for; the columns and the JSON arrays
+    follow it rather than the order the counts happen to be stored in. Omit it and the
+    order is first encounter in ``file_results``.
+    """
+    models = _collect_models(file_results, models)
     if not total_only:
         # A total-only run prints no file rows to order, and sorting anyway would leak
         # into the one row it does print: _compute_totals joins the per-file caveats in

@@ -202,23 +202,75 @@ def test_every_json_array_lists_its_models_in_the_same_order():
     assert _model_orders(payload) == [["gpt-5", "gpt-4o-mini"]] * 3
 
 
-def test_a_source_lists_its_models_in_the_document_order_not_its_own():
-    # The leading model missed the first file, so the document's order is not the order
-    # the second file's counts were collected in.
-    file_results = {
+def _missing_from_the_first_file() -> dict[str, dict[str, TokenCount]]:
+    return {
         "a.txt": {"gpt-4o-mini": _counted(3, model="gpt-4o-mini")},
         "b.txt": {
             "gpt-5": _counted(4),
             "gpt-4o-mini": _counted(5, model="gpt-4o-mini"),
         },
     }
-    payload = json.loads(format_file_table(file_results, output_format="json"))
+
+
+def test_a_source_lists_its_models_in_the_document_order_not_its_own():
+    # No requested order to follow, so the document falls back to first encounter: the
+    # leading model missed the first file, and the order is not the one the second
+    # file's counts were collected in either.
+    payload = json.loads(
+        format_file_table(_missing_from_the_first_file(), output_format="json")
+    )
 
     assert _model_orders(payload) == [
         ["gpt-4o-mini"],
         ["gpt-4o-mini", "gpt-5"],
         ["gpt-4o-mini", "gpt-5"],
     ]
+
+
+def test_the_requested_order_holds_when_a_model_missed_the_first_file():
+    payload = json.loads(
+        format_file_table(
+            _missing_from_the_first_file(),
+            output_format="json",
+            models=["gpt-5", "gpt-4o-mini"],
+        )
+    )
+
+    assert _model_orders(payload) == [
+        ["gpt-4o-mini"],
+        ["gpt-5", "gpt-4o-mini"],
+        ["gpt-5", "gpt-4o-mini"],
+    ]
+
+
+def test_the_columns_and_the_json_arrays_share_the_requested_order():
+    """One order for the whole run, so a column and an array cannot be read apart."""
+    file_results = _missing_from_the_first_file()
+    models = ["gpt-5", "gpt-4o-mini"]
+
+    columns = _csv_rows(
+        format_file_table(file_results, output_format="csv", models=models)
+    )[0][1:]
+    payload = json.loads(
+        format_file_table(file_results, output_format="json", models=models)
+    )
+    heading = re.sub(
+        r"\s+", " ", _plain_lines(format_file_table(file_results, models=models))[0]
+    )
+
+    assert columns == models
+    assert heading.strip() == "File gpt-5 gpt-4o-mini"
+    assert _model_orders(payload)[-1] == columns
+
+
+def test_a_requested_model_no_file_could_be_counted_for_takes_no_column():
+    output = format_file_table(
+        _missing_from_the_first_file(),
+        output_format="csv",
+        models=["gpt-5", "claude-opus-4-5", "gpt-4o-mini"],
+    )
+
+    assert _csv_rows(output)[0] == ["file", "gpt-5", "gpt-4o-mini"]
 
 
 def test_delimited_columns_follow_the_order_the_models_were_named():

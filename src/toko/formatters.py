@@ -25,8 +25,6 @@ SCHEMA_VERSION = 1
 
 
 class SourceKind(StrEnum):
-    """What a set of counts was taken from."""
-
     TEXT = "text"
     FILE = "file"
     URL = "url"

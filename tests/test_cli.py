@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 from tests.hf_hub import skip_if_rate_limited
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
-from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
+from toko.cli import DEFAULT_JOBS, MAX_JOBS, _collect_supported_models, app
 from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.models import (
@@ -483,13 +483,38 @@ def test_a_google_repo_is_not_read_as_googles_own_model():
 # The retired Gemini names --list-models prints under --include-retired. A retired tail
 # is what makes the google/ carve-out observable: strip the prefix and the gate reads
 # Google's own retired model and refuses, keep it and the name stays a Hub repo id.
-GOOGLE_RETIRED_LISTED_NAMES = [
+#
+# Read out of the listing rather than written out, so a sixth retired Gemini is fenced
+# the moment the registry retires one. The spellings below pin today's set, the same way
+# SHUT_DOWN_OPENAI_ENGINES pins the shut-down table: derivation alone would let the
+# parametrization quietly empty out or widen.
+def _retired_google_names_in_the_listing() -> list[str]:
+    default = set(_collect_supported_models(include_retired=False))
+    return [
+        name
+        for name in _collect_supported_models(include_retired=True)
+        if name.startswith("google/") and name not in default
+    ]
+
+
+GOOGLE_RETIRED_LISTED_NAMES = _retired_google_names_in_the_listing()
+
+RETIRED_GEMINI_LISTINGS = {
     "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3-pro-preview",
     "google/gemini-2.0-flash-001",
     "google/gemini-2.0-flash-lite-001",
     "google/gemini-2.0-flash-preview-image-generation",
-]
+}
+
+
+def test_the_retired_gemini_listing_is_exactly_what_the_google_fence_covers():
+    """A retired Google name added to or dropped from the registry has to show up.
+
+    The fence below is parametrized over what the listing reports, so a registry change
+    moves the fence with it -- and nothing would say so if the set changed by accident.
+    """
+    assert set(GOOGLE_RETIRED_LISTED_NAMES) == RETIRED_GEMINI_LISTINGS
 
 
 @pytest.mark.parametrize("requested", GOOGLE_RETIRED_LISTED_NAMES)
@@ -503,6 +528,22 @@ def test_a_google_prefix_leaves_a_retired_gemini_unread(requested):
     """
     assert retirement_candidates(requested) == [requested]
     assert retirement_for_requested(requested) is None
+
+
+def test_a_huggingface_prefix_leaves_a_retired_tail_unread():
+    """Dropping "huggingface" from the exclusion set has to fail here.
+
+    The exclusion carves out two Hub organisations, and google was the only one fenced:
+    removing huggingface left all 776 tests green while the README went on promising the
+    carve-out. huggingface/ owns real repos (huggingface/CodeBERTa-small-v1), so like
+    google/ it is an owner, and a retired tail is the one shape that shows it -- strip
+    the owner and the gate refuses a shut-down engine, keep it and the name stays a Hub
+    repo id.
+    """
+    assert retirement_candidates("huggingface/text-davinci-003") == [
+        "huggingface/text-davinci-003"
+    ]
+    assert retirement_for_requested("huggingface/text-davinci-003") is None
 
 
 def test_a_prefixed_retired_name_still_counts_when_opted_in():

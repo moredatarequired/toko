@@ -144,9 +144,9 @@ TOTAL                                 32,896
 directory stay together. A directory scan already arrives in near-path order, but not the
 same one: the scan compares path components, so `src/toko.py` lands after everything under
 `src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
-model column, which is the first `--model` that produced a count, since model columns run
-in the order you named them; files the model could not be counted for keep their `N/A`
-and sort last. The `TOTAL` row stays at the bottom whichever order you pick, and the order applies
+model column, which is normally your first `--model`, since model columns run in the order
+you named the models in; files the model could not be counted for keep their `N/A` and
+sort last. The `TOTAL` row stays at the bottom whichever order you pick, and the order applies
 to every format, not just the text table, so `--sort count --format json` lists its
 sources in the same order the table would show. Runs that count `--text` or stdin have no
 file rows, so `--sort` is accepted and ignored there.
@@ -208,9 +208,10 @@ Every JSON run emits that one document, whatever flags it was given:
   `retirement` is `null` for a live model. `jq '.totals[] | .tokens'` reads any run
   that printed a document.
 - Every count array in a document — each `results[].counts` and `totals` — lists its
-  models in the order you named them with `--model`, so they can be lined up by index.
-  A source a model could not be counted for simply omits it, so check `model` rather
-  than trusting the lengths to match.
+  models in one order, the order you named them with `--model`, so the arrays line up.
+  A model a source could not be counted for is simply absent from that source's array
+  (and a model no source could be counted for takes no place in the order at all), so
+  read `model` rather than trusting the lengths to match.
 
 ```sh
 toko --header --model gpt-5 --format csv --text "hello world"

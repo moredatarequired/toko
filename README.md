@@ -281,14 +281,15 @@ A run exits `1` when:
   `toko -m gpt-5 < /dev/null` counts the empty string, prints `0` and exits `0`;
 - no files matched, which includes a directory whose every file was skipped;
 - **a path could not be found, or a file could not be read** — even when other paths
-  were counted and printed above the error. A file that is not valid UTF-8 is the
-  exception: it is skipped with a `Warning: Skipping binary file …` on stderr, it
-  contributes no row and no tokens, and the *skip itself* does not fail the run. It is
-  only the skip that is exempt, though. If skipping leaves nothing to count — a binary
-  file named on its own, or a directory of them — the run still exits `1` under the
-  "no files matched" rule above: `toko -m gpt-5 photo.png` warns, then prints
-  `Error: No files found matching criteria` and exits `1`. A binary file alongside a
-  file that did count exits `0`;
+  were counted. Toko resolves the paths before it counts anything, so the error reaches
+  stderr first and the counts follow it, at a terminal and in a pipe alike. A file that
+  is not valid UTF-8 is the exception: it is skipped with a `Warning: Skipping binary
+  file …` on stderr, it contributes no row and no tokens, and the *skip itself* does not
+  fail the run. It is only the skip that is exempt, though. If skipping leaves nothing
+  to count — a binary file named on its own, or a directory of them — the run still
+  exits `1` under the "no files matched" rule above: `toko -m gpt-5 photo.png` warns,
+  then prints `Error: No files found matching criteria` and exits `1`. A binary file
+  alongside a file that did count exits `0`;
 - every model failed for every input;
 - a **retired model** was named without `--include-retired` (nothing is read or
   counted in that case; the error names the model, its retirement date and its
@@ -404,7 +405,7 @@ toko -m grok-3 --text "hello world"
 
 That is the point of the flag: `grok-3` still answers, but what answers is `grok-4.3`, so the number and its price belong to a model you did not ask for. With `--include-retired` the count happens, the warning stays on stderr, and JSON reports the `retirement` object alongside the count.
 
-The refusal follows the name rather than one spelling of it: surrounding whitespace, the `provider/model` form `--list-models` prints (`xai/grok-3`), a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. **A prefix is dropped only when every segment of it names a provider toko resolves models for — `openai/`, `anthropic/`, `xai/`, and the `openrouter/<provider>/` router form — because that prefix is addressing rather than a repo owner. So `openrouter/text-davinci-003` and `/text-davinci-003` are the shut-down engine and are refused, while a Hugging Face repo whose last segment happens to be a retired name keeps its prefix and counts: `Xenova/text-davinci-003` and `openai-community/gpt2` are live repos, and calling either retired would be false about them.** `google/` is a repo owner too, so `google/gemma-3-1b-it` stays that repo rather than becoming Google's `gemma-3-1b-it`.
+The refusal follows the name rather than one spelling of it: surrounding whitespace, the `provider/model` form `--list-models` prints (`xai/grok-3`), a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. **A prefix is dropped only when every segment of it names a provider toko resolves models for — `openai/`, `anthropic/`, `xai/`, `mistral/`, `llama/`, `deepseek/`, `qwen/`, and the `openrouter/<provider>/` router form — because that prefix is addressing rather than a repo owner. So `openrouter/text-davinci-003` and `/text-davinci-003` are the shut-down engine and are refused, while a Hugging Face repo whose last segment happens to be a retired name keeps its prefix and counts: `Xenova/text-davinci-003` and `openai-community/gpt2` are live repos, and calling either retired would be false about them.** `google/` and `huggingface/` are the two providers left out of that set, because both are Hub organisations that own real repos, so `google/gemma-3-1b-it` stays that repo rather than becoming Google's `gemma-3-1b-it`.
 
 Whatever the gate matched on is what the run reports, so `--include-retired` gives `anthropic/curie` the same `retirement` object and stderr warning that bare `curie` gets.
 

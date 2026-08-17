@@ -21,7 +21,11 @@ from toko.cache import cache_count, get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
-from toko.models import RETIRED_OPENAI_MODELS, retirement_for_requested
+from toko.models import (
+    _UNADVERTISED_LIVE_OPENAI_MODELS,
+    RETIRED_OPENAI_MODELS,
+    retirement_for_requested,
+)
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
 runner = CliRunner()
@@ -275,8 +279,9 @@ SHUT_DOWN_OPENAI_ENGINES = {
     "code-cushman-001": "2023-03-23",
     "code-cushman-002": "2023-03-23",
     "code-davinci-001": "2023-03-23",
-    # Shut down in both the 2023-03-20 Codex wave and the 2023-07-06 base-model wave;
-    # the later date is the one that happened.
+    # Listed under two announcements: 2023-03-20 (Codex) with a 2023-03-23 shutdown,
+    # and 2023-07-06 (GPT and embeddings) with a 2024-01-04 one. The later shutdown is
+    # the one that happened, so the date here is neither announcement's own date.
     "code-davinci-002": "2024-01-04",
     "code-davinci-edit-001": "2024-01-04",
     "code-search-ada-code-001": "2024-01-04",
@@ -306,6 +311,25 @@ SHUT_DOWN_OPENAI_ENGINES = {
 def test_the_shut_down_engine_table_is_exactly_the_one_the_gate_reads():
     """Membership is the gate's whole input, so an addition or removal has to show up."""
     assert dict(RETIRED_OPENAI_MODELS) == SHUT_DOWN_OPENAI_ENGINES
+
+
+# Live tiktoken names --list-models hides, written out for the same reason the shut-down
+# table above is: membership is the whole of the decision. Adding a name here drops a
+# live model out of the default listing, and removing one starts advertising a name that
+# was hidden on purpose -- neither shows up in any other assertion, so both were silent.
+HIDDEN_LIVE_OPENAI_MODELS = {
+    "babbage-002",
+    "davinci-002",
+    "gpt-2",
+    "gpt-3.5",
+    "gpt-35-turbo",
+    "gpt2",
+}
+
+
+def test_the_hidden_live_name_set_is_exactly_the_one_the_listing_filters_on():
+    """A name added here vanishes from --list-models; one removed appears in it."""
+    assert set(_UNADVERTISED_LIVE_OPENAI_MODELS) == HIDDEN_LIVE_OPENAI_MODELS
 
 
 @pytest.mark.parametrize(

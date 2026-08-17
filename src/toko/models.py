@@ -561,9 +561,11 @@ MISTRAL_MODELS: tuple[str, ...] = (
 # the shutdown date OpenAI published (https://developers.openai.com/api/docs/deprecations).
 # This is the set the retirement gate reads, so membership has to mean "naming this gets
 # the request rejected" and nothing weaker: refusing a name the API still serves costs a
-# user a count they were entitled to. Every date below is the last one OpenAI published
-# for that name -- code-davinci-002 appears in both the 2023-03-20 Codex wave and the
-# 2023-07-06 base-model wave, and the later shutdown is the one that happened.
+# user a count they were entitled to. Every date below is a shutdown date, and the last
+# one OpenAI published for that name -- code-davinci-002 is listed twice, under the
+# 2023-03-20 Codex announcement with a 2023-03-23 shutdown and again under the
+# 2023-07-06 "GPT and embeddings" announcement's base-model table with a 2024-01-04 one,
+# and 2024-01-04 is the shutdown that happened.
 # cushman-codex and davinci-codex are None because they are /v1/engines-era names that
 # were withdrawn before OpenAI kept shutdown tables at all, so no date exists to quote.
 # Names that tiktoken carries and --list-models hides but that are NOT here, because the

@@ -24,6 +24,7 @@ from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_token
 from toko.models import (
     _UNADVERTISED_LIVE_OPENAI_MODELS,
     RETIRED_OPENAI_MODELS,
+    retirement_candidates,
     retirement_for_requested,
 )
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
@@ -376,7 +377,17 @@ def test_whitespace_and_multi_segment_prefixes_do_not_slip_past_the_gate(request
     ],
 )
 def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
-    """The prefix is inert for these too; what saves them is that the name is alive."""
+    """Both tails are alive, so the gate clears these however the prefix is read.
+
+    That makes this a check on the gate's verdict for a live name, not on the stripping
+    rule -- the rule's two branches agree here, and the carve-outs are fenced by
+    test_a_repo_owner_prefix_leaves_a_retired_tail_unread and
+    test_a_google_prefix_leaves_a_retired_gemini_unread instead.
+
+    The prefix is not inert outside the gate: "openai/babbage-002" is stripped, so the
+    name resolves as OpenAI's and warns that it is estimating with o200k_base, while
+    "openai-community/gpt2" keeps its prefix and resolves as the Hub repo.
+    """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 0
@@ -417,10 +428,39 @@ def test_a_routing_prefix_is_stripped(requested):
     "requested", ["Xenova/text-davinci-003", "openai-community/gpt2"]
 )
 def test_a_repo_owner_prefix_is_not_stripped(requested):
+    """Only the Xenova case turns on the rule; gpt2 is live under either reading.
+
+    Both are here because both have to keep counting, but a run is a coarse probe --
+    it needs the repo to be served, so it cannot cover an owner whose retired tail is
+    the interesting part. test_a_repo_owner_prefix_leaves_a_retired_tail_unread asks
+    the gate directly and carries that half.
+    """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 0
     assert "retired" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        "Xenova/text-davinci-003",
+        # An owner that is not a provider, on a tail that is. Whether this repo is
+        # served was not checked and does not matter: the gate decides on the name
+        # alone, and an owner it does not route for must leave the tail unread either
+        # way. Counting it is a separate question this does not ask.
+        "openai-community/text-davinci-003",
+    ],
+)
+def test_a_repo_owner_prefix_leaves_a_retired_tail_unread(requested):
+    """A rule that stripped a repo owner has to fail here.
+
+    The tail is a shut-down engine, so stripping the owner reaches a retired name and
+    the gate refuses. That is the only shape where the carve-out changes the answer,
+    and before this the whole carve-out rested on the single Xenova run above.
+    """
+    assert retirement_candidates(requested) == [requested]
+    assert retirement_for_requested(requested) is None
 
 
 def test_a_google_repo_is_not_read_as_googles_own_model():
@@ -431,9 +471,38 @@ def test_a_google_repo_is_not_read_as_googles_own_model():
     run, because every google/gemma-* repo is gated and counting one needs Hub
     credentials the suite does not have. The gate is a pure name decision, so its
     verdict is the whole of its behaviour here.
+
+    Both tails are live, so this says nothing about whether google/ is stripped -- it
+    documents the repos the carve-out exists for. The carve-out itself is fenced by
+    test_a_google_prefix_leaves_a_retired_gemini_unread.
     """
     assert retirement_for_requested("google/gemma-3-1b-it") is None
     assert retirement_for_requested("google/gemma-2-2b-it") is None
+
+
+# The retired Gemini names --list-models prints under --include-retired. A retired tail
+# is what makes the google/ carve-out observable: strip the prefix and the gate reads
+# Google's own retired model and refuses, keep it and the name stays a Hub repo id.
+GOOGLE_RETIRED_LISTED_NAMES = [
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3-pro-preview",
+    "google/gemini-2.0-flash-001",
+    "google/gemini-2.0-flash-lite-001",
+    "google/gemini-2.0-flash-preview-image-generation",
+]
+
+
+@pytest.mark.parametrize("requested", GOOGLE_RETIRED_LISTED_NAMES)
+def test_a_google_prefix_leaves_a_retired_gemini_unread(requested):
+    """Dropping "google" from the exclusion set has to fail here.
+
+    These are the spellings where the carve-out changes the answer: the bare name is
+    retired, so a rule that stripped google/ would refuse them. Nothing else in the
+    suite dies when google is removed from the exclusion, which is what makes this the
+    fence rather than the gemma cases above.
+    """
+    assert retirement_candidates(requested) == [requested]
+    assert retirement_for_requested(requested) is None
 
 
 def test_a_prefixed_retired_name_still_counts_when_opted_in():

@@ -230,14 +230,16 @@ one written for people, and it keeps the `$`; CSV and TSV write the `cost` colum
 program instead:
 
 - **A bare number, never a currency symbol** — no `$`, and no rounding to `0.000000`
-  for a fraction of a cent. `float()` accepts every cell toko writes.
+  for a fraction of a cent. `float()` accepts every non-empty cell toko writes; the one
+  cell it will not accept is the empty one described in the last bullet.
 - **Always positional decimal, never an exponent.** A cost of three ten-thousandths of
   a cent is written `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column
   correctly and `bc` can read a cell at all — both of which mis-handle exponent form,
   `sort -n` silently.
 - **The same number as `--format json` reports.** A cost is rounded to twelve
   significant digits once, where it is produced, so the delimited cell and the JSON
-  number are one value written two ways.
+  number are one value written two ways. Where there is no cost the two say so
+  differently: JSON writes `null`, the cell is empty.
 - **An empty cell for a model with no price.** No number would be honest there — `0`
   reads as free — so the cell holds nothing. Beware that this is an *empty field*, not
   a missing one: `awk -F'\t'` and `awk -F,` see it correctly, but bare `awk` splits on
@@ -282,7 +284,12 @@ A run exits `1` when:
 - **a path could not be found, or a file could not be read** — even when other paths
   were counted and printed above the error. A file that is not valid UTF-8 is the
   exception: it is skipped with a `Warning: Skipping binary file …` on stderr, it
-  contributes no row and no tokens, and it does **not** make the run exit `1`;
+  contributes no row and no tokens, and the *skip itself* does not fail the run. It is
+  only the skip that is exempt, though. If skipping leaves nothing to count — a binary
+  file named on its own, or a directory of them — the run still exits `1` under the
+  "no files matched" rule above: `toko -m gpt-5 photo.png` warns, then prints
+  `Error: No files found matching criteria` and exits `1`. A binary file alongside a
+  file that did count exits `0`;
 - every model failed for every input;
 - a **retired model** was named without `--include-retired` (nothing is read or
   counted in that case; the error names the model, its retirement date and its

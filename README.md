@@ -268,11 +268,11 @@ Two exceptions are worth knowing before you parse the output:
 
 ## Exit codes
 
-| Code | Meaning                                                                                                                                                                           |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | Toko printed counts. Some of what you asked for may still have failed — see the inconsistency below.                                                                              |
-| `1`  | The run produced no usable result, or one of its inputs did not survive. **Output may still have been printed, and it is short** — see the warning below the list.                 |
-| `2`  | The command line itself was wrong: an unknown option, a missing value, or an unsupported `--format`. Typer reports these before Toko runs.                                        |
+| Code | Meaning                                                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`  | Toko printed counts. Some of what you asked for may still have failed — see the inconsistency below.                                                               |
+| `1`  | The run produced no usable result, or one of its inputs did not survive. **Output may still have been printed, and it is short** — see the warning below the list. |
+| `2`  | The command line itself was wrong: an unknown option, a missing value, or an unsupported `--format`. Typer reports these before Toko runs.                         |
 
 A run exits `1` when:
 
@@ -283,8 +283,7 @@ A run exits `1` when:
 - **a path could not be found, or a file could not be read** — even when other paths
   were counted. Toko resolves the paths before it counts anything, so the error reaches
   stderr first and the counts follow it, at a terminal and in a pipe alike. A file that
-  is not valid UTF-8 is the exception: it is skipped with a `Warning: Skipping binary
-  file …` on stderr, it contributes no row and no tokens, and the *skip itself* does not
+  is not valid UTF-8 is the exception: it is skipped with a `Warning: Skipping binary file …` on stderr, it contributes no row and no tokens, and the *skip itself* does not
   fail the run. It is only the skip that is exempt, though. If skipping leaves nothing
   to count — a binary file named on its own, or a directory of them — the run still
   exits `1` under the "no files matched" rule above: `toko -m gpt-5 photo.png` warns,

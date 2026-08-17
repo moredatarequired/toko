@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 from tests.hf_hub import skip_if_rate_limited
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
-from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
+from toko.cli import DEFAULT_JOBS, MAX_JOBS, _retirement_candidates, app
 from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
@@ -311,21 +311,56 @@ def test_whitespace_and_multi_segment_prefixes_do_not_slip_past_the_gate(request
 @pytest.mark.parametrize(
     "requested",
     [
-        # A real HuggingFace repo. Its bare segment matched OpenAI's retired list.
+        # A real HuggingFace repo whose bare segment is a name OpenAI still serves.
         "openai-community/gpt2",
-        # curie is an OpenAI engine; nothing about an anthropic/ name is retired.
-        "anthropic/curie",
-        "openrouter/text-davinci-003",
+        # Hidden from --list-models but alive until 2026-09-28, prefixed or not.
+        "openai/babbage-002",
     ],
 )
-def test_a_prefix_naming_another_provider_does_not_borrow_openais_retirements(
-    requested,
-):
-    """A prefix is only strippable when it names the provider the model belongs to."""
+def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
+    """The prefix is inert for these too; what saves them is that the name is alive."""
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 0
     assert "retired" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        # A leading slash left the prefix empty, which skipped the provider check
+        # entirely and let a shut-down engine count as an o200k_base guess.
+        "/text-davinci-003",
+        # A router path, which has to behave like openrouter/xai/grok-3 rather than
+        # turning on whether the middle segment happens to spell a provider.
+        "openrouter/text-davinci-003",
+        "openrouter/openai/text-davinci-003",
+        # detect_provider reads only the last segment for a tiktoken name, so this is
+        # OpenAI's shut-down curie however the prefix reads.
+        "anthropic/curie",
+    ],
+)
+def test_a_prefix_that_does_not_move_the_provider_is_stripped(requested):
+    """The prefix is dropped when the whole name and its last segment detect alike."""
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert f"model '{requested}' is retired (2024-01-04)" in result.stderr
+
+
+def test_a_prefix_that_moves_the_provider_is_kept():
+    """google/gemma-2 is a HuggingFace repo, not Google's gemma-2, so it is not one.
+
+    Asserted through _retirement_candidates rather than a run, because counting the
+    repo would reach the Hub. The gate is a pure name decision, so this is the whole
+    of its behaviour for the name.
+    """
+    assert _retirement_candidates("google/gemma-2") == ["google/gemma-2"]
+    assert _retirement_candidates("openrouter/xai/grok-3") == [
+        "openrouter/xai/grok-3",
+        "grok-3",
+    ]
 
 
 def test_a_prefixed_retired_name_still_counts_when_opted_in():

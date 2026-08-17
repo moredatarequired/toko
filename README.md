@@ -398,7 +398,7 @@ toko -m grok-3 --text "hello world"
 
 That is the point of the flag: `grok-3` still answers, but what answers is `grok-4.3`, so the number and its price belong to a model you did not ask for. With `--include-retired` the count happens, the warning stays on stderr, and JSON reports the `retirement` object alongside the count.
 
-The refusal follows the name rather than one spelling of it: surrounding whitespace, the `provider/model` form `--list-models` prints (`xai/grok-3`), a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. A prefix only counts when it names the provider the model belongs to, so a HuggingFace repo whose last segment happens to match another provider's retired name — `openai-community/gpt2`, `anthropic/curie` — is counted, not refused.
+The refusal follows the name rather than one spelling of it: surrounding whitespace, the `provider/model` form `--list-models` prints (`xai/grok-3`), a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. **A prefix is dropped only when dropping it does not move the name — when the whole name and its last segment resolve to the same provider — so `openrouter/text-davinci-003` and `/text-davinci-003` are the shut-down engine and are refused, while `google/gemma-2` stays the HuggingFace repo it resolves to rather than becoming Google's `gemma-2`.** A prefixed name that is alive is unaffected either way: `openai-community/gpt2` counts because `gpt2` counts.
 
 ```sh
 toko --list-models --include-retired | grep davinci

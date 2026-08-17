@@ -394,6 +394,25 @@ class TestRegistryParsing:
         assert "grok-imaginary-8" in err
         assert "grok-imaginary-9" in err
 
+    def test_an_empty_alias_is_ignored_out_loud(self, capsys):
+        """_clean_entry refuses an entry with no 'name', and an alias is a name too.
+
+        Registering "" made get_model("") resolve, which is the whole reason the empty
+        tail of "anthropic/" could reach a real model. The other aliases in the same
+        list still land, so one nonsense entry does not discard the rest.
+        """
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["", "grok-nickname"]
+        """)
+        assert registry.aliases["xai"] == {"grok-nickname": "grok-imaginary-9"}
+
+        err = capsys.readouterr().err
+        assert "empty alias" in err
+        assert "grok-imaginary-9" in err
+
     def test_only_aliasable_providers_may_declare_aliases(self, capsys):
         registry = _registry("""
             [[model]]
@@ -633,6 +652,30 @@ class TestUserOverlay:
         assert resolved.name == "models/davinci"
         assert "davinci" in reloaded.RETIRED_OPENAI_MODELS
         assert reloaded.retirement_of(resolved) is None
+
+    def test_an_empty_alias_is_refused_so_no_model_hides_behind_it(self, user_registry):
+        """The overlay that made _routed_model_name's `not tail` guard load-bearing.
+
+        An overlay is the only way "" ever resolved: _clean_entry refuses an empty
+        'name', so nothing packaged is reachable under it, but _build_aliases used to
+        accept an empty alias. With one declared on a retired model, get_model("")
+        returned that model, and _routed_model_name without its `not tail` check handed
+        "" to the gate as a candidate -- `toko -m anthropic/` then failed with
+        "model 'anthropic/' is retired (2026-05-15)" instead of the Hub lookup error it
+        gets today. This fences the rejection and the guard together: drop either and
+        the empty name has to stay unresolvable and the prefixed spelling unretired.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "grok-3"
+            provider = "xai"
+            aliases = [""]
+        """)
+        assert reloaded.get_model("grok-3").retired is not None
+        with pytest.raises(ValueError, match="Could not detect provider"):
+            reloaded.get_model("")
+        assert reloaded.retirement_candidates("anthropic/") == ["anthropic/"]
+        assert reloaded.retirement_for_requested("anthropic/") is None
 
     def test_a_capitalised_anthropic_name_keeps_its_tokenizer(self, user_registry):
         """Missing the registry entry would hand back a bare, untokenized model."""

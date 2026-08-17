@@ -213,6 +213,13 @@ def _build_aliases(
         for alias in declared:
             if not isinstance(alias, str):
                 continue
+            # _clean_entry already refuses an entry whose 'name' is empty, and an
+            # alias is a name too. Accepting one here made get_model("") resolve,
+            # which is what put a real model behind the empty tail of "anthropic/"
+            # and made the retirement gate's `not tail` guard load-bearing.
+            if not alias:
+                _warn(f"ignoring an empty alias on '{name}': an alias needs a name")
+                continue
             # Every lookup goes through a lowercased name, so an alias key that
             # kept its capitals would be registered and then never match.
             key = alias.lower()
@@ -876,10 +883,17 @@ def _routed_model_name(name: str) -> str | None:
     would be false about a repo that is still there.
     """
     prefix, separator, tail = name.rpartition("/")
-    # `not tail` is a shortcut, not a decision: a name ending in "/" would otherwise add
-    # "" as a retirement candidate, and no spelling of "" resolves -- get_model("") raises
-    # and retirement_for_requested swallows it -- so the verdict is unchanged either way,
-    # which makes it unreachable by any input.
+    # `not tail` keeps a name ending in "/" from adding "" as a retirement candidate.
+    # This comment used to call that unreachable. It was not: with an overlay declaring
+    # `aliases = [""]` on grok-3, `toko -m anthropic/` was run with this check dropped and
+    # printed "model 'anthropic/' is retired (2026-05-15)", because get_model("") resolved
+    # through that alias. _build_aliases now rejects an empty alias, and the same overlay
+    # and the same command were re-run with the check dropped: the empty candidate no
+    # longer resolves, retirement_for_requested returned None either way, and the suite
+    # stayed green. So it is inert as of that run, and it stays as the second half of the
+    # pair -- nothing else stops a future empty-name path from putting a model behind an
+    # empty tail. Both halves are fenced by
+    # test_an_empty_alias_is_refused_so_no_model_hides_behind_it.
     #
     # `not separator` is not independent of the dict.fromkeys dedupe in
     # retirement_candidates: neither changes an answer while the other stands, and

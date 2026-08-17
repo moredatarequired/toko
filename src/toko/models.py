@@ -351,9 +351,17 @@ def detect_provider(model: str) -> str | None:
     model_lower = model.lower()
     model_lower_base = model_lower.split("/")[-1]
 
+    # This loop is the only branch that reads the last segment alone; every branch below
+    # reads the whole name, which is why google/gemini-2.5-pro is huggingface and not
+    # google. So a prefixed name whose tail is a tiktoken name never reaches them at all.
     for tiktoken_model in TIKTOKEN_MODEL_TO_ENCODING:
         # If tiktoken prefix is in the model name, then the rest should be, e.g.
         # tiktoken includes gpt-5 which covers gpt-5, gpt-5-mini, gpt-5-nano, etc.
+        # The .lower() on the key is unreachable by any model name: all 45 keys in
+        # tiktoken's MODEL_TO_ENCODING are already lowercase, so it is the identity on
+        # every value it can be handed. Only an upstream release adding a capitalized key
+        # would reach it, which is what it is here for -- no test can fence it, because no
+        # input distinguishes it.
         if model_lower_base.startswith(tiktoken_model.lower()):
             return "openai"
 
@@ -390,11 +398,20 @@ def detect_provider(model: str) -> str | None:
     if model_lower.startswith("gpt-oss"):
         return "huggingface"
 
+    # "models/" is the Google API's own path prefix, not a Hub owner -- huggingface.co
+    # reserves /models, so no repo can be owned by it. The exemption is reachable, but not
+    # through Gemini or Gemma: the branch above returns for those first, so what it
+    # governs is the rest of Google's ListModels output (models/text-bison-001,
+    # models/embedding-001, models/aqa). Without it those resolve as huggingface and the
+    # run tells the user to "use the full model path (org/model-name)" for a name that
+    # already is Google's full path.
     if "/" in model_lower and not model_lower.startswith("models/"):
         return "huggingface"
 
     # Newer OpenAI names tiktoken has never heard of (gpt-6, gpt-5.6, o5). Checked
-    # last so gpt-oss and org-prefixed names keep their more specific providers.
+    # last so gpt-oss and org-prefixed names keep their more specific providers: an owner
+    # segment that merely opens like an OpenAI model (gpt-4-lab/mymodel, o1-labs/mymodel)
+    # must stay a Hub repo id rather than becoming an o200k_base guess.
     if _OPENAI_NAME_PATTERN.match(model_lower):
         return "openai"
 
@@ -813,6 +830,13 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
             else model_info.retired,
             redirects_to=model_info.redirects_to,
         )
+    # The provider check is unreachable as a behaviour change: every key in
+    # RETIRED_OPENAI_MODELS is detected as openai, and no registry entry is named after
+    # one under another provider, so no ModelInfo can reach this lookup as anything else.
+    # It stays because the table is OpenAI's alone -- a future Google "davinci" must not
+    # inherit an OpenAI shutdown date. The name.lower() beside it is reachable, and is
+    # fenced: `-m CURIE` builds an OpenAI ModelInfo that keeps the name as typed, and
+    # without the fold a shut-down engine counts instead of being refused.
     if model_info.provider == "openai" and name.lower() in RETIRED_OPENAI_MODELS:
         return Retirement(model=name.lower(), date=RETIRED_OPENAI_MODELS[name.lower()])
     return None
@@ -848,8 +872,19 @@ def _routed_model_name(name: str) -> str | None:
     would be false about a repo that is still there.
     """
     prefix, separator, tail = name.rpartition("/")
+    # `not tail` is a shortcut, not a decision: a name ending in "/" would otherwise add
+    # "" as a retirement candidate, and no spelling of "" resolves -- get_model("") raises
+    # and retirement_for_requested swallows it -- so the verdict is unchanged either way,
+    # which makes it unreachable by any input.
+    #
+    # `not separator` is not independent of the dict.fromkeys dedupe in
+    # retirement_candidates: neither changes an answer while the other stands, and
+    # dropping both duplicates every bare name. They are one guard between them, fenced
+    # jointly by test_a_bare_name_yields_exactly_one_candidate.
     if not separator or not tail:
         return None
+    # Each segment is case-folded because a user types the provider's branding ("XAI/",
+    # "OpenRouter/"), not the lowercase spelling --list-models prints.
     if all(
         not segment or segment.lower() in _ROUTING_PREFIX_SEGMENTS
         for segment in prefix.split("/")
@@ -877,8 +912,13 @@ def retirement_candidates(requested: str) -> list[str]:
     candidates: list[str] = []
     for base in bases:
         candidates.append(base)
+        # Folded because "grok-3-LATEST" is a spelling users type, and without the fold
+        # the alias is never stripped and the retired base name is never reached.
         if base.lower().endswith("-latest"):
             candidates.append(base[: -len("-latest")])
+    # Paired with the `not separator` guard in _routed_model_name -- see the note there.
+    # Each is inert only while the other stands, so they are fenced jointly by
+    # test_a_bare_name_yields_exactly_one_candidate rather than one test each.
     return list(dict.fromkeys(candidates))
 
 

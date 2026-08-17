@@ -368,6 +368,55 @@ def test_whitespace_and_multi_segment_prefixes_do_not_slip_past_the_gate(request
 
 
 @pytest.mark.parametrize(
+    ("requested", "date"),
+    [
+        # A routing segment typed in the provider's own branding. Without the case fold
+        # on each segment in _routed_model_name, "XAI" misses _ROUTING_PREFIX_SEGMENTS,
+        # the name reads as a Hub repo owned by "XAI", and grok-3 counts with no
+        # retirement notice at all -- exit 0 and a token count for a shut-down model.
+        ("XAI/grok-3", "2026-05-15"),
+        ("OpenRouter/xAI/grok-3", "2026-05-15"),
+        # The "-latest" fold in retirement_candidates. Without it the alias is never
+        # stripped, so the retired base name is never reached.
+        ("grok-3-LATEST", "2026-05-15"),
+        # The fold in retirement_of's RETIRED_OPENAI_MODELS lookup. detect_provider
+        # already lowercases, so "CURIE" resolves to an OpenAI ModelInfo -- but the
+        # ModelInfo keeps the name as typed, and the shut-down table is keyed lowercase.
+        ("CURIE", "2024-01-04"),
+        ("Text-Davinci-003", "2024-01-04"),
+    ],
+)
+def test_a_retired_name_is_refused_however_it_is_capitalized(requested, date):
+    """Three separate case folds stand between these spellings and a silent count.
+
+    Every other prefixed or aliased case in the suite is spelled lowercase, so all three
+    folds were unfenced: each could be dropped with 784 tests still green while the run
+    went from refused to counted. A user types the branding ("XAI", "OpenRouter") or an
+    old shouted engine name, not the lowercase spelling --list-models prints.
+    """
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert f"model '{requested}' is retired ({date})" in result.stderr
+
+
+def test_a_bare_name_yields_exactly_one_candidate():
+    """`not separator` and the dedupe are one guard between them, not two.
+
+    Each is inert only while the other stands, so mutating either alone proves nothing.
+    With no "/" in the name, rpartition leaves an empty prefix whose single empty segment
+    reads as routing, so dropping the `not separator` check makes _routed_model_name
+    return the whole name and retirement_candidates build it twice -- which dict.fromkeys
+    then collapses. Drop the dedupe instead and nothing duplicates, because the check
+    already returned None. Drop both and retirement_candidates("grok-3") is
+    ["grok-3", "grok-3"], which nothing else in the suite notices.
+    """
+    assert retirement_candidates("grok-3") == ["grok-3"]
+    assert retirement_candidates("grok-3-latest") == ["grok-3-latest", "grok-3"]
+
+
+@pytest.mark.parametrize(
     "requested",
     [
         # A real HuggingFace repo whose bare segment is a name OpenAI still serves.
@@ -386,10 +435,14 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
     test_a_huggingface_prefix_leaves_a_retired_tail_unread instead.
 
     The prefix is not inert outside the gate, and it costs both names the same thing.
-    detect_provider reads only the last segment, so both of these resolve as OpenAI and
-    neither reaches the Hub; the counter then hands tiktoken the whole name, prefix
-    included, which tiktoken has never seen, so both fall back to o200k_base and warn --
-    asserted below. That turns an exact count into a guess: on "Привет, мир! Как дела?",
+    detect_provider splits the name once up front, and its first loop -- the one over
+    tiktoken's model names -- is the only branch that reads that last segment alone;
+    every branch below it reads the whole name, which is why google/gemini-2.5-pro
+    resolves as huggingface and grok-lab/mymodel as xai. Both tails here are tiktoken
+    model names ("gpt2" and "babbage-002"), so that first loop returns OpenAI and returns
+    before the "/" branch further down can read either name as a Hub repo id. The counter
+    then hands tiktoken the whole name, prefix included, which tiktoken has never seen,
+    so both fall back to o200k_base and warn -- asserted below. That turns an exact count into a guess: on "Привет, мир! Как дела?",
     where the encodings disagree, bare babbage-002 counts 12 and bare gpt2 counts 23,
     while both spellings here count 8.
 
@@ -433,8 +486,9 @@ def test_an_owner_prefix_tiktoken_matches_picks_its_encoding_silently(
 ):
     """A prefix tiktoken matches costs an encoding, not a warning.
 
-    _count_openai hands tiktoken the requested name unaltered, and
-    MODEL_PREFIX_TO_ENCODING is matched with startswith, so an owner whose text opens
+    _count_openai lowercases the requested name and alters nothing else about it -- all
+    three names below are already lowercase, so what tiktoken sees is what was typed --
+    and MODEL_PREFIX_TO_ENCODING is matched with startswith, so an owner whose text opens
     with one of tiktoken's 12 non-ft: model prefixes selects that entry's encoding with
     approximate=False and nothing on stderr. None of these names is an OpenAI model, and
     none of the encodings picked is the one the tail would have used: bare gpt2 counts 23

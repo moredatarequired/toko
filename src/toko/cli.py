@@ -638,6 +638,42 @@ def _retired_model_error(requested: str, retirement: Retirement) -> str:
     )
 
 
+def _retirement_candidates(requested: str) -> list[str]:
+    """Spellings of one ``--model`` that name the same model for retirement purposes.
+
+    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix
+    that ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the
+    way the Anthropic and Google ones do. Testing the stripped spellings here refuses
+    a retired model under the name the user actually typed, and only ever decides
+    whether to refuse -- how a name counts is untouched. A HuggingFace repo whose bare
+    segment happens to match a retired name is refused rather than miscounted, and
+    ``--include-retired`` says to count it anyway.
+    """
+    bases = [requested]
+    _, separator, tail = requested.partition("/")
+    if separator and tail:
+        bases.append(tail)
+
+    candidates: list[str] = []
+    for base in bases:
+        candidates.append(base)
+        if base.lower().endswith("-latest"):
+            candidates.append(base[: -len("-latest")])
+    return list(dict.fromkeys(candidates))
+
+
+def _retirement_for(requested: str) -> Retirement | None:
+    for candidate in _retirement_candidates(requested):
+        try:
+            model_info = get_model(candidate)
+        except ValueError:
+            continue
+        retirement = retirement_of(model_info)
+        if retirement is not None:
+            return retirement
+    return None
+
+
 def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
     """Refuse a retired model before anything is read or counted.
 
@@ -652,11 +688,7 @@ def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
 
     errors: list[str] = []
     for requested in models:
-        try:
-            model_info = get_model(requested)
-        except ValueError:
-            continue
-        retirement = retirement_of(model_info)
+        retirement = _retirement_for(requested)
         if retirement is not None:
             errors.append(_retired_model_error(requested, retirement))
 

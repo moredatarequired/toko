@@ -367,6 +367,8 @@ toko -m grok-3 --text "hello world"
 
 That is the point of the flag: `grok-3` still answers, but what answers is `grok-4.3`, so the number and its price belong to a model you did not ask for. With `--include-retired` the count happens, the warning stays on stderr, and JSON reports the `retirement` object alongside the count.
 
+The refusal follows the name rather than one spelling of it: the `provider/model` form `--list-models` prints (`xai/grok-3`) and a `-latest` alias of a retired model (`grok-3-latest`) are refused too. It errs towards refusing — a HuggingFace repo whose last segment happens to match a retired name is refused rather than quietly counted — and `--include-retired` counts it anyway.
+
 ```sh
 toko --list-models --include-retired | grep davinci
 ```

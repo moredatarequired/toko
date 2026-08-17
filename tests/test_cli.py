@@ -199,6 +199,56 @@ def test_a_retired_model_without_a_redirect_target_says_only_that_it_is_retired(
     assert error.endswith("Pass --include-retired to count with it anyway.")
 
 
+@pytest.mark.parametrize(
+    ("requested", "retired"),
+    [
+        # The exact spelling --list-models --include-retired prints, which the README
+        # sends users to grep.
+        ("xai/grok-3", "grok-3"),
+        ("openai/text-davinci-003", "text-davinci-003"),
+        # get_model's xAI resolver never strips "-latest" the way the Anthropic and
+        # Google ones do, so this used to resolve to a fresh, unretired ModelInfo.
+        ("grok-3-latest", "grok-3"),
+    ],
+)
+def test_a_retired_model_is_refused_under_the_names_that_reach_it(requested, retired):
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert result.stderr.splitlines()[0].startswith(
+        f"Error: model '{requested}' is retired ("
+    )
+    assert retired in result.stderr
+
+
+def test_a_prefixed_retired_name_still_counts_when_opted_in():
+    """--include-retired is the escape hatch for a name the gate now catches.
+
+    The count it produces is the one this spelling always produced: the gate only
+    refuses, it never resolves a name for counting.
+    """
+    result = _invoke_cli(
+        ["--include-retired", "-m", "openai/text-davinci-003", "--text", "hello world"]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "openai/text-davinci-003\t2\ttrue"
+
+
+def test_the_gate_leaves_a_live_provider_prefixed_name_resolving_as_it_did():
+    """The gate only decides whether to refuse; it fixes none of get_model's gaps.
+
+    openai/gpt-3.5-turbo still misses the registry and is estimated with o200k_base,
+    exactly as it was before the gate learned to strip the prefix.
+    """
+    result = _invoke_cli(["-m", "openai/gpt-3.5-turbo", "--text", "hello world"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "openai/gpt-3.5-turbo\t2\ttrue"
+    assert "unknown OpenAI model 'openai/gpt-3.5-turbo'" in result.stderr
+
+
 def test_one_retired_model_fails_the_whole_run_before_anything_is_counted(tmp_path):
     """The run fails whole rather than printing a table with one column missing."""
     sample = tmp_path / "sample.txt"

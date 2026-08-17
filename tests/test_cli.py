@@ -154,6 +154,18 @@ def test_list_models_hides_retired_engines_without_the_flag():
     assert "openai/gpt-4" in default.stdout.splitlines()
 
 
+@pytest.mark.parametrize(
+    "hidden", ["gpt-35-turbo", "gpt-3.5", "gpt2", "gpt-2", "babbage-002", "davinci-002"]
+)
+def test_a_name_that_counts_can_still_be_hidden_from_the_listing(hidden):
+    """Hiding and refusing are separate decisions; these are hidden but not refused."""
+    default = _invoke_cli(["--list-models"])
+    with_retired = _invoke_cli(["--list-models", "--include-retired"])
+
+    assert f"openai/{hidden}" not in default.stdout.splitlines()
+    assert f"openai/{hidden}" in with_retired.stdout.splitlines()
+
+
 def test_a_retired_openai_engine_is_refused_without_the_flag(tmp_path):
     """RETIRED_OPENAI_MODELS was silent before; naming one is now an error."""
     sample = tmp_path / "sample.txt"
@@ -162,7 +174,7 @@ def test_a_retired_openai_engine_is_refused_without_the_flag(tmp_path):
     result = _invoke_cli(["--format", "csv", "-m", "text-davinci-003", str(sample)])
 
     assert result.exit_code == 1
-    assert "model 'text-davinci-003' is retired (date unknown)." in result.stderr
+    assert "model 'text-davinci-003' is retired (2024-01-04)." in result.stderr
     assert "--include-retired" in result.stderr
     assert result.stdout.strip() == ""
 
@@ -220,6 +232,58 @@ def test_a_retired_model_is_refused_under_the_names_that_reach_it(requested, ret
         f"Error: model '{requested}' is retired ("
     )
     assert retired in result.stderr
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        # The Azure deployment spelling of gpt-3.5-turbo, which does not shut down
+        # until 2026-10-23. Refusing it while accepting gpt-3.5-turbo is arbitrary.
+        "gpt-35-turbo",
+        # A family shorthand, not an API name, but it resolves to the encoding the
+        # live gpt-3.5-turbo family uses.
+        "gpt-3.5",
+        # Shutdown 2026-09-28, so still served today.
+        "babbage-002",
+        "davinci-002",
+        # Open weights that were never OpenAI API models, so they never retired.
+        "gpt2",
+        "gpt-2",
+    ],
+)
+def test_a_name_openai_still_serves_is_not_refused_as_retired(requested):
+    """These are hidden from --list-models, which is not the same as being dead."""
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 0
+    assert "retired" not in result.stderr
+    assert result.stdout.strip() == "2"
+
+
+@pytest.mark.parametrize(
+    ("requested", "when"),
+    [
+        ("text-davinci-003", "2024-01-04"),
+        ("curie", "2024-01-04"),
+        ("davinci", "2024-01-04"),
+        ("text-similarity-ada-001", "2024-01-04"),
+        ("code-davinci-001", "2023-03-23"),
+        ("code-cushman-001", "2023-03-23"),
+        # A /v1/engines-era name withdrawn before OpenAI published shutdown tables,
+        # so there is genuinely no date to quote.
+        ("cushman-codex", "date unknown"),
+        ("davinci-codex", "date unknown"),
+    ],
+)
+def test_a_shut_down_openai_engine_is_refused_with_its_recorded_date(requested, when):
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert result.stderr.splitlines()[0] == (
+        f"Error: model '{requested}' is retired ({when}). "
+        "Pass --include-retired to count with it anyway."
+    )
 
 
 def test_a_prefixed_retired_name_still_counts_when_opted_in():

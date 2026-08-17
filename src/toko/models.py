@@ -9,6 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources, util
+from types import MappingProxyType
 
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
@@ -556,51 +557,75 @@ MISTRAL_MODELS: tuple[str, ...] = (
     "mistral-large-2411",
 )
 
-# Names tiktoken still carries in MODEL_TO_ENCODING that --list-models should not
-# advertise. They tokenize fine, so counting is untouched; they are only hidden from
-# the default listing. As of 2026-08-11 that covers OpenAI engines already shut down,
-# babbage-002 and davinci-002 (no new fine-tuning since 2024-10-28, API shutdown
-# 2026-09-28, and genai-prices no longer prices them), and gpt-35-turbo, which is the
-# Azure deployment spelling of gpt-3.5-turbo rather than a name the OpenAI API accepts.
-# Deliberately absent because they are still live: gpt-3.5-turbo, gpt-4 (both shut down
-# 2026-10-23) and text-embedding-ada-002.
-RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
+# OpenAI engines tiktoken still tokenizes that the API has already shut down, mapped to
+# the shutdown date OpenAI published (https://developers.openai.com/api/docs/deprecations).
+# This is the set the retirement gate reads, so membership has to mean "naming this gets
+# the request rejected" and nothing weaker: refusing a name the API still serves costs a
+# user a count they were entitled to. Every date below is the last one OpenAI published
+# for that name -- code-davinci-002 appears in both the 2023-03-20 Codex wave and the
+# 2023-07-06 base-model wave, and the later shutdown is the one that happened.
+# cushman-codex and davinci-codex are None because they are /v1/engines-era names that
+# were withdrawn before OpenAI kept shutdown tables at all, so no date exists to quote.
+# Names that tiktoken carries and --list-models hides but that are NOT here, because the
+# API or the weights still answer for them, are in UNLISTED_OPENAI_MODELS below.
+RETIRED_OPENAI_MODELS = MappingProxyType(
     {
-        "ada",
-        "babbage",
-        "babbage-002",
-        "code-cushman-001",
-        "code-cushman-002",
-        "code-davinci-001",
-        "code-davinci-002",
-        "code-davinci-edit-001",
-        "code-search-ada-code-001",
-        "code-search-babbage-code-001",
-        "curie",
-        "cushman-codex",
-        "davinci",
-        "davinci-002",
-        "davinci-codex",
-        "gpt-2",
-        "gpt-3.5",
-        "gpt-35-turbo",
-        "gpt2",
-        "text-ada-001",
-        "text-babbage-001",
-        "text-curie-001",
-        "text-davinci-001",
-        "text-davinci-002",
-        "text-davinci-003",
-        "text-davinci-edit-001",
-        "text-search-ada-doc-001",
-        "text-search-babbage-doc-001",
-        "text-search-curie-doc-001",
-        "text-search-davinci-doc-001",
-        "text-similarity-ada-001",
-        "text-similarity-babbage-001",
-        "text-similarity-curie-001",
-        "text-similarity-davinci-001",
+        "ada": "2024-01-04",
+        "babbage": "2024-01-04",
+        "code-cushman-001": "2023-03-23",
+        "code-cushman-002": "2023-03-23",
+        "code-davinci-001": "2023-03-23",
+        "code-davinci-002": "2024-01-04",
+        "code-davinci-edit-001": "2024-01-04",
+        "code-search-ada-code-001": "2024-01-04",
+        "code-search-babbage-code-001": "2024-01-04",
+        "curie": "2024-01-04",
+        "cushman-codex": None,
+        "davinci": "2024-01-04",
+        "davinci-codex": None,
+        "text-ada-001": "2024-01-04",
+        "text-babbage-001": "2024-01-04",
+        "text-curie-001": "2024-01-04",
+        "text-davinci-001": "2024-01-04",
+        "text-davinci-002": "2024-01-04",
+        "text-davinci-003": "2024-01-04",
+        "text-davinci-edit-001": "2024-01-04",
+        "text-search-ada-doc-001": "2024-01-04",
+        "text-search-babbage-doc-001": "2024-01-04",
+        "text-search-curie-doc-001": "2024-01-04",
+        "text-search-davinci-doc-001": "2024-01-04",
+        "text-similarity-ada-001": "2024-01-04",
+        "text-similarity-babbage-001": "2024-01-04",
+        "text-similarity-curie-001": "2024-01-04",
+        "text-similarity-davinci-001": "2024-01-04",
     }
+)
+
+# Live names that --list-models still should not advertise, either because the API is
+# about to drop them or because they are not OpenAI API names at all. Hiding a name only
+# keeps it out of the default listing; it tokenizes, it counts, and the gate never reads
+# this set, so nothing here can be refused. As of 2026-08-17:
+#   babbage-002, davinci-002 -- fine-tuning closed 2024-10-28 and the API shuts them down
+#     2026-09-28, but that is still in the future and genai-prices no longer prices them,
+#     so they are hidden rather than recommended.
+#   gpt-35-turbo -- the Azure deployment spelling of gpt-3.5-turbo (Azure forbids dots in
+#     deployment names). Same cl100k_base encoding and same price; Azure serves it, and
+#     gpt-3.5-turbo itself does not shut down until 2026-10-23. Accepting one spelling and
+#     refusing the other would be arbitrary, so it counts but stays out of the listing.
+#   gpt-3.5 -- a family shorthand, not a name any API accepts, but it resolves to the
+#     cl100k_base encoding the live gpt-3.5-turbo family uses, so the count it gives is
+#     correct and calling it retired would not be.
+#   gpt2, gpt-2 -- open-weights models that were never OpenAI API models, so they have no
+#     retirement to report; they are counted from the gpt2 encoding.
+_UNADVERTISED_LIVE_OPENAI_MODELS: frozenset[str] = frozenset(
+    {"babbage-002", "davinci-002", "gpt-2", "gpt-3.5", "gpt-35-turbo", "gpt2"}
+)
+
+# The --list-models visibility filter: every tiktoken name the default listing hides.
+# Deliberately absent because they are both live and worth advertising: gpt-3.5-turbo and
+# gpt-4 (shutdown 2026-10-23), and text-embedding-ada-002.
+UNLISTED_OPENAI_MODELS: frozenset[str] = (
+    frozenset(RETIRED_OPENAI_MODELS) | _UNADVERTISED_LIVE_OPENAI_MODELS
 )
 
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS, **OPENAI_MODELS}
@@ -770,8 +795,9 @@ def get_model(name: str) -> ModelInfo:
 def retirement_of(model_info: ModelInfo) -> Retirement | None:
     """Report what toko knows about a model's retirement, across both of its sources.
 
-    The registry carries dates and redirect targets; RETIRED_OPENAI_MODELS is a bare
-    list of OpenAI engines tiktoken still tokenizes, with neither. Callers should not
+    The registry carries dates and redirect targets; RETIRED_OPENAI_MODELS carries a
+    shutdown date for the OpenAI engines tiktoken still tokenizes, and no redirect
+    target because a shut-down engine has nothing to redirect to. Callers should not
     have to know which mechanism caught a name, so both answer here.
     """
     # Google's canonical names carry the API's "models/" prefix, which is an
@@ -786,7 +812,7 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
             redirects_to=model_info.redirects_to,
         )
     if model_info.provider == "openai" and name.lower() in RETIRED_OPENAI_MODELS:
-        return Retirement(model=name.lower())
+        return Retirement(model=name.lower(), date=RETIRED_OPENAI_MODELS[name.lower()])
     return None
 
 
@@ -812,9 +838,10 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
     """List all supported models grouped by provider.
 
     Args:
-        include_retired: Also list models the provider has retired. They stay in
-            the registry so toko can explain the failure, but they are hidden by
-            default because they can no longer be counted.
+        include_retired: Also list the names the default listing hides -- models the
+            provider has retired, which stay in the registry so toko can explain the
+            failure, plus the live-but-unadvertised tiktoken names in
+            UNLISTED_OPENAI_MODELS.
 
     Returns:
         Dictionary mapping provider name to list of model names
@@ -829,7 +856,7 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
         providers[model.provider].add(model.name)
 
     for model_name in TIKTOKEN_MODEL_TO_ENCODING:
-        if not include_retired and model_name in RETIRED_OPENAI_MODELS:
+        if not include_retired and model_name in UNLISTED_OPENAI_MODELS:
             continue
         provider = detect_provider(model_name)
         if provider is None:

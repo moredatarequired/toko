@@ -381,17 +381,28 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
 
     That makes this a check on the gate's verdict for a live name, not on the stripping
     rule -- the rule's two branches agree here, and the carve-outs are fenced by
-    test_a_repo_owner_prefix_leaves_a_retired_tail_unread and
-    test_a_google_prefix_leaves_a_retired_gemini_unread instead.
+    test_a_repo_owner_prefix_leaves_a_retired_tail_unread,
+    test_a_google_prefix_leaves_a_retired_gemini_unread and
+    test_a_huggingface_prefix_leaves_a_retired_tail_unread instead.
 
-    The prefix is not inert outside the gate: "openai/babbage-002" is stripped, so the
-    name resolves as OpenAI's and warns that it is estimating with o200k_base, while
-    "openai-community/gpt2" keeps its prefix and resolves as the Hub repo.
+    The prefix is not inert outside the gate, and it costs both names the same thing.
+    detect_provider reads only the last segment, so both of these resolve as OpenAI and
+    neither reaches the Hub; the counter then hands tiktoken the whole name, prefix
+    included, which tiktoken has never seen, so both fall back to o200k_base and warn --
+    asserted below. That turns an exact count into a guess: on "Привет, мир! Как дела?",
+    where the encodings disagree, bare babbage-002 counts 12 and bare gpt2 counts 23,
+    while both spellings here count 8. No owner-style prefix escapes this; the only
+    prefixes tiktoken's table carries are the ft: ones, and toko fails to detect a
+    provider for those at all, so tiktoken never sees them.
     """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 0
     assert "retired" not in result.stderr
+    assert (
+        f"Warning: unknown OpenAI model '{requested}'; estimating with o200k_base"
+        in result.stderr
+    )
 
 
 @pytest.mark.parametrize(

@@ -830,13 +830,17 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
             else model_info.retired,
             redirects_to=model_info.redirects_to,
         )
-    # The provider check is unreachable as a behaviour change: every key in
-    # RETIRED_OPENAI_MODELS is detected as openai, and no registry entry is named after
-    # one under another provider, so no ModelInfo can reach this lookup as anything else.
-    # It stays because the table is OpenAI's alone -- a future Google "davinci" must not
-    # inherit an OpenAI shutdown date. The name.lower() beside it is reachable, and is
-    # fenced: `-m CURIE` builds an OpenAI ModelInfo that keeps the name as typed, and
-    # without the fold a shut-down engine counts instead of being refused.
+    # The provider check changes behaviour, and only a user registry reaches it. Both
+    # halves hold for the packaged registry -- every key in RETIRED_OPENAI_MODELS detects
+    # as openai, and no packaged entry is named after one under another provider -- but
+    # ~/.config/toko/models.toml is a supported input merged over it, and an entry naming
+    # `davinci` under provider `google` builds a Google ModelInfo whose name, once
+    # "models/" is stripped above, is a key in this table. Without the check that model
+    # reports OpenAI's 2024-01-04 shutdown, which is false about the user's own model.
+    # Fenced by test_a_user_model_named_after_a_shut_down_openai_engine_is_not_retired.
+    # The name.lower() beside it is reachable too, and fenced: `-m CURIE` builds an
+    # OpenAI ModelInfo that keeps the name as typed, and without the fold a shut-down
+    # engine counts instead of being refused.
     if model_info.provider == "openai" and name.lower() in RETIRED_OPENAI_MODELS:
         return Retirement(model=name.lower(), date=RETIRED_OPENAI_MODELS[name.lower()])
     return None
@@ -896,14 +900,17 @@ def _routed_model_name(name: str) -> str | None:
 def retirement_candidates(requested: str) -> list[str]:
     """Spellings of one ``--model`` that name the same model for retirement purposes.
 
-    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix that
-    ``--list-models`` prints, and of the three ``-latest`` resolvers only Anthropic's
-    strips the suffix. Google's returns the alias unstripped on purpose -- it sends the
-    alias to ``countTokens`` rather than pin a target that goes stale -- and xAI's has
-    no entry to match it, so an xAI ``-latest`` name reaches nothing that could report
-    a retirement. Normalizing here lets a retired model be recognised under the name
-    the user actually typed. It decides only what is retired -- how a name counts is
-    untouched.
+    ``get_model`` cannot be relied on to reach the retired model behind these: it never
+    strips the ``provider/`` prefix that ``--list-models`` prints, and of the three
+    ``-latest`` resolvers only Anthropic's strips the suffix. Google's returns the alias
+    unstripped on purpose -- it sends the alias to ``countTokens`` rather than pin a
+    target that goes stale. xAI's does not strip either; it matches only the ``-latest``
+    names the registry declares as aliases, so ``grok-4-latest`` resolves to the retired
+    ``grok-4-0709`` and reports that retirement on its own, while an undeclared
+    ``grok-3-latest`` reaches a bare, unretired entry even though ``grok-3`` is retired.
+    Stripping the suffix below is what closes that gap. Normalizing here lets a retired
+    model be recognised under the name the user actually typed. It decides only what is
+    retired -- how a name counts is untouched.
     """
     name = requested.strip()
 

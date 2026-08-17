@@ -612,6 +612,28 @@ class TestUserOverlay:
             assert resolved.name == "gpt-imaginary-9"
             assert resolved.retired == "2099-01-01"
 
+    def test_a_user_model_named_after_a_shut_down_openai_engine_is_not_retired(
+        self, user_registry
+    ):
+        """RETIRED_OPENAI_MODELS carries OpenAI's shutdowns, and only OpenAI's.
+
+        A user registry is what makes retirement_of's provider check reachable:
+        "davinci" is a key in that table, and the Google builder prefixes the name
+        to "models/davinci", which retirement_of strips straight back to the key.
+        Without the check this model inherits an OpenAI date it has nothing to do
+        with.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "davinci"
+            provider = "google"
+        """)
+        resolved = reloaded.get_model("davinci")
+        assert resolved.provider == "google"
+        assert resolved.name == "models/davinci"
+        assert "davinci" in reloaded.RETIRED_OPENAI_MODELS
+        assert reloaded.retirement_of(resolved) is None
+
     def test_a_capitalised_anthropic_name_keeps_its_tokenizer(self, user_registry):
         """Missing the registry entry would hand back a bare, untokenized model."""
         reloaded = user_registry("""

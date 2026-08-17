@@ -677,6 +677,42 @@ class TestUserOverlay:
         assert reloaded.retirement_candidates("anthropic/") == ["anthropic/"]
         assert reloaded.retirement_for_requested("anthropic/") is None
 
+    def test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement(
+        self, user_registry
+    ):
+        """The typed spelling comes before the routed one, not just before its -latest strip.
+
+        test_the_spelling_as_typed_decides_which_retirement_is_reported fences the
+        -latest axis only: building retirement_candidates' `bases` routed-first killed
+        nothing across 802 tests, because no packaged name is registered under both a
+        routed spelling and its tail. An overlay is what makes the axis reachable -- a
+        registry entry may be named for the full routed spelling and carry its own date,
+        and routed-first then answers for the tail model instead, contradicting
+        retirement_for_requested's "as spelled" contract with a date and a redirect that
+        belong to a different model.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "openrouter/xai/grok-3"
+            provider = "xai"
+            retired = "2031-12-31"
+        """)
+        reported = reloaded.retirement_for_requested("openrouter/xai/grok-3")
+        assert reported.model == "openrouter/xai/grok-3"
+        assert reported.date == "2031-12-31"
+        assert reported.redirects_to is None
+
+        assert reloaded.retirement_candidates("openrouter/xai/grok-3") == [
+            "openrouter/xai/grok-3",
+            "grok-3",
+        ]
+        tail = reloaded.retirement_for_requested("grok-3")
+        assert (tail.model, tail.date, tail.redirects_to) == (
+            "grok-3",
+            "2026-05-15",
+            "grok-4.3",
+        )
+
     def test_a_capitalised_anthropic_name_keeps_its_tokenizer(self, user_registry):
         """Missing the registry entry would hand back a bare, untokenized model."""
         reloaded = user_registry("""

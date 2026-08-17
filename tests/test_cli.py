@@ -706,11 +706,18 @@ def test_the_spelling_as_typed_decides_which_retirement_is_reported():
     The order is the whole of "as spelled": the typed name comes before its -latest
     strip, so a spelling that resolves on its own reports its own retirement. Reversing
     the loop in retirement_for_requested killed nothing across 796 tests while moving the
-    reported retirement on 30 of the 2236 prefixed and -latest spellings probed, 10 of
-    them to a different date. This is one of those 10: Google's -latest pass-through
-    resolves the typed name to the gemini-2.0-flash-001 family it would serve, retired
-    2026-06-01, while the suffix-stripped base is its own registry entry retired
-    2025-11-14. A silently different date is exactly what the gate exists to prevent.
+    reported retirement onto the stripped base for every -latest spelling in the
+    gemini-2.0-flash family -- 11 of them across the registry's names and Google's
+    declared aliases -- and onto a different date for exactly one. This is that one:
+    Google's -latest pass-through resolves the typed name to the gemini-2.0-flash-001
+    family it would serve, retired 2026-06-01, while the suffix-stripped base is its own
+    registry entry retired 2025-11-14. A silently different date is exactly what the gate
+    exists to prevent.
+
+    This sees the loop's order alone. The name below has no "/", so retirement_candidates
+    builds the same list from it whichever order its `bases` are built in, and building
+    them routed-first leaves this test green; that half is fenced by
+    test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement.
     """
     typed = "gemini-2.0-flash-preview-image-generation-latest"
     stripped = "gemini-2.0-flash-preview-image-generation"

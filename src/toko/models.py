@@ -938,6 +938,10 @@ def retirement_candidates(requested: str) -> list[str]:
     """
     name = requested.strip()
 
+    # Typed spelling before routed: retirement_for_requested reports the first candidate
+    # that resolves, and the routed tail can be a different registry entry with its own
+    # date and redirect, so routed-first answers for a model the user did not name.
+    # Fenced by test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement.
     bases = [name]
     routed = _routed_model_name(name)
     if routed is not None:
@@ -969,9 +973,20 @@ def retirement_for_requested(requested: str) -> Retirement | None:
     The candidate order is what "as spelled" means, so this walk is first-non-None and
     not any-non-None: the typed spelling is reported when it resolves, and only a
     normalization of it answers otherwise. Reversing the loop left all 796 tests green
-    while moving the reported retirement on 30 of 2236 probed spellings, 10 of them onto
-    a different date. Fenced by
-    test_the_spelling_as_typed_decides_which_retirement_is_reported.
+    while moving the reported retirement onto the suffix-stripped base for every
+    "-latest" spelling in the gemini-2.0-flash family -- 11 of them across the registry's
+    names and Google's declared aliases, whatever prefixes each is probed behind -- and
+    onto a different date for exactly one of those, namely
+    gemini-2.0-flash-preview-image-generation-latest: 2026-06-01 as typed against
+    2025-11-14 stripped.
+
+    Two orderings carry "as spelled" between them, and they need separate fences.
+    test_the_spelling_as_typed_decides_which_retirement_is_reported fences this loop
+    only: the name it asserts on has no "/", so retirement_candidates builds the same
+    list from it whichever order `bases` is built in, and building `bases` routed-first
+    leaves that test passing. The typed-before-routed half of the order is fenced by
+    test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement, which kills
+    the routed-first build and this reversal alike.
     """
     for candidate in retirement_candidates(requested):
         try:

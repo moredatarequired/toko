@@ -63,8 +63,8 @@ never a major-bump break.
 
 Prices move without any toko release at all. They start from the data bundled inside
 `genai-prices` and refresh from that project's upstream feed into `prices.json` in
-toko's cache directory — `$XDG_CACHE_HOME` when it is set, otherwise the platform's
-own cache location — once you run `toko update-prices` or turn on
+toko's cache directory — `$XDG_CACHE_HOME/toko` when it is set, otherwise the
+platform's own cache location — once you run `toko update-prices` or turn on
 `auto_update_prices`, so two runs of the same toko version can quote different costs.
 Cost output is an estimate that changes under you by design.
 

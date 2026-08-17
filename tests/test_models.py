@@ -21,6 +21,14 @@ from toko.result import TokenCount
         ("gpt-oss-20b", "huggingface"),
         ("openai/gpt-oss-120b", "huggingface"),
         ("claude-opus-4-5", "anthropic"),
+        # google/ is a Hub organisation, so a gemma or gemini tail under it names a repo
+        # rather than Google's own model. Nothing else in the suite dies when detection
+        # stops exempting the owner: counting either of these needs Hub credentials, and
+        # under the exemption dropped they resolve as Google's models/gemma-3-1b-it and
+        # go to the Google API instead.
+        ("google/gemma-3-1b-it", "huggingface"),
+        ("google/gemini-2.5-pro", "huggingface"),
+        ("gemma-3-1b-it", "google"),
         # Mistral families named after neither mistral nor mixtral. Detection is what
         # decides whether these count at all, and each of the three used to fail here.
         ("mistral-large-2411", "mistral"),

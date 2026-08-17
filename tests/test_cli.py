@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
-from toko.cost import format_cost
+from toko.cost import format_cost, format_cost_value
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
@@ -681,6 +681,22 @@ def test_a_fraction_of_a_cent_keeps_the_precision_the_display_format_drops(tmp_p
     # is why the machine-readable column cannot borrow it.
     assert format_cost(cost) == "$0.000001"
     assert cost != float(format_cost(cost).lstrip("$"))
+
+
+@pytest.mark.parametrize(
+    "cost", [1234.5678, 98765.4321, 0.000123456789, 1e-06, 5.5e-05]
+)
+def test_delimited_cost_cell_round_trips_without_rounding(cost):
+    """A total too large for six significant figures still has to survive the cell.
+
+    Reached directly rather than through the CLI: a run that really costs $1234
+    is not something a test can manufacture.
+    """
+    assert float(format_cost_value(cost)) == cost
+
+
+def test_delimited_cost_cell_suppresses_float_accumulation_noise():
+    assert format_cost_value(0.1 + 0.2) == "0.3"
 
 
 def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():

@@ -405,6 +405,14 @@ just check-all     # run the full set of checks
 just update-readme # re-run the examples above and paste back what they print
 ```
 
+## Stability
+
+Toko is pre-1.0, and while the major is 0 a minor bump is allowed to break you:
+breaking changes land in the minor rather than the major. Pin to a minor
+(`toko~=0.3.0`) and read the changelog before moving. [VERSIONING.md](VERSIONING.md)
+covers what 1.0 will commit to, what stays outside it, and how deprecations are
+handled.
+
 ## License
 
 MIT

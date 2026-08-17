@@ -232,10 +232,9 @@ program instead:
 - **A bare number, never a currency symbol** — no `$`, and no rounding to `0.000000`
   for a fraction of a cent. `float()` accepts every non-empty cell toko writes; the one
   cell it will not accept is the empty one described in the last bullet.
-- **Always positional decimal, never an exponent.** A cost of three ten-thousandths of
-  a cent is written `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column
-  correctly and `bc` can read a cell at all — both of which mis-handle exponent form,
-  `sort -n` silently.
+- **Always positional decimal, never an exponent.** A fraction of a cent is written
+  `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column correctly and `bc`
+  can read a cell at all — both of which mis-handle exponent form, `sort -n` silently.
 - **The same number as `--format json` reports.** A cost is rounded to twelve
   significant digits once, where it is produced, so the delimited cell and the JSON
   number are one value written two ways. Where there is no cost the two say so

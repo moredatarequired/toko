@@ -646,6 +646,30 @@ def test_distinct_caveats_across_models_merge_without_losing_or_crossing(tmp_pat
     assert totals["gpt-5"]["caveats"] == []
 
 
+def test_json_lists_one_model_order_across_a_multi_model_multi_file_run(tmp_path):
+    """The case that was untested: several models over several files.
+
+    results[].counts and totals hold one count object per model in the same shape, so a
+    reader zips them by index, and two orders in one document misattribute silently.
+    """
+    args = _two_file_args(tmp_path)
+    result = _invoke_cli(
+        ["--format", "json", "-m", "gpt-5", "-m", "gpt-4o-mini", *args]
+    )
+
+    assert result.exit_code == 0
+    payload = _envelope(result)
+    orders = [
+        [count["model"] for count in counts]
+        for counts in [
+            *(result_entry["counts"] for result_entry in payload["results"]),
+            payload["totals"],
+        ]
+    ]
+    # The order the models were named, everywhere in the document.
+    assert orders == [["gpt-5", "gpt-4o-mini"]] * 3
+
+
 def test_csv_and_tsv_costs_are_bare_numbers_and_text_keeps_the_dollar_sign(monkeypatch):
     args = ["--cost", "--header", "-m", "gpt-5", "--text", "hello world"]
     csv_run = _invoke_cli(["--format", "csv", *args])
@@ -1259,7 +1283,7 @@ def test_concurrent_counting_matches_a_sequential_run(tmp_path):
     assert concurrent.stdout == sequential.stdout
 
     rows = _csv_rows(concurrent.stdout)
-    assert rows[0] == ["file", "gpt-4", "gpt-5"]
+    assert rows[0] == ["file", "gpt-5", "gpt-4"]
     assert rows[1][0] == str(tree / "aaa_big.txt")
     assert [row[0] for row in rows[1:]] == [
         str(path) for path in sorted(tree.iterdir())
@@ -1340,9 +1364,9 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
     rows = _csv_rows(result.stdout)
-    assert rows[0] == ["file", "gpt-4", "gpt-5"]
+    assert rows[0] == ["file", "gpt-5", "gpt-4"]
     assert len(rows) == 14
-    for path, gpt_4, gpt_5 in rows[1:]:
+    for path, gpt_5, gpt_4 in rows[1:]:
         content = Path(path).read_text()
         # Every count the run reported is readable again under its own model, so no
         # write landed under another thread's key or was lost to a locked database.

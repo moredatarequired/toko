@@ -172,6 +172,69 @@ def test_file_json_distinguishes_a_url_from_a_path():
     ]
 
 
+def _two_models() -> dict[str, dict[str, TokenCount]]:
+    return {
+        "a.txt": {
+            "gpt-5": _counted(2),
+            "gpt-4o-mini": _counted(3, model="gpt-4o-mini"),
+        },
+        "b.txt": {
+            "gpt-5": _counted(4),
+            "gpt-4o-mini": _counted(5, model="gpt-4o-mini"),
+        },
+    }
+
+
+def _model_orders(payload) -> list[list[str]]:
+    arrays = [result["counts"] for result in payload["results"]]
+    arrays.append(payload["totals"])
+    return [[count["model"] for count in counts] for counts in arrays]
+
+
+def test_every_json_array_lists_its_models_in_the_same_order():
+    """Every count array is zippable against every other.
+
+    A count object has one shape, so lining the arrays up by index is the obvious thing
+    to do, and two orders in one document silently misattribute.
+    """
+    payload = json.loads(format_file_table(_two_models(), output_format="json"))
+
+    assert _model_orders(payload) == [["gpt-5", "gpt-4o-mini"]] * 3
+
+
+def test_a_source_lists_its_models_in_the_document_order_not_its_own():
+    # The leading model missed the first file, so the document's order is not the order
+    # the second file's counts were collected in.
+    file_results = {
+        "a.txt": {"gpt-4o-mini": _counted(3, model="gpt-4o-mini")},
+        "b.txt": {
+            "gpt-5": _counted(4),
+            "gpt-4o-mini": _counted(5, model="gpt-4o-mini"),
+        },
+    }
+    payload = json.loads(format_file_table(file_results, output_format="json"))
+
+    assert _model_orders(payload) == [
+        ["gpt-4o-mini"],
+        ["gpt-4o-mini", "gpt-5"],
+        ["gpt-4o-mini", "gpt-5"],
+    ]
+
+
+def test_delimited_columns_follow_the_order_the_models_were_named():
+    output = format_file_table(_two_models(), output_format="csv")
+
+    assert _csv_rows(output)[0] == ["file", "gpt-5", "gpt-4o-mini"]
+
+
+def test_the_text_table_columns_follow_the_order_the_models_were_named():
+    output = format_file_table(_two_models())
+
+    assert re.sub(r"\s+", " ", _plain_lines(output)[0]).strip() == (
+        "File gpt-5 gpt-4o-mini"
+    )
+
+
 def _caveated_column(count: int, caveat: str):
     return {
         "grok-4.5": TokenCount(
@@ -560,16 +623,16 @@ def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
 
 
 def test_count_sort_ranks_by_the_leftmost_model_column():
-    # Columns are ordered by model name, so the leftmost one here is claude-opus-4-5,
-    # and ranking by gpt-5 instead would put b.txt first.
+    # Columns follow the order the models were named, so the leftmost one here is
+    # claude-opus-4-5, and ranking by gpt-5 instead would put b.txt first.
     file_results = {
         "a.txt": {
-            "gpt-5": _counted(1),
             "claude-opus-4-5": _counted(50, model="claude-opus-4-5"),
+            "gpt-5": _counted(1),
         },
         "b.txt": {
-            "gpt-5": _counted(90),
             "claude-opus-4-5": _counted(2, model="claude-opus-4-5"),
+            "gpt-5": _counted(90),
         },
     }
     output = format_file_table(file_results, output_format="csv", sort_order="count")
@@ -582,15 +645,15 @@ def test_count_sort_ranks_by_the_leftmost_model_column():
 
 def test_count_sort_puts_a_file_the_leading_model_missed_last():
     file_results = {
-        "missed.txt": {"gpt-5": _counted(3)},
         "counted.txt": {
             "gpt-5": _counted(4),
             "claude-opus-4-5": _counted(1, model="claude-opus-4-5"),
         },
+        "missed.txt": {"claude-opus-4-5": _counted(3, model="claude-opus-4-5")},
     }
     output = format_file_table(file_results, output_format="csv", sort_order="count")
     assert _csv_rows(output)[1:] == [
-        ["counted.txt", "1", "4"],
+        ["counted.txt", "4", "1"],
         ["missed.txt", "N/A", "3"],
     ]
 

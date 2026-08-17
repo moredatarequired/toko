@@ -135,8 +135,15 @@ def _count_payload(model: str, counted: TokenCount) -> dict[str, object]:
     }
 
 
-def _counts_payload(results: dict[str, TokenCount]) -> list[dict[str, object]]:
-    return [_count_payload(model, counted) for model, counted in results.items()]
+def _counts_payload(
+    results: dict[str, TokenCount], models: list[str]
+) -> list[dict[str, object]]:
+    # Ordered by the document's one model order rather than by whatever this
+    # particular source happens to hold, so every count array in the document lists
+    # its models the same way and a reader can line them up.
+    return [
+        _count_payload(model, results[model]) for model in models if model in results
+    ]
 
 
 def _source_payload(name: str) -> dict[str, object]:
@@ -272,15 +279,23 @@ def _format_file_json(
         []
         if total_only
         else [
-            {"source": _source_payload(filename), "counts": _counts_payload(counts)}
+            {
+                "source": _source_payload(filename),
+                "counts": _counts_payload(counts, models),
+            }
             for filename, counts in file_results.items()
         ]
     )
-    return _envelope(results, _counts_payload(totals))
+    return _envelope(results, _counts_payload(totals, models))
 
 
 def _collect_models(file_results: dict[str, dict[str, TokenCount]]) -> list[str]:
-    return sorted({model for counts in file_results.values() for model in counts})
+    # First encounter rather than sorted, which is the order the models were named on
+    # the command line: one order for the table columns, the delimited columns and both
+    # JSON arrays, so nothing in a document has to be re-read against a second order.
+    return list(
+        dict.fromkeys(model for counts in file_results.values() for model in counts)
+    )
 
 
 def _format_file_table_delimited(

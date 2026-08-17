@@ -138,7 +138,9 @@ def _counts_payload(
 ) -> list[dict[str, object]]:
     # Ordered by the document's one model order rather than by whatever this
     # particular source happens to hold, so every count array in the document lists
-    # its models the same way and a reader can line them up.
+    # its models the same way. Same order, not same length: a model this source could
+    # not be counted for is simply absent, and `totals` sums whichever files got that
+    # far, so a reader matches on `model` rather than on position.
     return [
         _count_payload(model, results[model]) for model in models if model in results
     ]

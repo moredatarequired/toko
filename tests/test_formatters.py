@@ -192,10 +192,12 @@ def _model_orders(payload) -> list[list[str]]:
 
 
 def test_every_json_array_lists_its_models_in_the_same_order():
-    """Every count array is zippable against every other.
+    """One order everywhere, so no array has to be re-read against a second one.
 
-    A count object has one shape, so lining the arrays up by index is the obvious thing
-    to do, and two orders in one document silently misattribute.
+    Order, not length: a model a source could not be counted for is absent from that
+    source's array, so the arrays are matched on `model` rather than zipped. Two
+    orders in one document would break even that, by scattering the models a reader
+    scans for.
     """
     payload = json.loads(format_file_table(_two_models(), output_format="json"))
 

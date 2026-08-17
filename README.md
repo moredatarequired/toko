@@ -209,11 +209,12 @@ Every JSON run emits that one document, whatever flags it was given:
   `retirement` is `null` for a live model. `jq '.totals[] | .tokens'` reads any run
   that printed a document.
 - Every count array in a document — each `results[].counts` and `totals` — lists its
-  models in one order, the order you named them with `--model`, so the arrays line up.
-  That order does not depend on which counts succeeded: a model a source could not be
-  counted for is simply absent from that source's array while the rest keep their
-  places (and a model no source could be counted for takes no place in the order at
-  all), so read `model` rather than trusting the lengths to match.
+  models in one order, the order you named them with `--model`, so no array has to be
+  re-read against a second order. What the arrays share is that order, not their
+  lengths: a model a source could not be counted for is simply absent from that
+  source's array while the rest keep their places (and a model no source could be
+  counted for takes no place in the order at all), and `totals` sums only the sources
+  that produced a count. **Match on `model`; never index or zip the arrays together.**
 
 ```sh
 toko --header --model gpt-5 --format csv --text "hello world"

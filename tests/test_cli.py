@@ -805,8 +805,10 @@ def test_distinct_caveats_across_models_merge_without_losing_or_crossing(tmp_pat
 def test_json_lists_one_model_order_across_a_multi_model_multi_file_run(tmp_path):
     """The case that was untested: several models over several files.
 
-    results[].counts and totals hold one count object per model in the same shape, so a
-    reader zips them by index, and two orders in one document misattribute silently.
+    What is guaranteed is the order, not the length: a model a source could not be
+    counted for is absent from that source's array, so a reader matches on `model`.
+    Two orders in one document would defeat even that, since the models a reader
+    scans for would appear in a different sequence per array.
     """
     args = _two_file_args(tmp_path)
     result = _invoke_cli(

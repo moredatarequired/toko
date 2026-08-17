@@ -16,6 +16,7 @@ from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
 from tests.hf_hub import skip_if_rate_limited
+from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
 from toko.cost import format_cost, format_cost_value
@@ -1222,6 +1223,71 @@ def test_empty_directory_reports_no_files(tmp_path):
     result = _invoke_cli([str(tmp_path)])
     assert result.exit_code == 1
     assert "Error: No files found matching criteria" in result.stderr
+
+
+def test_redirected_empty_stdin_is_input_and_counts_to_zero():
+    """`toko -m gpt-5 < /dev/null` exits 0 printing 0; the guard is about the terminal."""
+    result = _invoke_cli(["-m", "gpt-5"], stdin="")
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "0"
+    assert "No input provided" not in result.stderr
+
+
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
+def test_the_no_input_error_needs_a_terminal_on_stdin(tmp_path):
+    """The other half of the pair above, which only a real tty can reach.
+
+    stdout is a pipe here so the exit code can be read back; stdin stays the terminal,
+    which is the condition being tested.
+    """
+    script = tmp_path / "tty_stdin_driver.py"
+    script.write_text(
+        "import sys\n\n"
+        "from toko.cli import app\n\n"
+        "assert sys.stdin.isatty()\n"
+        "try:\n"
+        "    app(['-m', 'gpt-5'])\n"
+        "except SystemExit as exit_status:\n"
+        "    print(f'EXIT={exit_status.code}')\n"
+    )
+
+    output = run_under_pty(str(script), dict(os.environ), pipe_stdout=True)
+
+    assert "EXIT=1" in output
+
+
+def test_a_binary_file_among_good_paths_is_skipped_without_failing_the_run(tmp_path):
+    good = tmp_path / "good.txt"
+    good.write_text("hello world")
+    binary = tmp_path / "image.bin"
+    binary.write_bytes(b"\x00\x01\x02\xff\xfe")
+
+    result = _invoke_cli(["--format", "csv", "-m", "gpt-5", str(good), str(binary)])
+
+    assert result.exit_code == 0
+    assert f"Warning: Skipping binary file {binary}" in result.stderr
+    # Skipped means absent, not zero: it contributes no row and no tokens.
+    assert binary.name not in result.stdout
+    assert result.stdout.splitlines() == [f"{good},2"]
+
+
+def test_a_partial_failure_still_emits_a_whole_envelope_with_short_totals(tmp_path):
+    """Exit 1 is the only signal that a total covers less than it was asked for."""
+    args = _two_file_args(tmp_path)
+    missing = str(tmp_path / "nope.txt")
+
+    partial = _invoke_cli(["--format", "json", "-m", "gpt-5", *args, missing])
+    whole = _invoke_cli(["--format", "json", "-m", "gpt-5", *args])
+
+    assert partial.exit_code == 1
+    assert whole.exit_code == 0
+    payload = _envelope(partial)
+    # Same document a clean run emits -- nothing absent, nothing marked -- summing a
+    # smaller set of files. Only the exit code and stderr say so.
+    assert payload == _envelope(whole)
+    assert [entry["source"]["name"] for entry in payload["results"]] == args
+    assert set(payload) == {"schema_version", "results", "totals"}
+    assert "Error: Path not found" in partial.stderr
 
 
 def _two_file_args(tmp_path: Path) -> list[str]:

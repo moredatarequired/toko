@@ -253,21 +253,35 @@ Two exceptions are worth knowing before you parse the output:
 
 ## Exit codes
 
-| Code | Meaning                                                                                                                                    |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `0`  | Toko printed counts. Some of what you asked for may still have failed — see the inconsistency below.                                       |
-| `1`  | The run produced no usable result, or one of its inputs did not survive.                                                                   |
-| `2`  | The command line itself was wrong: an unknown option, a missing value, or an unsupported `--format`. Typer reports these before Toko runs. |
+| Code | Meaning                                                                                                                                                                           |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Toko printed counts. Some of what you asked for may still have failed — see the inconsistency below.                                                                              |
+| `1`  | The run produced no usable result, or one of its inputs did not survive. **Output may still have been printed, and it is short** — see the warning below the list.                 |
+| `2`  | The command line itself was wrong: an unknown option, a missing value, or an unsupported `--format`. Typer reports these before Toko runs.                                        |
 
 A run exits `1` when:
 
-- no input was given, no files matched, or a path could not be found or read — even
-  when other paths were counted and printed above the error;
+- **no input was given _at a terminal_** — no `--text`, no paths, and stdin still the
+  tty. Redirected or piped stdin is input, however little of it there is:
+  `toko -m gpt-5 < /dev/null` counts the empty string, prints `0` and exits `0`;
+- no files matched, which includes a directory whose every file was skipped;
+- **a path could not be found, or a file could not be read** — even when other paths
+  were counted and printed above the error. A file that is not valid UTF-8 is the
+  exception: it is skipped with a `Warning: Skipping binary file …` on stderr, it
+  contributes no row and no tokens, and it does **not** make the run exit `1`;
 - every model failed for every input;
 - a **retired model** was named without `--include-retired` (nothing is read or
   counted in that case; the error names the model, its retirement date and its
   redirect target, if it has one);
 - the config file is unreadable, or `toko update-prices` could not fetch prices.
+
+> **A nonzero exit means the totals cover only what succeeded.** Toko prints the
+> results for the inputs it could read *before* it exits `1`, so a partial failure
+> still emits a complete, well-formed document — a full JSON envelope with both
+> `results` and `totals`, or a full table — and nothing in it is marked. The totals
+> simply sum a smaller set of files than a successful run would. There is no field to
+> check for this: check the exit code before you trust a total, and read stderr for
+> which inputs are missing.
 
 One known inconsistency, which this table describes rather than hides: a model that
 fails among several — a missing `ANTHROPIC_API_KEY`, say — leaves a warning on stderr,

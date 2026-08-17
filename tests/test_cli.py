@@ -20,6 +20,7 @@ from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, _retirement_candidates, app
 from toko.cost import format_cost, format_cost_value
+from toko.models import RETIRED_OPENAI_MODELS
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
@@ -263,22 +264,55 @@ def test_a_name_openai_still_serves_is_not_refused_as_retired(requested):
     assert result.stdout.strip() == "2"
 
 
+# Every shut-down OpenAI engine and the date the gate must quote for it, written out
+# rather than sampled: a parametrized handful let a silent edit to a date -- or a name
+# quietly moved out of the mapping and back into the live set -- pass a green suite.
+# cushman-codex and davinci-codex are None because they are /v1/engines-era names
+# withdrawn before OpenAI published shutdown tables, so there is no date to quote.
+SHUT_DOWN_OPENAI_ENGINES = {
+    "ada": "2024-01-04",
+    "babbage": "2024-01-04",
+    "code-cushman-001": "2023-03-23",
+    "code-cushman-002": "2023-03-23",
+    "code-davinci-001": "2023-03-23",
+    # Shut down in both the 2023-03-20 Codex wave and the 2023-07-06 base-model wave;
+    # the later date is the one that happened.
+    "code-davinci-002": "2024-01-04",
+    "code-davinci-edit-001": "2024-01-04",
+    "code-search-ada-code-001": "2024-01-04",
+    "code-search-babbage-code-001": "2024-01-04",
+    "curie": "2024-01-04",
+    "cushman-codex": None,
+    "davinci": "2024-01-04",
+    "davinci-codex": None,
+    "text-ada-001": "2024-01-04",
+    "text-babbage-001": "2024-01-04",
+    "text-curie-001": "2024-01-04",
+    "text-davinci-001": "2024-01-04",
+    "text-davinci-002": "2024-01-04",
+    "text-davinci-003": "2024-01-04",
+    "text-davinci-edit-001": "2024-01-04",
+    "text-search-ada-doc-001": "2024-01-04",
+    "text-search-babbage-doc-001": "2024-01-04",
+    "text-search-curie-doc-001": "2024-01-04",
+    "text-search-davinci-doc-001": "2024-01-04",
+    "text-similarity-ada-001": "2024-01-04",
+    "text-similarity-babbage-001": "2024-01-04",
+    "text-similarity-curie-001": "2024-01-04",
+    "text-similarity-davinci-001": "2024-01-04",
+}
+
+
+def test_the_shut_down_engine_table_is_exactly_the_one_the_gate_reads():
+    """Membership is the gate's whole input, so an addition or removal has to show up."""
+    assert dict(RETIRED_OPENAI_MODELS) == SHUT_DOWN_OPENAI_ENGINES
+
+
 @pytest.mark.parametrize(
-    ("requested", "when"),
-    [
-        ("text-davinci-003", "2024-01-04"),
-        ("curie", "2024-01-04"),
-        ("davinci", "2024-01-04"),
-        ("text-similarity-ada-001", "2024-01-04"),
-        ("code-davinci-001", "2023-03-23"),
-        ("code-cushman-001", "2023-03-23"),
-        # A /v1/engines-era name withdrawn before OpenAI published shutdown tables,
-        # so there is genuinely no date to quote.
-        ("cushman-codex", "date unknown"),
-        ("davinci-codex", "date unknown"),
-    ],
+    ("requested", "date"), sorted(SHUT_DOWN_OPENAI_ENGINES.items())
 )
-def test_a_shut_down_openai_engine_is_refused_with_its_recorded_date(requested, when):
+def test_a_shut_down_openai_engine_is_refused_with_its_recorded_date(requested, date):
+    when = "date unknown" if date is None else date
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
     assert result.exit_code == 1

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from toko.cost import format_cost, format_cost_value
+from toko.cost import format_cost, format_cost_value, normalize_cost
 from toko.output_format import OutputFormat
 from toko.sort_order import SortOrder
 
@@ -452,9 +452,13 @@ def _sum_costs(running: float | None, addition: float | None) -> float | None:
     # Seeded with None, not 0.0: a model no file could be priced for has no
     # total, and reporting $0.000000 for it reads as a confident free. A model
     # only some files could be priced for keeps the sum of those files.
+    #
+    # Normalized on the way out, because a running sum is a cost this module
+    # produces: adding two exact per-file costs lands on 8.750000000000001e-06,
+    # and every format has to report the one number.
     if addition is None:
         return running
-    return addition if running is None else running + addition
+    return normalize_cost(addition if running is None else running + addition)
 
 
 def _compute_totals(

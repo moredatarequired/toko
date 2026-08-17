@@ -4,7 +4,9 @@ import ast
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -874,6 +876,81 @@ def test_delimited_cost_cell_round_trips_without_rounding(cost):
 
 def test_delimited_cost_cell_suppresses_float_accumulation_noise():
     assert format_cost_value(0.1 + 0.2) == "0.3"
+
+
+@pytest.mark.parametrize(
+    "cost", [1234.5678, 98765.4321, 0.000123456789, 1e-06, 5.5e-05, 9.9e-09]
+)
+def test_delimited_cost_cell_is_a_positional_decimal(cost):
+    """`sort -n` reads 3.75e-06 as 3.75, and `bc` refuses it outright."""
+    cell = format_cost_value(cost)
+    assert "e" not in cell.lower()
+    assert float(cell) == cost
+
+
+def _sorted_by_sort_n(cells: list[str]) -> list[str]:
+    sort = shutil.which("sort")
+    assert sort is not None
+    completed = subprocess.run(  # noqa: S603
+        [sort, "-n"],
+        input="\n".join(cells),
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    return completed.stdout.split()
+
+
+@pytest.mark.skipif(shutil.which("sort") is None, reason="needs a POSIX sort")
+def test_sort_n_orders_a_cost_column_spanning_orders_of_magnitude():
+    costs = [1234.5678, 0.5, 0.000125, 3.75e-06, 5e-06, 9.9e-09]
+    cells = [format_cost_value(cost) for cost in costs]
+
+    assert _sorted_by_sort_n(cells) == [
+        format_cost_value(cost) for cost in sorted(costs)
+    ]
+
+
+def _delimited_costs(stdout: str, separator: str) -> dict[str, float]:
+    header, *rows = [line.split(separator) for line in stdout.splitlines() if line]
+    column = header.index("gpt-5_cost")
+    return {row[0]: float(row[column]) for row in rows}
+
+
+def test_every_format_reports_one_cost_for_the_same_run(tmp_path):
+    """JSON used to leak the float-accumulation noise the delimited cell had shed.
+
+    Two files, so the totals are a sum rather than a copy: 3.75e-06 + 5e-06 lands on
+    8.750000000000001e-06, which JSON printed beside a CSV reading 8.75e-06.
+    """
+    first = tmp_path / "first.txt"
+    first.write_text("hello world")
+    second = tmp_path / "second.txt"
+    second.write_text("hello wider world")
+    args = ["--cost", "-m", "gpt-5", str(first), str(second)]
+
+    payload = _envelope(_invoke_cli(["--format", "json", *args]))
+    per_file = {
+        entry["source"]["name"]: entry["counts"][0]["cost"]
+        for entry in payload["results"]
+    }
+    (total,) = payload["totals"]
+
+    for separator, name in ((",", "csv"), ("\t", "tsv")):
+        rows = _invoke_cli(["--format", name, "--header", *args])
+        assert rows.exit_code == 0
+        assert _delimited_costs(rows.stdout, separator) == per_file
+
+        summed = _invoke_cli(["--format", name, "--header", "--total-only", *args])
+        assert summed.exit_code == 0
+        assert _delimited_costs(summed.stdout, separator) == {"TOTAL": total["cost"]}
+
+    # Every cost the run reports is already at the precision the cell renders, so no
+    # format has anything left to round off on its own.
+    assert all(
+        cost == float(f"{cost:.12g}") for cost in [*per_file.values(), total["cost"]]
+    )
 
 
 def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():

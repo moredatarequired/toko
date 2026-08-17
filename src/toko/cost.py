@@ -1,10 +1,16 @@
 """Cost estimation using genai-prices."""
 
 import contextlib
+from decimal import Decimal
 
 from genai_prices import Usage, calc_price
 
 from toko.models import get_model, get_openrouter_id
+
+# Enough to render any realistic cost exactly -- $1234.5678 survives, where six
+# significant digits would round it to 1234.57 -- while still absorbing the
+# float-accumulation noise a bare repr spells out as 0.30000000000000004.
+COST_SIGNIFICANT_DIGITS = 12
 
 PROVIDER_ID_MAP = {
     "openai": "openai",
@@ -14,10 +20,23 @@ PROVIDER_ID_MAP = {
 }
 
 
+def normalize_cost(cost: float | None) -> float | None:
+    """Round a cost to the precision every format reports it to.
+
+    Applied where a cost is produced -- here and where per-file costs are summed --
+    rather than in one formatter, so JSON and the delimited formats cannot report
+    two different numbers for one run: rounding only the delimited cell left JSON
+    emitting the raw accumulation noise beside a CSV that had already shed it.
+    """
+    if cost is None:
+        return None
+    return float(f"{cost:.{COST_SIGNIFICANT_DIGITS}g}")
+
+
 def _calculate_price(usage: Usage, *, model_ref: str, provider_id: str) -> float | None:
     with contextlib.suppress(Exception):
         price_data = calc_price(usage, model_ref=model_ref, provider_id=provider_id)
-        return float(price_data.total_price)
+        return normalize_cost(float(price_data.total_price))
     return None
 
 
@@ -319,15 +338,15 @@ def format_cost_value(cost: float | None) -> str:
 
     Not `format_cost`: that one is for people, and its currency symbol and fixed
     decimals turn a cell into something no reader can parse as a number -- a
-    fraction of a cent rounds to $0.000000, which reads as free. `g` keeps the
-    significant figures wherever the value sits, so the number survives, and
-    `float()` accepts every string this produces.
+    fraction of a cent rounds to $0.000000, which reads as free.
 
-    Twelve of them, not six: six rounds a large total away silently, turning
-    $1234.5678 into 1234.57. Twelve renders any realistic cost exactly while
-    still absorbing float-accumulation noise, which a bare `repr` would spell
-    out as 0.30000000000000004.
+    Positional decimal, never an exponent. `g` alone renders a fraction of a cent
+    as 3.75e-06, which `float()` reads correctly but `sort -n` reads as 3.75 --
+    ordering a cost column plausibly and silently wrong -- and `bc` will not read
+    at all. Going through `Decimal` keeps the same twelve significant digits
+    `normalize_cost` already rounded the value to, so the cell and the JSON number
+    are the same value written two ways.
     """
     if cost is None:
         return ""
-    return f"{cost:.12g}"
+    return format(Decimal(f"{cost:.{COST_SIGNIFICANT_DIGITS}g}"), "f")

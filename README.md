@@ -98,8 +98,8 @@ toko --header --format tsv --model gpt-5-mini --model claude-opus-4-5 --text "Th
 
 ```txt
 model	tokens	cost
-gpt-5-mini	4	1e-06
-claude-opus-4-5	11	5.5e-05
+gpt-5-mini	4	0.000001
+claude-opus-4-5	11	0.000055
 ```
 
 Costs come from the bundled `genai-prices` feed. A model it has no price for shows `N/A`

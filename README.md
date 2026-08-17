@@ -263,8 +263,8 @@ Two exceptions are worth knowing before you parse the output:
   with the number, rather than being stranded on stderr where the process on the other
   end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
   `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
-  read `.totals[].tokens`, if a run of yours can hit an unreleased OpenAI name or an
-  xAI model without `XAI_API_KEY` — the two cases that produce an approximate count.
+  read `.totals[].tokens`, if a run of yours can hit any of the three paths that
+  produce an approximate count — they are listed under **Library usage** below.
 
 ## Exit codes
 

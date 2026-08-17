@@ -17,6 +17,7 @@ from toko.cost import estimate_cost
 from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
+from toko.models import get_model, retirement_of
 from toko.models import list_models as get_model_list
 from toko.output_format import OutputFormat
 from toko.price_update import (
@@ -25,7 +26,7 @@ from toko.price_update import (
     refresh_prices,
     update_prices_if_stale,
 )
-from toko.result import TokenCount
+from toko.result import Retirement, TokenCount
 from toko.sort_order import SortOrder
 
 _SUBCOMMAND_META_KEY = "toko.subcommand"
@@ -210,7 +211,10 @@ def main(
         bool,
         typer.Option(
             "--include-retired",
-            help="Include retired models in --list-models output (no other effect)",
+            help=(
+                "Count with retired models instead of failing, and list them in "
+                "--list-models output"
+            ),
         ),
     ] = False,
     jobs: Annotated[
@@ -621,6 +625,48 @@ def _collect_supported_models(*, include_retired: bool) -> list[str]:
     return sorted(names, key=str.lower)
 
 
+def _retired_model_error(requested: str, retirement: Retirement) -> str:
+    when = "date unknown" if retirement.date is None else retirement.date
+    redirect = (
+        f"; it redirects to {retirement.redirects_to}"
+        if retirement.redirects_to
+        else ""
+    )
+    return (
+        f"Error: model '{requested}' is retired ({when}){redirect}. "
+        "Pass --include-retired to count with it anyway."
+    )
+
+
+def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
+    """Refuse a retired model before anything is read or counted.
+
+    A retired name gives a number that is either another model's or nothing at all,
+    so the run fails whole rather than printing a table where one column is quietly
+    wrong. A name whose provider cannot be detected is not this function's problem:
+    the counting path already reports that, and reporting it twice would bury this
+    error under it.
+    """
+    if include_retired:
+        return
+
+    errors: list[str] = []
+    for requested in models:
+        try:
+            model_info = get_model(requested)
+        except ValueError:
+            continue
+        retirement = retirement_of(model_info)
+        if retirement is not None:
+            errors.append(_retired_model_error(requested, retirement))
+
+    if not errors:
+        return
+    for error in errors:
+        typer.echo(error, err=True)
+    raise typer.Exit(1)
+
+
 def _show_model_list(*, include_retired: bool) -> None:
     models = _collect_supported_models(include_retired=include_retired)
     typer.echo("\n".join(models))
@@ -649,6 +695,7 @@ def _do_count(
     if list_models:
         _show_model_list(include_retired=include_retired)
     models = _resolve_models(config, model)
+    _reject_retired_models(models, include_retired=include_retired)
     actual_format = _resolve_output_format(config, output_format)
     merged_exclude = _merge_excludes(config, exclude)
     include_header = header if header is not None else is_stdout_tty()

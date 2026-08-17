@@ -225,11 +225,24 @@ model,tokens
 gpt-5,2
 ```
 
-Use `--format tsv` to force TSV even when running interactively. CSV and TSV write the
-`cost` column as a bare number that `float()` accepts — no currency symbol, and no
-rounding to `0.000000` for a fraction of a cent — and leave the cell empty for a model
-they have no price for. The text table is the one written for people, and it keeps the
-`$`.
+Use `--format tsv` to force TSV even when running interactively. The text table is the
+one written for people, and it keeps the `$`; CSV and TSV write the `cost` column for a
+program instead:
+
+- **A bare number, never a currency symbol** — no `$`, and no rounding to `0.000000`
+  for a fraction of a cent. `float()` accepts every cell toko writes.
+- **Always positional decimal, never an exponent.** A cost of three ten-thousandths of
+  a cent is written `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column
+  correctly and `bc` can read a cell at all — both of which mis-handle exponent form,
+  `sort -n` silently.
+- **The same number as `--format json` reports.** A cost is rounded to twelve
+  significant digits once, where it is produced, so the delimited cell and the JSON
+  number are one value written two ways.
+- **An empty cell for a model with no price.** No number would be honest there — `0`
+  reads as free — so the cell holds nothing. Beware that this is an *empty field*, not
+  a missing one: `awk -F'\t'` and `awk -F,` see it correctly, but bare `awk` splits on
+  runs of whitespace and collapses the empty cell away, shifting every field after it
+  left. Since headerless TSV is what a piped run emits by default, pass `-F'\t'`.
 
 ### What a piped run emits without `--format`
 

@@ -391,9 +391,17 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
     included, which tiktoken has never seen, so both fall back to o200k_base and warn --
     asserted below. That turns an exact count into a guess: on "Привет, мир! Как дела?",
     where the encodings disagree, bare babbage-002 counts 12 and bare gpt2 counts 23,
-    while both spellings here count 8. No owner-style prefix escapes this; the only
-    prefixes tiktoken's table carries are the ft: ones, and toko fails to detect a
-    provider for those at all, so tiktoken never sees them.
+    while both spellings here count 8.
+
+    Which of those two outcomes a prefixed name gets turns on the prefix's opening
+    characters, not on its being a prefix. tiktoken.model.MODEL_PREFIX_TO_ENCODING holds
+    17 entries and is matched with startswith, and only 5 of them are the ft: ones; a
+    name whose owner begins with one of the other 12 -- o1-, o3-, o4-mini-, gpt-5-,
+    gpt-4.5-, gpt-4.1-, chatgpt-4o-, gpt-4o-, gpt-4-, gpt-3.5-turbo-, gpt-35-turbo- or
+    gpt-oss- -- resolves exactly and silently to that entry's encoding instead of
+    falling back. "openai-community/" and "openai/" begin with none of the 12, which is
+    why these two warn; gpt-4-lab/ does begin with one, and that case is fenced by
+    test_an_owner_prefix_tiktoken_matches_picks_its_encoding_silently.
     """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
@@ -403,6 +411,46 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
         f"Warning: unknown OpenAI model '{requested}'; estimating with o200k_base"
         in result.stderr
     )
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected_tokens"),
+    [
+        # gpt-4- -> cl100k_base, which counts this text differently from the o200k_base
+        # fallback (12 against 8), so the number alone shows which one was used.
+        ("gpt-4-lab/gpt2", 12),
+        # gpt-oss- -> o200k_harmony, which agrees with the fallback at 8 here, so only
+        # the silence and the exact flag separate the two paths.
+        ("gpt-oss-lab/gpt2", 8),
+        # o1- -> o200k_base. The gate read o1-labs/ as a repo owner and left the retired
+        # tail unread, so a shut-down engine gets counted exactly under an encoding it
+        # never used.
+        ("o1-labs/text-davinci-003", 8),
+    ],
+)
+def test_an_owner_prefix_tiktoken_matches_picks_its_encoding_silently(
+    requested, expected_tokens
+):
+    """A prefix tiktoken matches costs an encoding, not a warning.
+
+    _count_openai hands tiktoken the requested name unaltered, and
+    MODEL_PREFIX_TO_ENCODING is matched with startswith, so an owner whose text opens
+    with one of tiktoken's 12 non-ft: model prefixes selects that entry's encoding with
+    approximate=False and nothing on stderr. None of these names is an OpenAI model, and
+    none of the encodings picked is the one the tail would have used: bare gpt2 counts 23
+    under its own encoding rather than 12 or 8, and bare text-davinci-003 does not count
+    at all because the retirement gate rejects it.
+    """
+    result = _invoke_cli(
+        ["-m", requested, "--format", "json", "--text", "Привет, мир! Как дела?"]
+    )
+
+    assert result.exit_code == 0
+    assert "Warning" not in result.stderr
+    assert "retired" not in result.stderr
+    count = json.loads(result.stdout)["totals"][0]
+    assert count["tokens"] == expected_tokens
+    assert count["approximate"] is False
 
 
 @pytest.mark.parametrize(

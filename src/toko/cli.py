@@ -641,35 +641,48 @@ def _retired_model_error(requested: str, retirement: Retirement) -> str:
     )
 
 
-def _retirement_candidates(requested: str) -> list[str]:
-    """Spellings of one ``--model`` that name the same model for retirement purposes.
+def _retirement_candidates(requested: str) -> list[tuple[str, str | None]]:
+    """Spellings of one ``--model`` that name the same model, and who each must belong to.
 
-    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix
-    that ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the
-    way the Anthropic and Google ones do. Testing the stripped spellings here refuses
-    a retired model under the name the user actually typed, and only ever decides
-    whether to refuse -- how a name counts is untouched. A HuggingFace repo whose bare
-    segment happens to match a retired name is refused rather than miscounted, and
-    ``--include-retired`` says to count it anyway.
+    ``get_model`` resolves none of these: it never strips the ``provider/`` prefix that
+    ``--list-models`` prints, and the xAI resolver never strips ``-latest`` the way the
+    Anthropic and Google ones do. Testing the stripped spellings here refuses a retired
+    model under the name the user actually typed, and only ever decides whether to
+    refuse -- how a name counts is untouched.
+
+    Stripping a prefix is only sound when the segment in front of the name is the
+    provider whose model it is, which is exactly what ``--list-models`` prints and what
+    a router path like ``openrouter/xai/grok-3`` ends with. Without that guard the bare
+    segment of an unrelated repo gets matched against OpenAI's retired engines, and
+    ``openai-community/gpt2`` and ``anthropic/curie`` -- a real HuggingFace repo and a
+    name no OpenAI-shaped thing was ever typed for -- are refused for someone else's
+    retirement. The second element of each pair carries that requirement.
     """
-    bases = [requested]
-    _, separator, tail = requested.partition("/")
-    if separator and tail:
-        bases.append(tail)
+    name = requested.strip()
 
-    candidates: list[str] = []
-    for base in bases:
-        candidates.append(base)
+    bases: list[tuple[str, str | None]] = [(name, None)]
+    prefix, separator, tail = name.rpartition("/")
+    if separator and tail and prefix:
+        bases.append((tail, prefix.rpartition("/")[2]))
+
+    candidates: list[tuple[str, str | None]] = []
+    for base, required_provider in bases:
+        candidates.append((base, required_provider))
         if base.lower().endswith("-latest"):
-            candidates.append(base[: -len("-latest")])
+            candidates.append((base[: -len("-latest")], required_provider))
     return list(dict.fromkeys(candidates))
 
 
 def _retirement_for(requested: str) -> Retirement | None:
-    for candidate in _retirement_candidates(requested):
+    for candidate, required_provider in _retirement_candidates(requested):
         try:
             model_info = get_model(candidate)
         except ValueError:
+            continue
+        if (
+            required_provider is not None
+            and model_info.provider != required_provider.lower()
+        ):
             continue
         retirement = retirement_of(model_info)
         if retirement is not None:

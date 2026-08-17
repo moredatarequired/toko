@@ -286,6 +286,45 @@ def test_a_shut_down_openai_engine_is_refused_with_its_recorded_date(requested, 
     )
 
 
+@pytest.mark.parametrize(
+    "requested",
+    [
+        # A trailing space survived --model and left the gate matching nothing.
+        "grok-3 ",
+        " grok-3",
+        # Only the first segment was stripped, so a router path kept the gate blind.
+        "openrouter/xai/grok-3",
+        "openrouter/xai/grok-3-latest",
+    ],
+)
+def test_whitespace_and_multi_segment_prefixes_do_not_slip_past_the_gate(requested):
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip() == ""
+    assert f"model '{requested}' is retired (2026-05-15)" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        # A real HuggingFace repo. Its bare segment matched OpenAI's retired list.
+        "openai-community/gpt2",
+        # curie is an OpenAI engine; nothing about an anthropic/ name is retired.
+        "anthropic/curie",
+        "openrouter/text-davinci-003",
+    ],
+)
+def test_a_prefix_naming_another_provider_does_not_borrow_openais_retirements(
+    requested,
+):
+    """A prefix is only strippable when it names the provider the model belongs to."""
+    result = _invoke_cli(["-m", requested, "--text", "hello world"])
+
+    assert result.exit_code == 0
+    assert "retired" not in result.stderr
+
+
 def test_a_prefixed_retired_name_still_counts_when_opted_in():
     """--include-retired is the escape hatch for a name the gate now catches.
 

@@ -891,13 +891,14 @@ def _routed_model_name(name: str) -> str | None:
     # This comment used to call that unreachable. It was not: with an overlay declaring
     # `aliases = [""]` on grok-3, `toko -m anthropic/` was run with this check dropped and
     # printed "model 'anthropic/' is retired (2026-05-15)", because get_model("") resolved
-    # through that alias. _build_aliases now rejects an empty alias, and the same overlay
-    # and the same command were re-run with the check dropped: the empty candidate no
-    # longer resolves, retirement_for_requested returned None either way, and the suite
-    # stayed green. So it is inert as of that run, and it stays as the second half of the
-    # pair -- nothing else stops a future empty-name path from putting a model behind an
-    # empty tail. Both halves are fenced by
-    # test_an_empty_alias_is_refused_so_no_model_hides_behind_it.
+    # through that alias. _build_aliases now rejects an empty alias at the door, so the
+    # empty candidate no longer resolves: re-running that overlay and that command with
+    # the check dropped left the verdict alone, and retirement_for_requested("anthropic/")
+    # is None either way. Only the verdict -- retirement_candidates("anthropic/") still
+    # grows an empty candidate without the check, and dropping it fails
+    # test_an_empty_alias_is_refused_so_no_model_hides_behind_it on that list assertion.
+    # It stays as the second half of the pair that test fences: nothing else stops a
+    # future empty-name path from putting a model behind an empty tail.
     #
     # `not separator` is not independent of the dict.fromkeys dedupe in
     # retirement_candidates: neither changes an answer while the other stands, and

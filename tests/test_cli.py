@@ -20,8 +20,8 @@ from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, _retirement_candidates, app
 from toko.cost import format_cost, format_cost_value
-from toko.models import RETIRED_OPENAI_MODELS
 from toko.counter import ANTHROPIC_COUNT_URL, GOOGLE_COUNT_URL_BASE, count_tokens
+from toko.models import RETIRED_OPENAI_MODELS
 from toko.price_update import PRICE_DATA_URL, get_price_cache_path, get_price_data_path
 
 runner = CliRunner()
@@ -439,20 +439,33 @@ def test_one_retired_model_fails_the_whole_run_before_anything_is_counted(tmp_pa
     assert "gpt-5" not in result.stderr
 
 
-def test_an_opted_in_retired_model_carries_its_retirement_into_json(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "")
+def test_an_opted_in_retired_model_carries_its_retirement_into_json():
+    """A shut-down engine tiktoken still carries, so this needs no key and no network.
 
+    It used to ask for grok-3 and skip itself whenever the run failed, which meant a
+    broken --include-retired -- the gate refusing what it just let through, say -- read
+    as a skip rather than a failure. A non-null redirects_to is serialized in
+    test_json_reports_a_retired_model_as_an_object, which needs no run at all.
+    """
     result = _invoke_cli(
-        ["--include-retired", "--format", "json", "-m", "grok-3", "--text", "hi"],
-        {"XAI_API_KEY": ""},
+        [
+            "--include-retired",
+            "--format",
+            "json",
+            "-m",
+            "text-davinci-003",
+            "--text",
+            "hi",
+        ]
     )
 
-    if result.exit_code != 0:
-        pytest.skip("counting grok-3 needs the xAI API or the Grok-1 tokenizer")
-    assert _only_count(result)["retirement"] == {
-        "model": "grok-3",
-        "date": "2026-05-15",
-        "redirects_to": "grok-4.3",
+    assert result.exit_code == 0
+    count = _only_count(result)
+    assert count["tokens"] == 1
+    assert count["retirement"] == {
+        "model": "text-davinci-003",
+        "date": "2024-01-04",
+        "redirects_to": None,
     }
 
 

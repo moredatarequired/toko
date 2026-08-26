@@ -1,6 +1,8 @@
 """Shared pytest fixtures and warning filters."""
 
+import os
 import warnings
+from collections.abc import Mapping  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 
 import pytest
@@ -41,6 +43,22 @@ GIT_LOCATION_VARS = (
     "GIT_CEILING_DIRECTORIES",
 )
 
+# Config that git reads from the environment instead of from a file. These bypass
+# both GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL, so redirecting those two is not
+# enough: this environment exports GIT_CONFIG_COUNT=3 to hooks, and with it set a
+# fixture git sees the ambient `url.*.insteadOf` rewrites.
+GIT_CONFIG_VARS = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+
+# GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n are numbered up to GIT_CONFIG_COUNT, so they
+# cannot be listed; they have to be matched. Dropping the count without them would
+# leave git erroring on the orphans, so all three go together.
+GIT_CONFIG_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def git_vars_to_scrub(environ: Mapping[str, str]) -> set[str]:
+    numbered = {name for name in environ if name.startswith(GIT_CONFIG_PREFIXES)}
+    return {*GIT_LOCATION_VARS, *GIT_CONFIG_VARS, *numbered}
+
 
 @pytest.fixture(autouse=True)
 def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
@@ -55,10 +73,14 @@ def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
     GIT_LOCATION_VARS are cleared because several tests build fixtures by running
     `git init` and `git commit` inside `tmp_path`, and those variables override
     directory-based discovery: with GIT_DIR set, a commit made in a fixture is
-    written to whatever repository GIT_DIR names instead. Git exports GIT_DIR when
-    it invokes a hook, and lefthook's pre-commit hook runs this suite, so leaving
-    them set means `git commit` in a checkout rewrites that checkout's own HEAD and
-    index with fixture data. That is not hypothetical; it happened.
+    written to whatever repository GIT_DIR names instead. Git exports GIT_DIR to a
+    hook only when the git dir is not the `.git` beside the working tree -- that is,
+    from a LINKED WORKTREE, and not from an ordinary clone. That qualifier is the
+    whole of it: reproducing this from a plain checkout shows nothing and reads as a
+    disproof. From a worktree, with lefthook's pre-commit hook running this suite,
+    a leaked GIT_DIR sends every fixture `git commit` into the checkout being
+    committed to and rewrites its HEAD and index. That is not hypothetical; it
+    happened, and GIT_DIR alone was later shown to be enough to cause it.
     """
     home = tmp_path_factory.mktemp("home")
     (home / ".config").mkdir()
@@ -66,7 +88,7 @@ def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    for redirect in GIT_LOCATION_VARS:
+    for redirect in git_vars_to_scrub(os.environ):
         monkeypatch.delenv(redirect, raising=False)
     return home
 

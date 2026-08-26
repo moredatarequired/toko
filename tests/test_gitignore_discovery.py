@@ -1,5 +1,6 @@
 """Ignore-file discovery: upward search, per-directory stack, ripgrep parity."""
 
+import inspect
 import os
 import socket
 import subprocess
@@ -8,19 +9,16 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import GIT_LOCATION_VARS
+from tests.git_runner import fixture_git_env, run_git
 from toko import file_reader
 from toko.file_reader import find_files
-
-
-def git(*args: str, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True)  # noqa: S603, S607
 
 
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "fx"
     root.mkdir()
-    git("init", "-q", cwd=root)
+    run_git(root, "init", "-q")
     return root
 
 
@@ -93,7 +91,7 @@ def test_info_exclude_is_honored(repo):
 
 def test_core_excludes_file_is_honored(repo, tmp_path):
     excludes = write(tmp_path / "my-excludes", "*.swp\n")
-    git("config", "--local", "core.excludesFile", str(excludes), cwd=repo)
+    run_git(repo, "config", "--local", "core.excludesFile", str(excludes))
     write(repo / "notes.txt")
     write(repo / "notes.swp")
 
@@ -150,7 +148,7 @@ def test_directory_only_pattern_leaves_a_like_named_file_alone(repo):
 def test_a_nested_repository_contributes_its_own_rules(repo):
     nested = repo / "vendor" / "lib"
     nested.mkdir(parents=True)
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / ".gitignore", "target/\n")
     write(nested / "src.rs")
     write(nested / "target" / "build.rs")
@@ -351,7 +349,7 @@ def test_core_excludes_file_does_not_apply_outside_a_repository(
 def test_a_nested_repository_contributes_its_own_info_exclude(repo):
     nested = repo / "vendor" / "lib"
     nested.mkdir(parents=True)
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / ".git" / "info" / "exclude", "target/\n")
     write(nested / "src.rs")
     write(nested / "target" / "build.rs")
@@ -423,7 +421,7 @@ def test_an_outer_repositorys_gitignore_stops_at_a_nested_checkout(repo):
     write(repo / "top.log")
     nested = repo / "loadout"
     nested.mkdir()
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     for name in ("inner.log", "secret.txt", "fine.txt"):
         write(nested / name)
 
@@ -440,7 +438,7 @@ def test_an_outer_info_exclude_stops_at_a_nested_checkout(repo):
     write(repo / "kept.txt")
     nested = repo / "vendor"
     nested.mkdir()
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / "excluded.txt")
 
     assert names(find_files(repo), repo) == {"kept.txt", "vendor/excluded.txt"}
@@ -454,7 +452,7 @@ def test_the_global_excludes_file_still_applies_inside_a_nested_checkout(
     write(repo / "notes.swp")
     nested = repo / "vendor"
     nested.mkdir()
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / "inner.swp")
     write(nested / "inner.txt")
 
@@ -467,7 +465,7 @@ def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo):
     write(repo / "a.skip")
     nested = repo / "inner"
     nested.mkdir()
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / "b.skip")
     write(nested / "b.txt")
 
@@ -477,11 +475,11 @@ def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo):
 def test_info_exclude_is_found_through_a_linked_worktrees_gitdir_file(repo, tmp_path):
     """A worktree's `.git` is a file, and its info/exclude is the main one's."""
     write(repo / "seed.txt")
-    git("add", "-A", cwd=repo)
-    git("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "seed", cwd=repo)
+    run_git(repo, "add", "-A")
+    run_git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "seed")
     write(repo / ".git" / "info" / "exclude", "excluded.txt\n")
     worktree = tmp_path / "linked"
-    git("worktree", "add", "-q", "--detach", str(worktree), cwd=repo)
+    run_git(repo, "worktree", "add", "-q", "--detach", str(worktree))
     write(worktree / "excluded.txt")
     write(worktree / "kept.txt")
 
@@ -529,3 +527,60 @@ def test_a_fixture_repo_is_never_the_ambient_one(repo):
     ).stdout.strip()
 
     assert Path(resolved).parent == repo.resolve()
+
+
+def test_a_fixture_git_command_cannot_omit_its_target_directory():
+    """One call site that forgot `cwd=` wrote into the real repository's config.
+
+    Scrubbing the environment does not catch that: a git command with no target at
+    all runs wherever the test process happens to be, which under pytest is the
+    checkout. So the target is positional and required, and omitting it fails.
+    """
+    target = next(iter(inspect.signature(run_git).parameters.values()))
+
+    assert target.default is inspect.Parameter.empty
+    assert target.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+
+    with pytest.raises(TypeError, match="target"):
+        inspect.signature(run_git).bind()
+
+
+def test_a_leaked_git_dir_does_not_redirect_a_fixture_git(repo, tmp_path, monkeypatch):
+    """The helper scrubs for itself, rather than trusting an autouse fixture elsewhere."""
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    run_git(decoy, "init", "-q")
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+
+    assert (
+        Path(run_git(repo, "rev-parse", "--absolute-git-dir").strip())
+        == (repo / ".git").resolve()
+    )
+
+
+def test_ambient_config_variables_do_not_reach_a_fixture_git(repo, monkeypatch):
+    """GIT_CONFIG_COUNT bypasses GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL alike.
+
+    This environment exports it, so a fixture git otherwise inherits whatever
+    `url.*.insteadOf` rewrites the ambient configuration carries.
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url.https://ambient.example/.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/")
+
+    listed = run_git(repo, "config", "--list")
+
+    assert "ambient.example" not in listed
+
+
+def test_every_config_variable_git_reads_from_the_environment_is_scrubbed():
+    numbered = {f"GIT_CONFIG_KEY_{n}" for n in range(3)} | {
+        f"GIT_CONFIG_VALUE_{n}" for n in range(3)
+    }
+    ambient = {
+        "GIT_CONFIG_COUNT": "3",
+        "GIT_CONFIG_PARAMETERS": "'x.y=z'",
+        **dict.fromkeys(numbered, "v"),
+    }
+
+    assert not set(fixture_git_env({**ambient, "PATH": "/usr/bin"})) & set(ambient)

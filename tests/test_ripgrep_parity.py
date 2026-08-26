@@ -7,6 +7,7 @@ from pathlib import Path  # noqa: TC003
 
 import pytest
 
+from tests.git_runner import run_git
 from toko.file_reader import find_files
 
 RIPGREP = "rg"
@@ -20,10 +21,6 @@ if shutil.which(RIPGREP) is None:
             "would have skipped silently, checking nothing."
         )
     pytestmark = pytest.mark.skip(reason="ripgrep is not installed")
-
-
-def git(*args: str, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True)  # noqa: S603, S607
 
 
 def write(path: Path, text: str = "x") -> Path:
@@ -73,7 +70,7 @@ def parity_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
 
     repo = tmp_path / "fx"
     repo.mkdir()
-    git("init", "-q", cwd=repo)
+    run_git(repo, "init", "-q")
     write(repo / ".gitignore", "*.log\n")
     write(repo / ".git" / "info" / "exclude", "excluded-by-info.txt\n")
     write(repo / ".ignore", "dot-ignored.txt\n")
@@ -100,7 +97,7 @@ def parity_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
 
     nested = repo / "vendor" / "lib"
     nested.mkdir(parents=True)
-    git("init", "-q", cwd=nested)
+    run_git(nested, "init", "-q")
     write(nested / ".gitignore", "target/\n")
     write(nested / ".git" / "info" / "exclude", "vendored.tmp\n")
     write(nested / "src.rs")
@@ -117,8 +114,8 @@ def parity_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
 
     # A commit fills .git with loose objects, refs and logs, so --hidden parity
     # is measured against a real repository rather than a bare skeleton.
-    git("add", "--", ".gitignore", "keep.txt", "sub", cwd=repo)
-    git("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "fx", cwd=repo)
+    run_git(repo, "add", "--", ".gitignore", "keep.txt", "sub")
+    run_git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "fx")
     return repo
 
 

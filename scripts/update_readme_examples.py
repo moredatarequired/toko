@@ -182,7 +182,7 @@ def update_readme() -> list[StaleExample]:
     if not os.access(SHELL, os.X_OK):
         raise RuntimeError(f"{SHELL} is required to regenerate the README examples")
 
-    lines = README_PATH.read_text(encoding="utf-8").splitlines()
+    lines = README_PATH.read_text().splitlines()
     examples = documented_examples(lines)
 
     with tempfile.TemporaryDirectory(prefix="toko-readme-") as scratch:

@@ -1,5 +1,6 @@
 """Differential test: the files toko discovers are the files `rg --files` lists."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path  # noqa: TC003
@@ -8,11 +9,17 @@ import pytest
 
 from toko.file_reader import find_files
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("rg") is None, reason="ripgrep is not installed"
-)
-
 RIPGREP = "rg"
+
+# A skipped module reads as a pass, so CI sets TOKO_REQUIRE_RG and a missing ripgrep
+# becomes a collection error there; locally the tests still just skip.
+if shutil.which(RIPGREP) is None:
+    if os.environ.get("TOKO_REQUIRE_RG"):
+        raise RuntimeError(
+            f"TOKO_REQUIRE_RG is set but {RIPGREP!r} is not on PATH: the parity tests "
+            "would have skipped silently, checking nothing."
+        )
+    pytestmark = pytest.mark.skip(reason="ripgrep is not installed")
 
 
 def git(*args: str, cwd: Path) -> None:

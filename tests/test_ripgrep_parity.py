@@ -37,8 +37,11 @@ def ripgrep_files(root: Path, *args: str) -> set[str]:
     return set(result.stdout.split("\n")) - {""}
 
 
-def toko_files(root: Path) -> set[str]:
-    return {str(f.absolute().relative_to(root.absolute())) for f in find_files(root)}
+def toko_files(root: Path, *, hidden: bool) -> set[str]:
+    return {
+        str(f.absolute().relative_to(root.absolute()))
+        for f in find_files(root, include_hidden=hidden)
+    }
 
 
 @pytest.fixture
@@ -93,16 +96,23 @@ def parity_tree(tmp_path, monkeypatch) -> Path:
 
     (repo / "link.txt").symlink_to(repo / "keep.txt")
     (repo / "linkdir").symlink_to(repo / "sub")
+
+    # A commit fills .git with loose objects, refs and logs, so --hidden parity
+    # is measured against a real repository rather than a bare skeleton.
+    git("add", "--", ".gitignore", "keep.txt", "sub", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "fx", cwd=repo)
     return repo
 
 
 @pytest.mark.parametrize("subpath", ["", "sub"])
-def test_discovery_matches_ripgrep(parity_tree, subpath):
+@pytest.mark.parametrize("hidden", [False, True])
+def test_discovery_matches_ripgrep(parity_tree, subpath, hidden):
     root = parity_tree / subpath if subpath else parity_tree
+    args = ["--hidden"] if hidden else []
 
     # `rg --files` lists binary files; toko warns about them later, when it reads
     # them. Comparing here compares discovery, which is what parity is about.
-    assert toko_files(root) == ripgrep_files(root)
+    assert toko_files(root, hidden=hidden) == ripgrep_files(root, *args)
 
 
 def test_the_tree_actually_exercises_every_source(parity_tree):
@@ -114,3 +124,9 @@ def test_the_tree_actually_exercises_every_source(parity_tree):
         "sub/keep.txt",
         "vendor/lib/src.rs",
     }
+
+
+def test_the_tree_has_a_populated_git_directory_for_the_hidden_case(parity_tree):
+    found = ripgrep_files(parity_tree, "--hidden")
+    assert {".git/HEAD", ".git/config", ".git/index"} <= found
+    assert [name for name in found if name.startswith(".git/objects/")]

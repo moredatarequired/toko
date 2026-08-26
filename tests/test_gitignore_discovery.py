@@ -359,14 +359,25 @@ def test_hidden_brings_back_every_dotted_path_including_gitignore(repo):
     write(repo / "debug.log")
 
     found = names(find_files(repo, include_hidden=True), repo)
-    assert found == {".gitignore", ".env", ".github/workflows/ci.yml", "visible.txt"}
+    assert {name for name in found if not name.startswith(".git/")} == {
+        ".gitignore",
+        ".env",
+        ".github/workflows/ci.yml",
+        "visible.txt",
+    }
 
 
-def test_hidden_does_not_reopen_the_git_directory(repo):
+def test_the_git_directory_is_skipped_by_default_for_being_hidden(repo):
+    write(repo / "visible.txt")
+
+    assert names(find_files(repo), repo) == {"visible.txt"}
+
+
+def test_hidden_walks_the_git_directory_like_any_other_dotted_path(repo):
     write(repo / "visible.txt")
 
     found = names(find_files(repo, include_hidden=True), repo)
-    assert not [name for name in found if name.startswith(".git/")]
+    assert {".git/HEAD", ".git/config"} <= found
 
 
 def test_an_explicitly_named_hidden_directory_is_still_walked(repo):

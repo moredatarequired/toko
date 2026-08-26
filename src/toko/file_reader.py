@@ -186,10 +186,6 @@ def _iter_recursive_files(
             layers = [*layers, *own]
         layers_by_dir[root_abs] = layers
 
-        # No .gitignore can exclude .git: git treats it as the repo boundary
-        # rather than an ignorable path, so prune it however we were configured.
-        if ".git" in dirs:
-            dirs.remove(".git")
         dirs[:] = [
             name
             for name in dirs

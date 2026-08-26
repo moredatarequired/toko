@@ -178,7 +178,22 @@ def main(
         typer.Option("--no-ignore-dot", help="Don't respect .ignore/.rgignore files"),
     ] = False,
     hidden: Annotated[
-        bool, typer.Option("--hidden", help="Count hidden files and directories too")
+        bool,
+        typer.Option(
+            "--hidden",
+            help=(
+                "Count hidden files and directories too, including everything "
+                "under .git"
+            ),
+        ),
+    ] = False,
+    follow: Annotated[
+        bool,
+        typer.Option(
+            "--follow",
+            "-L",
+            help="Follow symlinks while walking directories (loops are reported)",
+        ),
     ] = False,
     no_recursive: Annotated[
         bool, typer.Option("--no-recursive", help="Don't recurse into directories")
@@ -251,6 +266,7 @@ def main(
         list_models,
         no_ignore_dot=no_ignore_dot,
         hidden=hidden,
+        follow=follow,
         include_retired=include_retired,
         sort_order=sort_order,
         jobs=jobs,
@@ -333,6 +349,7 @@ def _collect_inputs(
     no_ignore: bool,
     no_ignore_dot: bool,
     hidden: bool,
+    follow: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> InputSelection:
@@ -346,6 +363,7 @@ def _collect_inputs(
             no_ignore=no_ignore,
             no_ignore_dot=no_ignore_dot,
             hidden=hidden,
+            follow=follow,
             no_recursive=no_recursive,
             exclude_patterns=exclude_patterns,
         )
@@ -374,6 +392,7 @@ def _collect_files_from_paths(
     no_ignore: bool,
     no_ignore_dot: bool,
     hidden: bool,
+    follow: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> tuple[list[tuple[str, str]], bool]:
@@ -392,6 +411,7 @@ def _collect_files_from_paths(
                 respect_gitignore=should_respect_gitignore,
                 respect_dot_ignore=not no_ignore_dot,
                 include_hidden=hidden,
+                follow_symlinks=follow,
                 exclude_patterns=exclude_patterns,
             )
         had_failures = had_failures or not ok
@@ -421,8 +441,13 @@ def _collect_from_filesystem(
     respect_gitignore: bool,
     respect_dot_ignore: bool,
     include_hidden: bool,
+    follow_symlinks: bool,
     exclude_patterns: list[str] | None,
 ) -> bool:
+    # Collected rather than printed as they happen, so that the run's counts are not
+    # interleaved with them; find_files reports instead of raising so one bad link
+    # cannot cost the caller every other count in the tree.
+    problems: list[str] = []
     try:
         files = find_files(
             path,
@@ -430,13 +455,17 @@ def _collect_from_filesystem(
             respect_gitignore=respect_gitignore,
             respect_dot_ignore=respect_dot_ignore,
             include_hidden=include_hidden,
+            follow_symlinks=follow_symlinks,
             exclude_patterns=exclude_patterns,
+            on_error=problems.append,
         )
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
         return False
 
-    ok = True
+    for problem in problems:
+        typer.echo(f"Error: {problem}", err=True)
+    ok = not problems
     for file_path in files:
         try:
             content = read_file(file_path)
@@ -663,6 +692,7 @@ def _do_count(
     *,
     no_ignore_dot: bool = False,
     hidden: bool = False,
+    follow: bool = False,
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
@@ -682,6 +712,7 @@ def _do_count(
         no_ignore=no_ignore,
         no_ignore_dot=no_ignore_dot,
         hidden=hidden,
+        follow=follow,
         no_recursive=no_recursive,
         exclude_patterns=merged_exclude,
     )

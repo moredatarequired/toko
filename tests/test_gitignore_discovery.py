@@ -1,6 +1,7 @@
 """Ignore-file discovery: upward search, per-directory stack, ripgrep parity."""
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -8,8 +9,6 @@ import pytest
 
 from toko import file_reader
 from toko.file_reader import find_files
-
-pytestmark = pytest.mark.usefixtures("isolated_git_env")
 
 
 def git(*args: str, cwd: Path) -> None:
@@ -100,8 +99,8 @@ def test_core_excludes_file_is_honored(repo, tmp_path):
     assert names(find_files(repo), repo) == {"notes.txt"}
 
 
-def test_xdg_git_ignore_is_the_default_excludes_file(repo, tmp_path):
-    write(tmp_path / "home" / ".config" / "git" / "ignore", "*.swp\n")
+def test_xdg_git_ignore_is_the_default_excludes_file(repo, isolated_git_env):
+    write(isolated_git_env / ".config" / "git" / "ignore", "*.swp\n")
     write(repo / "notes.txt")
     write(repo / "notes.swp")
 
@@ -260,6 +259,30 @@ def test_dot_ignore_overrides_gitignore_in_both_directions(repo):
     assert "loose/keep.log" in found
 
 
+@pytest.mark.parametrize("dot_file", [".ignore", ".rgignore"])
+def test_a_shallow_dot_ignore_outranks_a_deeper_gitignore(repo, dot_file):
+    """Depth decides between two files of one kind; kind decides between the kinds.
+
+    Resolved by depth alone a nested .gitignore is the last word, which is what
+    ripgrep does *not* do: it ranks every dot-ignore file above every git one first.
+    """
+    write(repo / dot_file, "keep.txt\n")
+    write(repo / "sub" / ".gitignore", "!keep.txt\n")
+    write(repo / "sub" / "keep.txt")
+    write(repo / "sub" / "other.txt")
+
+    assert names(find_files(repo), repo) == {"sub/other.txt"}
+
+
+def test_a_deeper_dot_ignore_still_beats_a_shallower_one(repo):
+    write(repo / ".ignore", "*.log\n")
+    write(repo / "sub" / ".ignore", "!keep.log\n")
+    write(repo / "sub" / "keep.log")
+    write(repo / "drop.log")
+
+    assert names(find_files(repo), repo) == {"sub/keep.log"}
+
+
 def test_dot_ignore_above_the_repository_root_still_applies(repo, tmp_path):
     write(tmp_path / ".ignore", "*.log\n")
     write(repo / "app.js")
@@ -313,8 +336,10 @@ def test_dot_ignore_outside_a_repository_still_applies(tmp_path):
     assert names(find_files(plain), plain) == {"app.js"}
 
 
-def test_core_excludes_file_does_not_apply_outside_a_repository(tmp_path):
-    write(tmp_path / "home" / ".config" / "git" / "ignore", "*.swp\n")
+def test_core_excludes_file_does_not_apply_outside_a_repository(
+    tmp_path, isolated_git_env
+):
+    write(isolated_git_env / ".config" / "git" / "ignore", "*.swp\n")
     plain = tmp_path / "plain"
     write(plain / "notes.txt")
     write(plain / "notes.swp")
@@ -385,3 +410,99 @@ def test_an_explicitly_named_hidden_directory_is_still_walked(repo):
 
     found = find_files(repo / ".github")
     assert names(found, repo) == {".github/workflows/ci.yml"}
+
+
+def test_an_outer_repositorys_gitignore_stops_at_a_nested_checkout(repo):
+    """Git resolves a path against the repository it is in, and ripgrep agrees.
+
+    #91 is this case: a checkout parked inside another one was having the outer
+    repository's rules applied to it.
+    """
+    write(repo / ".gitignore", "*.log\nsecret.txt\n")
+    write(repo / "top.log")
+    nested = repo / "loadout"
+    nested.mkdir()
+    git("init", "-q", cwd=nested)
+    for name in ("inner.log", "secret.txt", "fine.txt"):
+        write(nested / name)
+
+    assert names(find_files(repo), repo) == {
+        "loadout/fine.txt",
+        "loadout/inner.log",
+        "loadout/secret.txt",
+    }
+
+
+def test_an_outer_info_exclude_stops_at_a_nested_checkout(repo):
+    write(repo / ".git" / "info" / "exclude", "excluded.txt\n")
+    write(repo / "excluded.txt")
+    write(repo / "kept.txt")
+    nested = repo / "vendor"
+    nested.mkdir()
+    git("init", "-q", cwd=nested)
+    write(nested / "excluded.txt")
+
+    assert names(find_files(repo), repo) == {"kept.txt", "vendor/excluded.txt"}
+
+
+def test_the_global_excludes_file_still_applies_inside_a_nested_checkout(
+    repo, isolated_git_env
+):
+    """Dropping the outer repository's rules must not drop git's global ones too."""
+    write(isolated_git_env / ".config" / "git" / "ignore", "*.swp\n")
+    write(repo / "notes.swp")
+    nested = repo / "vendor"
+    nested.mkdir()
+    git("init", "-q", cwd=nested)
+    write(nested / "inner.swp")
+    write(nested / "inner.txt")
+
+    assert names(find_files(repo), repo) == {"vendor/inner.txt"}
+
+
+def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo):
+    """.ignore and .rgignore are ripgrep's, not git's, so no repository bounds them."""
+    write(repo / ".rgignore", "*.skip\n")
+    write(repo / "a.skip")
+    nested = repo / "inner"
+    nested.mkdir()
+    git("init", "-q", cwd=nested)
+    write(nested / "b.skip")
+    write(nested / "b.txt")
+
+    assert names(find_files(repo), repo) == {"inner/b.txt"}
+
+
+def test_info_exclude_is_found_through_a_linked_worktrees_gitdir_file(repo, tmp_path):
+    """A worktree's `.git` is a file, and its info/exclude is the main one's."""
+    write(repo / "seed.txt")
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "seed", cwd=repo)
+    write(repo / ".git" / "info" / "exclude", "excluded.txt\n")
+    worktree = tmp_path / "linked"
+    git("worktree", "add", "-q", "--detach", str(worktree), cwd=repo)
+    write(worktree / "excluded.txt")
+    write(worktree / "kept.txt")
+
+    assert names(find_files(worktree), worktree) == {"kept.txt", "seed.txt"}
+
+
+def test_fifos_and_sockets_are_not_files_to_count(repo):
+    """`rg --files` lists none of these, and read_text() on a FIFO never returns."""
+    write(repo / "real.txt")
+    os.mkfifo(repo / "pipe")
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind(str(repo / "sock"))
+        assert names(find_files(repo), repo) == {"real.txt"}
+        assert names(find_files(repo, recursive=False), repo) == {"real.txt"}
+
+
+@pytest.mark.skipif(
+    not Path("/dev/zero").exists(), reason="no character device to point at"
+)
+def test_a_symlinked_device_node_is_not_counted_even_when_following(repo):
+    """Reading /dev/zero returns bytes until the machine runs out of them."""
+    write(repo / "real.txt")
+    (repo / "zerolink").symlink_to("/dev/zero")
+
+    assert names(find_files(repo, follow_symlinks=True), repo) == {"real.txt"}

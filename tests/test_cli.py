@@ -1,9 +1,11 @@
 """Tests for the CLI."""
 
 import ast
+import contextlib
 import json
 import os
 import re
+import signal
 import socket
 import sqlite3
 from pathlib import Path
@@ -708,19 +710,109 @@ def test_bad_url_does_not_abort_good_url_or_file(tmp_path):
     assert _BAD_URL not in result.stdout
 
 
-def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
-    (tmp_path / "sample.txt").write_text("hello world")
-    # Opening a bound unix socket fails for every user, including root, and
-    # unlike a symlink loop it is a real directory entry the walk still yields.
-    with socket.socket(socket.AF_UNIX) as sock:
-        sock.bind(str(tmp_path / "unreadable.sock"))
+@contextlib.contextmanager
+def _time_limit(seconds: int):
+    """Fail the test rather than the suite if something below stops returning."""
 
-        result = _invoke_cli(["--format", "csv", str(tmp_path)])
+    def give_up(_signum, _frame):
+        raise TimeoutError(f"still running after {seconds}s")
+
+    previous = signal.signal(signal.SIGALRM, give_up)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_fifo_in_a_scanned_directory_does_not_stall_the_run(tmp_path, monkeypatch):
+    # A FIFO reaches read_text() only if discovery hands it over, and read_text()
+    # on one blocks until something opens the far end -- forever, in a run with no
+    # other end. The time limit turns that back into a failure.
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    os.mkfifo("pipe")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "."])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in result.stdout
+    assert "pipe" not in result.stdout
+
+
+def test_a_socket_in_a_scanned_directory_is_skipped_without_an_error(
+    tmp_path, monkeypatch
+):
+    # chdir plus a short relative name: an AF_UNIX path caps at ~104 bytes, which a
+    # macOS tmp_path can exceed on its own.
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind("sock")
+
+        result = _invoke_cli(["--format", "csv", "."])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in result.stdout
+    assert "sock" not in result.stdout
+
+
+def test_follow_counts_a_symlinked_file_that_is_skipped_by_default(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("link.txt").symlink_to("sample.txt")
+
+    assert "link.txt" not in _invoke_cli(["--format", "csv", "."]).stdout
+
+    followed = _invoke_cli(["--format", "csv", "--follow", "."])
+
+    assert followed.exit_code == 0
+    assert "link.txt,2" in followed.stdout
+
+
+def test_broken_symlink_under_follow_does_not_abort_the_batch(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("broken.txt").symlink_to("gone.txt")
+
+    result = _invoke_cli(["--format", "csv", "-L", "."])
 
     assert result.exit_code == 1
     assert "sample.txt,2" in result.stdout
-    assert "Error reading" in result.stderr
-    assert "unreadable.sock" in result.stderr
+    assert "broken.txt" in result.stderr
+    assert "No such file or directory" in result.stderr
+
+
+def test_a_symlink_cycle_under_follow_is_reported_and_the_walk_finishes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("down").mkdir()
+    (Path("down") / "up").symlink_to("..")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "-L", "."])
+
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "File system loop found" in result.stderr
+
+
+def test_a_symlink_named_as_an_argument_is_read_without_follow(tmp_path, monkeypatch):
+    """Ripgrep reads a link it was handed; --follow governs the walk, not arguments."""
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("link.txt").symlink_to("sample.txt")
+
+    result = _invoke_cli(["--format", "csv", "link.txt"])
+
+    assert result.exit_code == 0
+    assert "link.txt,2" in result.stdout
 
 
 def test_missing_path_reports_only_the_specific_error(tmp_path):

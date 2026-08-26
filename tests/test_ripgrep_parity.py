@@ -8,10 +8,9 @@ import pytest
 
 from toko.file_reader import find_files
 
-pytestmark = [
-    pytest.mark.usefixtures("isolated_git_env"),
-    pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed"),
-]
+pytestmark = pytest.mark.skipif(
+    shutil.which("rg") is None, reason="ripgrep is not installed"
+)
 
 RIPGREP = "rg"
 
@@ -26,33 +25,40 @@ def write(path: Path, text: str = "x") -> Path:
     return path
 
 
-def ripgrep_files(root: Path, *args: str) -> set[str]:
+def run_ripgrep(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(  # noqa: S603
         [RIPGREP, "--files", *args],
         cwd=root,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
-    return set(result.stdout.split("\n")) - {""}
+    # 2 is ripgrep's "something went wrong", which --follow returns for this tree's
+    # dangling link and its cycle while still listing every file it did reach.
+    assert result.returncode in (0, 2), result.stderr
+    return result
 
 
-def toko_files(root: Path, *, hidden: bool) -> set[str]:
+def ripgrep_files(root: Path, *args: str) -> set[str]:
+    return set(run_ripgrep(root, *args).stdout.split("\n")) - {""}
+
+
+def toko_files(root: Path, *, hidden: bool, follow: bool = False) -> set[str]:
     return {
         str(f.absolute().relative_to(root.absolute()))
-        for f in find_files(root, include_hidden=hidden)
+        for f in find_files(root, include_hidden=hidden, follow_symlinks=follow)
     }
 
 
 @pytest.fixture
-def parity_tree(tmp_path, monkeypatch) -> Path:
+def parity_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
     """Every ignore source ripgrep honours, each with a file only it can exclude."""
     # ripgrep never reads GIT_CONFIG_GLOBAL; it looks for $HOME/.gitconfig and
     # $XDG_CONFIG_HOME/git/config itself. Pointing git at $HOME/.gitconfig is the
     # one place both of them agree to read.
-    gitconfig = tmp_path / "home" / ".gitconfig"
+    gitconfig = isolated_git_env / ".gitconfig"
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
-    excludes = write(tmp_path / "home" / "global-excludes", "*.swp\n")
+    excludes = write(isolated_git_env / "global-excludes", "*.swp\n")
     write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
 
     write(tmp_path / ".gitignore", "*.above-repo\n")
@@ -94,8 +100,13 @@ def parity_tree(tmp_path, monkeypatch) -> Path:
     write(nested / "vendored.tmp")
     write(nested / "target" / "build.rs")
 
+    # Every shape --follow has to cope with: a link to a file, a link to a directory,
+    # one that resolves to nothing, and one that points back at an ancestor.
     (repo / "link.txt").symlink_to(repo / "keep.txt")
     (repo / "linkdir").symlink_to(repo / "sub")
+    (repo / "dangling.txt").symlink_to(repo / "gone.txt")
+    write(repo / "cycle" / "a.txt")
+    (repo / "cycle" / "up").symlink_to("..")
 
     # A commit fills .git with loose objects, refs and logs, so --hidden parity
     # is measured against a real repository rather than a bare skeleton.
@@ -105,20 +116,22 @@ def parity_tree(tmp_path, monkeypatch) -> Path:
 
 
 @pytest.mark.parametrize("subpath", ["", "sub"])
+@pytest.mark.parametrize("follow", [False, True])
 @pytest.mark.parametrize("hidden", [False, True])
-def test_discovery_matches_ripgrep(parity_tree, subpath, hidden):
+def test_discovery_matches_ripgrep(parity_tree, subpath, hidden, follow):
     root = parity_tree / subpath if subpath else parity_tree
-    args = ["--hidden"] if hidden else []
+    args = [*(["--hidden"] if hidden else []), *(["--follow"] if follow else [])]
 
     # `rg --files` lists binary files; toko warns about them later, when it reads
     # them. Comparing here compares discovery, which is what parity is about.
-    assert toko_files(root, hidden=hidden) == ripgrep_files(root, *args)
+    assert toko_files(root, hidden=hidden, follow=follow) == ripgrep_files(root, *args)
 
 
 def test_the_tree_actually_exercises_every_source(parity_tree):
     found = ripgrep_files(parity_tree)
     assert found == {
         "binary.bin",
+        "cycle/a.txt",
         "keep.txt",
         "kept.above-repo",
         "sub/keep.txt",
@@ -130,3 +143,34 @@ def test_the_tree_has_a_populated_git_directory_for_the_hidden_case(parity_tree)
     found = ripgrep_files(parity_tree, "--hidden")
     assert {".git/HEAD", ".git/config", ".git/index"} <= found
     assert [name for name in found if name.startswith(".git/objects/")]
+
+
+def test_the_tree_makes_ripgrep_report_both_a_dangling_link_and_a_loop(parity_tree):
+    """The --follow parity case is only worth anything if the tree provokes both."""
+    stderr = run_ripgrep(parity_tree, "--follow").stderr
+
+    assert "No such file or directory" in stderr
+    assert "File system loop found" in stderr
+
+
+def test_following_is_what_brings_the_symlinked_paths_back(parity_tree):
+    without = toko_files(parity_tree, hidden=False)
+    following = toko_files(parity_tree, hidden=False, follow=True)
+
+    assert following - without == {"link.txt", "linkdir/keep.txt"}
+
+
+def test_a_dangling_link_and_a_loop_are_reported_rather_than_raised(parity_tree):
+    problems: list[str] = []
+
+    found = find_files(parity_tree, follow_symlinks=True, on_error=problems.append)
+
+    assert any(
+        "dangling.txt" in problem and "No such file" in problem for problem in problems
+    )
+    assert any(
+        problem.startswith("File system loop found") and "cycle/up" in problem
+        for problem in problems
+    )
+    # The rest of the tree is still counted: a bad link costs its own path, not the run.
+    assert "keep.txt" in {path.name for path in found}

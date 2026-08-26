@@ -3,8 +3,9 @@
 import os
 from pathlib import Path
 
-import httpx
 import pathspec
+
+from toko.http_client import shared_client
 
 
 def read_gitignore(directory: Path) -> pathspec.PathSpec | None:
@@ -193,6 +194,6 @@ def fetch_url(url: str, *, timeout: float = 30.0) -> str:
         httpx.HTTPError: If request fails
         UnicodeDecodeError: If response is not valid UTF-8
     """
-    response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    response = shared_client().get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()
     return response.text

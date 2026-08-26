@@ -145,13 +145,22 @@ def _dot_layers(directory: Path) -> list[_IgnoreLayer]:
 
 
 def _git_config_value(key: str, *, cwd: Path) -> str | None:
-    """Ask git for a config value, treating a missing or broken git as unset."""
+    """Ask git for a config value, treating a missing or broken git as unset.
+
+    The only value read here is core.excludesFile, which is a path, so git's stdout is
+    decoded with os.fsdecode -- exactly how Python decodes every other filesystem path.
+    `text=True` would instead use locale.getencoding(): a non-ASCII excludes path under
+    a non-UTF-8 locale then raised UnicodeDecodeError straight out of a function whose
+    whole contract is to degrade quietly, killing a run over a tree of ASCII files.
+    Hardcoding UTF-8 is not enough either -- it decodes to real characters that open()
+    cannot re-encode when the filesystem encoding is ASCII. fsdecode round-trips: its
+    surrogates encode back to git's original bytes, so the file is still found.
+    """
     try:
         result = subprocess.run(  # noqa: S603
             ["git", "config", "--get", key],  # noqa: S607
             cwd=cwd,
             capture_output=True,
-            text=True,
             timeout=5,
             check=False,
         )
@@ -159,7 +168,7 @@ def _git_config_value(key: str, *, cwd: Path) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    return result.stdout.strip() or None
+    return os.fsdecode(result.stdout).strip() or None
 
 
 def _global_excludes_spec(start: Path) -> pathspec.PathSpec | None:

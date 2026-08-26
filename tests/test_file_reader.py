@@ -302,3 +302,37 @@ def test_utf8_piped_to_stdin_survives_a_non_utf8_locale(tmp_path):
     assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
     assert "surrogates not allowed" not in result.stderr.decode("utf-8", "replace")
     assert result.stdout.decode("utf-8", "replace").strip().isdigit()
+
+
+def test_a_non_ascii_excludes_file_path_does_not_kill_the_run(tmp_path):
+    """Git's stdout is a filesystem path, so the locale must not decide how it decodes.
+
+    `core.excludesFile` is read by running git and reading its stdout. Decoding that
+    with the locale's encoding meant a repository whose excludes file lives under a
+    non-ASCII path died with UnicodeDecodeError under a non-UTF-8 locale -- taking the
+    whole run with it, for a tree of plain ASCII files.
+    """
+    excludes = tmp_path / "caf\u00e9-config" / "ignore"
+    excludes.parent.mkdir(parents=True)
+    excludes.write_text("*.swp\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)  # noqa: S607
+    subprocess.run(  # noqa: S603
+        ["git", "config", "core.excludesFile", str(excludes)],  # noqa: S607
+        cwd=repo,
+        check=True,
+    )
+    (repo / "a.txt").write_text("hello world", encoding="utf-8")
+    (repo / "notes.swp").write_text("x", encoding="utf-8")
+    env = _non_utf8_env(tmp_path)
+    _skip_unless_the_locale_took(env)
+
+    result = _run_toko(["--format", "csv", "-m", "gpt-5", str(repo)], env)
+    stderr = result.stderr.decode("utf-8", "replace")
+
+    assert result.returncode == 0, stderr
+    assert "codec can't decode" not in stderr
+    assert "a.txt" in result.stdout.decode("utf-8", "replace")
+    # The excludes file was not merely survived, it was applied.
+    assert "notes.swp" not in result.stdout.decode("utf-8", "replace")

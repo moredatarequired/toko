@@ -155,6 +155,7 @@ def _iter_recursive_files(
     *,
     respect_gitignore: bool,
     respect_dot_ignore: bool,
+    include_hidden: bool,
     exclude_spec: pathspec.PathSpec | None,
 ) -> list[Path]:
     base_abs = base_dir.absolute()
@@ -192,11 +193,12 @@ def _iter_recursive_files(
         dirs[:] = [
             name
             for name in dirs
-            if not _is_ignored(root_prefix + name, layers, is_dir=True)
+            if (include_hidden or not name.startswith("."))
+            and not _is_ignored(root_prefix + name, layers, is_dir=True)
         ]
 
         for filename in filenames:
-            if filename == ".gitignore":
+            if not include_hidden and filename.startswith("."):
                 continue
             if (root_path / filename).is_symlink():
                 continue
@@ -216,6 +218,7 @@ def _iter_shallow_files(
     *,
     respect_gitignore: bool,
     respect_dot_ignore: bool,
+    include_hidden: bool,
     exclude_spec: pathspec.PathSpec | None,
 ) -> list[Path]:
     base_abs = base_dir.absolute()
@@ -231,7 +234,7 @@ def _iter_shallow_files(
     for item in base_dir.iterdir():
         if item.is_symlink() or not item.is_file():
             continue
-        if item.name == ".gitignore":
+        if not include_hidden and item.name.startswith("."):
             continue
         if _should_skip(
             base_prefix + item.name,
@@ -250,6 +253,7 @@ def find_files(
     recursive: bool = True,
     respect_gitignore: bool = True,
     respect_dot_ignore: bool = True,
+    include_hidden: bool = False,
     exclude_patterns: list[str] | None = None,
 ) -> list[Path]:
     """Find files under a path, optionally recursing and applying skip rules."""
@@ -271,6 +275,7 @@ def find_files(
         path,
         respect_gitignore=respect_gitignore,
         respect_dot_ignore=respect_dot_ignore,
+        include_hidden=include_hidden,
         exclude_spec=exclude_spec,
     )
 

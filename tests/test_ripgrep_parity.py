@@ -1,0 +1,116 @@
+"""Differential test: the files toko discovers are the files `rg --files` lists."""
+
+import shutil
+import subprocess
+from pathlib import Path  # noqa: TC003
+
+import pytest
+
+from toko.file_reader import find_files
+
+pytestmark = [
+    pytest.mark.usefixtures("isolated_git_env"),
+    pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed"),
+]
+
+RIPGREP = "rg"
+
+
+def git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True)  # noqa: S603, S607
+
+
+def write(path: Path, text: str = "x") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def ripgrep_files(root: Path, *args: str) -> set[str]:
+    result = subprocess.run(  # noqa: S603
+        [RIPGREP, "--files", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return set(result.stdout.split("\n")) - {""}
+
+
+def toko_files(root: Path) -> set[str]:
+    return {str(f.absolute().relative_to(root.absolute())) for f in find_files(root)}
+
+
+@pytest.fixture
+def parity_tree(tmp_path, monkeypatch) -> Path:
+    """Every ignore source ripgrep honours, each with a file only it can exclude."""
+    # ripgrep never reads GIT_CONFIG_GLOBAL; it looks for $HOME/.gitconfig and
+    # $XDG_CONFIG_HOME/git/config itself. Pointing git at $HOME/.gitconfig is the
+    # one place both of them agree to read.
+    gitconfig = tmp_path / "home" / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    excludes = write(tmp_path / "home" / "global-excludes", "*.swp\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
+
+    write(tmp_path / ".gitignore", "*.above-repo\n")
+    write(tmp_path / ".ignore", "*.above-repo-dot\n")
+
+    repo = tmp_path / "fx"
+    repo.mkdir()
+    git("init", "-q", cwd=repo)
+    write(repo / ".gitignore", "*.log\n")
+    write(repo / ".git" / "info" / "exclude", "excluded-by-info.txt\n")
+    write(repo / ".ignore", "dot-ignored.txt\n")
+    write(repo / ".rgignore", "rg-ignored.txt\n")
+
+    for name in (
+        "keep.txt",
+        "top.log",
+        "excluded-by-info.txt",
+        "notes.swp",
+        "dot-ignored.txt",
+        "rg-ignored.txt",
+        ".hidden.txt",
+        "kept.above-repo",
+        "dropped.above-repo-dot",
+    ):
+        write(repo / name)
+    (repo / "binary.bin").write_bytes(b"\x00\x01\x02 not text")
+    write(repo / ".hiddendir" / "inside.txt")
+
+    write(repo / "sub" / ".gitignore", "nested-ignored.txt\n")
+    for name in ("keep.txt", "nested-ignored.txt", "top.log"):
+        write(repo / "sub" / name)
+
+    nested = repo / "vendor" / "lib"
+    nested.mkdir(parents=True)
+    git("init", "-q", cwd=nested)
+    write(nested / ".gitignore", "target/\n")
+    write(nested / ".git" / "info" / "exclude", "vendored.tmp\n")
+    write(nested / "src.rs")
+    write(nested / "vendored.tmp")
+    write(nested / "target" / "build.rs")
+
+    (repo / "link.txt").symlink_to(repo / "keep.txt")
+    (repo / "linkdir").symlink_to(repo / "sub")
+    return repo
+
+
+@pytest.mark.parametrize("subpath", ["", "sub"])
+def test_discovery_matches_ripgrep(parity_tree, subpath):
+    root = parity_tree / subpath if subpath else parity_tree
+
+    # `rg --files` lists binary files; toko warns about them later, when it reads
+    # them. Comparing here compares discovery, which is what parity is about.
+    assert toko_files(root) == ripgrep_files(root)
+
+
+def test_the_tree_actually_exercises_every_source(parity_tree):
+    found = ripgrep_files(parity_tree)
+    assert found == {
+        "binary.bin",
+        "keep.txt",
+        "kept.above-repo",
+        "sub/keep.txt",
+        "vendor/lib/src.rs",
+    }

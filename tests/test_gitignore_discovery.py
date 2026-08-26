@@ -236,7 +236,7 @@ def test_dot_ignore_applies_like_a_gitignore(repo):
     write(repo / "app.js")
     write(repo / "debug.log")
 
-    assert names(find_files(repo), repo) == {"app.js", ".ignore"}
+    assert names(find_files(repo), repo) == {"app.js"}
 
 
 def test_rgignore_applies_like_a_gitignore(repo):
@@ -244,7 +244,7 @@ def test_rgignore_applies_like_a_gitignore(repo):
     write(repo / "app.js")
     write(repo / "debug.log")
 
-    assert names(find_files(repo), repo) == {"app.js", ".rgignore"}
+    assert names(find_files(repo), repo) == {"app.js"}
 
 
 def test_dot_ignore_overrides_gitignore_in_both_directions(repo):
@@ -310,7 +310,7 @@ def test_dot_ignore_outside_a_repository_still_applies(tmp_path):
     write(plain / "app.js")
     write(plain / "debug.log")
 
-    assert names(find_files(plain), plain) == {"app.js", ".ignore"}
+    assert names(find_files(plain), plain) == {"app.js"}
 
 
 def test_core_excludes_file_does_not_apply_outside_a_repository(tmp_path):
@@ -341,3 +341,36 @@ def test_symlinks_are_not_followed_or_listed(repo):
 
     assert names(find_files(repo), repo) == {"real.txt", "tree/inner.txt"}
     assert names(find_files(repo, recursive=False), repo) == {"real.txt"}
+
+
+def test_hidden_files_and_directories_are_skipped_by_default(repo):
+    write(repo / "visible.txt")
+    write(repo / ".env")
+    write(repo / ".github" / "workflows" / "ci.yml")
+
+    assert names(find_files(repo), repo) == {"visible.txt"}
+
+
+def test_hidden_brings_back_every_dotted_path_including_gitignore(repo):
+    write(repo / ".gitignore", "*.log\n")
+    write(repo / "visible.txt")
+    write(repo / ".env")
+    write(repo / ".github" / "workflows" / "ci.yml")
+    write(repo / "debug.log")
+
+    found = names(find_files(repo, include_hidden=True), repo)
+    assert found == {".gitignore", ".env", ".github/workflows/ci.yml", "visible.txt"}
+
+
+def test_hidden_does_not_reopen_the_git_directory(repo):
+    write(repo / "visible.txt")
+
+    found = names(find_files(repo, include_hidden=True), repo)
+    assert not [name for name in found if name.startswith(".git/")]
+
+
+def test_an_explicitly_named_hidden_directory_is_still_walked(repo):
+    write(repo / ".github" / "workflows" / "ci.yml")
+
+    found = find_files(repo / ".github")
+    assert names(found, repo) == {".github/workflows/ci.yml"}

@@ -132,8 +132,8 @@ src/toko/sort_order.py                    50
 TOTAL                                 32,896
 ```
 
-- Directories are processed recursively by default and honor the same ignore files ripgrep does: `.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`.
-- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, and `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules.
+- Directories are processed recursively by default and skip what `rg --files` skips: the ignore files ripgrep honors (`.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`), hidden files and directories, and symlinks.
+- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules, and `--hidden` to count dotted paths such as `.env` and `.github/`. `.git` itself is never walked, with or without `--hidden`.
 - Counting files runs eight counts at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` (1 to 64) to change that, or `--jobs 1` to count one at a time. It has no effect on `--text` or piped stdin, and URLs are still fetched one after another.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.

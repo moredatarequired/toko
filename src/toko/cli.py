@@ -177,6 +177,9 @@ def main(
         bool,
         typer.Option("--no-ignore-dot", help="Don't respect .ignore/.rgignore files"),
     ] = False,
+    hidden: Annotated[
+        bool, typer.Option("--hidden", help="Count hidden files and directories too")
+    ] = False,
     no_recursive: Annotated[
         bool, typer.Option("--no-recursive", help="Don't recurse into directories")
     ] = False,
@@ -247,6 +250,7 @@ def main(
         header,
         list_models,
         no_ignore_dot=no_ignore_dot,
+        hidden=hidden,
         include_retired=include_retired,
         sort_order=sort_order,
         jobs=jobs,
@@ -328,6 +332,7 @@ def _collect_inputs(
     *,
     no_ignore: bool,
     no_ignore_dot: bool,
+    hidden: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> InputSelection:
@@ -340,6 +345,7 @@ def _collect_inputs(
             config,
             no_ignore=no_ignore,
             no_ignore_dot=no_ignore_dot,
+            hidden=hidden,
             no_recursive=no_recursive,
             exclude_patterns=exclude_patterns,
         )
@@ -367,6 +373,7 @@ def _collect_files_from_paths(
     *,
     no_ignore: bool,
     no_ignore_dot: bool,
+    hidden: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> tuple[list[tuple[str, str]], bool]:
@@ -384,6 +391,7 @@ def _collect_files_from_paths(
                 recursive=not no_recursive,
                 respect_gitignore=should_respect_gitignore,
                 respect_dot_ignore=not no_ignore_dot,
+                include_hidden=hidden,
                 exclude_patterns=exclude_patterns,
             )
         had_failures = had_failures or not ok
@@ -412,6 +420,7 @@ def _collect_from_filesystem(
     recursive: bool,
     respect_gitignore: bool,
     respect_dot_ignore: bool,
+    include_hidden: bool,
     exclude_patterns: list[str] | None,
 ) -> bool:
     try:
@@ -420,6 +429,7 @@ def _collect_from_filesystem(
             recursive=recursive,
             respect_gitignore=respect_gitignore,
             respect_dot_ignore=respect_dot_ignore,
+            include_hidden=include_hidden,
             exclude_patterns=exclude_patterns,
         )
     except (FileNotFoundError, ValueError) as e:
@@ -652,6 +662,7 @@ def _do_count(
     list_models: bool,
     *,
     no_ignore_dot: bool = False,
+    hidden: bool = False,
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
@@ -670,6 +681,7 @@ def _do_count(
         config,
         no_ignore=no_ignore,
         no_ignore_dot=no_ignore_dot,
+        hidden=hidden,
         no_recursive=no_recursive,
         exclude_patterns=merged_exclude,
     )

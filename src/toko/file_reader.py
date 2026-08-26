@@ -1,29 +1,27 @@
 """File and directory reading utilities."""
 
 import os
+import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 import pathspec
 
 
-def read_gitignore(directory: Path) -> pathspec.PathSpec | None:
-    """Read .gitignore file and return a PathSpec.
+class _IgnoreLayer(NamedTuple):
+    """One ignore file's patterns, anchored at the directory they are relative to."""
 
-    Args:
-        directory: Directory to look for .gitignore
+    anchor: str  # absolute path of that directory, with a trailing separator
+    spec: pathspec.PathSpec
 
-    Returns:
-        PathSpec if .gitignore exists, None otherwise
-    """
-    gitignore_path = directory / ".gitignore"
-    if not gitignore_path.exists():
-        return None
+    def check(self, absolute_path: str, *, is_dir: bool) -> bool | None:
+        relative = absolute_path.removeprefix(self.anchor)
+        return self.spec.check_file(f"{relative}/" if is_dir else relative).include
 
-    with gitignore_path.open() as f:
-        patterns = f.read().splitlines()
 
-    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+def _dir_prefix(directory: Path) -> str:
+    return str(directory).rstrip(os.sep) + os.sep
 
 
 def _build_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
@@ -32,83 +30,167 @@ def _build_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
     return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 
-def _path_relative_to(root: Path, base: Path) -> str:
-    return str(root.relative_to(base))
+def _read_spec(path: Path) -> pathspec.PathSpec | None:
+    try:
+        patterns = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    return _build_spec(patterns)
+
+
+def read_gitignore(directory: Path) -> pathspec.PathSpec | None:
+    """Read one directory's own .gitignore, without looking above or below it."""
+    return _read_spec(directory / ".gitignore")
+
+
+def _ignore_layer(anchor: Path, ignore_file: Path) -> _IgnoreLayer | None:
+    spec = _read_spec(ignore_file)
+    if spec is None:
+        return None
+    return _IgnoreLayer(_dir_prefix(anchor), spec)
+
+
+def _find_repo_root(directory: Path) -> Path | None:
+    for candidate in (directory, *directory.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _git_config_value(key: str, *, cwd: Path) -> str | None:
+    """Ask git for a config value, treating a missing or broken git as unset."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "config", "--get", key],  # noqa: S607
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _global_excludes_file(repo_root: Path) -> Path:
+    configured = _git_config_value("core.excludesFile", cwd=repo_root)
+    if configured:
+        return Path(configured).expanduser()
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    config_home = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+    return config_home / "git" / "ignore"
+
+
+def _inherited_ignore_layers(directory: Path) -> list[_IgnoreLayer]:
+    """Ignore rules reaching `directory` from the repository it sits in.
+
+    Ordered weakest first: git resolves a path against the last pattern that
+    matches it, so a deeper .gitignore has to come after a shallower one.
+    """
+    repo_root = _find_repo_root(directory)
+    if repo_root is None:
+        return []
+
+    between: list[Path] = []
+    ancestor = directory
+    while ancestor != repo_root and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+        between.append(ancestor)
+
+    sources = [
+        (repo_root, _global_excludes_file(repo_root)),
+        (repo_root, repo_root / ".git" / "info" / "exclude"),
+        *((d, d / ".gitignore") for d in reversed(between)),
+    ]
+    layers = (_ignore_layer(anchor, source) for anchor, source in sources)
+    return [layer for layer in layers if layer is not None]
+
+
+def _is_ignored(
+    absolute_path: str, layers: list[_IgnoreLayer], *, is_dir: bool = False
+) -> bool:
+    for layer in reversed(layers):
+        matched = layer.check(absolute_path, is_dir=is_dir)
+        if matched is not None:
+            return matched
+    return False
 
 
 def _should_skip(
-    file_path: Path,
+    absolute_path: str,
     *,
-    base_dir: Path,
-    gitignore_spec: pathspec.PathSpec | None,
+    base_prefix: str,
+    layers: list[_IgnoreLayer],
     exclude_spec: pathspec.PathSpec | None,
 ) -> bool:
-    relative = _path_relative_to(file_path, base_dir)
-    return bool(
-        (gitignore_spec and gitignore_spec.match_file(relative))
-        or (exclude_spec and exclude_spec.match_file(relative))
-    )
-
-
-def _prune_directories(
-    dirs: list[str],
-    *,
-    current_root: Path,
-    base_dir: Path,
-    gitignore_spec: pathspec.PathSpec | None,
-) -> None:
-    if not gitignore_spec:
-        return
-
-    keep: list[str] = []
-    for directory in dirs:
-        candidate = (current_root / directory).relative_to(base_dir)
-        if not gitignore_spec.match_file(f"{candidate}/"):
-            keep.append(directory)
-    dirs[:] = keep
+    if _is_ignored(absolute_path, layers):
+        return True
+    relative = absolute_path.removeprefix(base_prefix)
+    return bool(exclude_spec and exclude_spec.match_file(relative))
 
 
 def _iter_recursive_files(
-    base_dir: Path,
-    *,
-    gitignore_spec: pathspec.PathSpec | None,
-    exclude_spec: pathspec.PathSpec | None,
+    base_dir: Path, *, respect_gitignore: bool, exclude_spec: pathspec.PathSpec | None
 ) -> list[Path]:
+    base_abs = base_dir.absolute()
+    base_prefix = _dir_prefix(base_abs)
+    inherited = _inherited_ignore_layers(base_abs) if respect_gitignore else []
+    layers_by_dir: dict[Path, list[_IgnoreLayer]] = {}
+
     discovered: list[Path] = []
     for root, dirs, filenames in os.walk(base_dir):
         root_path = Path(root)
+        root_abs = root_path.absolute()
+        root_prefix = _dir_prefix(root_abs)
+        layers = layers_by_dir.get(root_abs.parent, inherited)
+        own_layer = (
+            _ignore_layer(root_abs, root_path / ".gitignore")
+            if respect_gitignore
+            else None
+        )
+        if own_layer:
+            layers = [*layers, own_layer]
+        layers_by_dir[root_abs] = layers
+
         # No .gitignore can exclude .git: git treats it as the repo boundary
         # rather than an ignorable path, so prune it however we were configured.
         if ".git" in dirs:
             dirs.remove(".git")
-        _prune_directories(
-            dirs,
-            current_root=root_path,
-            base_dir=base_dir,
-            gitignore_spec=gitignore_spec,
-        )
+        dirs[:] = [
+            name
+            for name in dirs
+            if not _is_ignored(root_prefix + name, layers, is_dir=True)
+        ]
 
         for filename in filenames:
             if filename == ".gitignore":
                 continue
-            candidate = root_path / filename
             if _should_skip(
-                candidate,
-                base_dir=base_dir,
-                gitignore_spec=gitignore_spec,
+                root_prefix + filename,
+                base_prefix=base_prefix,
+                layers=layers,
                 exclude_spec=exclude_spec,
             ):
                 continue
-            discovered.append(candidate)
+            discovered.append(root_path / filename)
     return discovered
 
 
 def _iter_shallow_files(
-    base_dir: Path,
-    *,
-    gitignore_spec: pathspec.PathSpec | None,
-    exclude_spec: pathspec.PathSpec | None,
+    base_dir: Path, *, respect_gitignore: bool, exclude_spec: pathspec.PathSpec | None
 ) -> list[Path]:
+    base_abs = base_dir.absolute()
+    base_prefix = _dir_prefix(base_abs)
+    layers: list[_IgnoreLayer] = []
+    if respect_gitignore:
+        layers = _inherited_ignore_layers(base_abs)
+        own_layer = _ignore_layer(base_abs, base_dir / ".gitignore")
+        if own_layer:
+            layers.append(own_layer)
+
     discovered: list[Path] = []
     for item in base_dir.iterdir():
         if not item.is_file():
@@ -116,9 +198,9 @@ def _iter_shallow_files(
         if item.name == ".gitignore":
             continue
         if _should_skip(
-            item,
-            base_dir=base_dir,
-            gitignore_spec=gitignore_spec,
+            base_prefix + item.name,
+            base_prefix=base_prefix,
+            layers=layers,
             exclude_spec=exclude_spec,
         ):
             continue
@@ -145,19 +227,15 @@ def find_files(
     if not path.is_dir():
         raise ValueError(f"Path is not a file or directory: {path}")
 
-    # Build exclusion spec
     exclude_spec = _build_spec(exclude_patterns)
-
-    # Build gitignore spec if needed
-    gitignore_spec = read_gitignore(path) if respect_gitignore else None
 
     files = (
         _iter_recursive_files(
-            path, gitignore_spec=gitignore_spec, exclude_spec=exclude_spec
+            path, respect_gitignore=respect_gitignore, exclude_spec=exclude_spec
         )
         if recursive
         else _iter_shallow_files(
-            path, gitignore_spec=gitignore_spec, exclude_spec=exclude_spec
+            path, respect_gitignore=respect_gitignore, exclude_spec=exclude_spec
         )
     )
 

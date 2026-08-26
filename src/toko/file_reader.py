@@ -57,6 +57,25 @@ def _find_repo_root(directory: Path) -> Path | None:
     return None
 
 
+def _is_within(directory: Path, root: Path | None) -> bool:
+    return root is not None and (directory == root or root in directory.parents)
+
+
+# Weakest first: .gitignore overrides .git/info/exclude, and .ignore/.rgignore
+# override both, the way ripgrep resolves a path against several ignore files.
+DOT_IGNORE_FILES = (".ignore", ".rgignore")
+
+
+def _directory_layers(directory: Path, *, git: bool, dot: bool) -> list[_IgnoreLayer]:
+    sources: list[Path] = []
+    if git:
+        sources.append(directory / ".gitignore")
+    if dot:
+        sources.extend(directory / name for name in DOT_IGNORE_FILES)
+    layers = (_ignore_layer(directory, source) for source in sources)
+    return [layer for layer in layers if layer is not None]
+
+
 def _git_config_value(key: str, *, cwd: Path) -> str | None:
     """Ask git for a config value, treating a missing or broken git as unset."""
     try:
@@ -84,29 +103,31 @@ def _global_excludes_file(repo_root: Path) -> Path:
     return config_home / "git" / "ignore"
 
 
-def _inherited_ignore_layers(directory: Path) -> list[_IgnoreLayer]:
-    """Ignore rules reaching `directory` from the repository it sits in.
+def _inherited_ignore_layers(directory: Path, *, dot: bool) -> list[_IgnoreLayer]:
+    """Ignore rules reaching `directory` from the directories above it.
 
-    Ordered weakest first: git resolves a path against the last pattern that
-    matches it, so a deeper .gitignore has to come after a shallower one.
+    Ordered weakest first: a path is resolved against the last pattern that
+    matches it, so a deeper ignore file has to come after a shallower one.
+    Git's rules stop at the repository root; .ignore and .rgignore do not
+    belong to git and keep going up.
     """
     repo_root = _find_repo_root(directory)
-    if repo_root is None:
-        return []
-
-    between: list[Path] = []
-    ancestor = directory
-    while ancestor != repo_root and ancestor != ancestor.parent:
-        ancestor = ancestor.parent
-        between.append(ancestor)
-
-    sources = [
-        (repo_root, _global_excludes_file(repo_root)),
-        (repo_root, repo_root / ".git" / "info" / "exclude"),
-        *((d, d / ".gitignore") for d in reversed(between)),
-    ]
-    layers = (_ignore_layer(anchor, source) for anchor, source in sources)
-    return [layer for layer in layers if layer is not None]
+    layers: list[_IgnoreLayer] = []
+    if repo_root is not None:
+        root_sources = (
+            _global_excludes_file(repo_root),
+            repo_root / ".git" / "info" / "exclude",
+        )
+        layers.extend(
+            layer
+            for layer in (_ignore_layer(repo_root, s) for s in root_sources)
+            if layer is not None
+        )
+    for ancestor in reversed(directory.parents):
+        layers.extend(
+            _directory_layers(ancestor, git=_is_within(ancestor, repo_root), dot=dot)
+        )
+    return layers
 
 
 def _is_ignored(
@@ -133,11 +154,16 @@ def _should_skip(
 
 
 def _iter_recursive_files(
-    base_dir: Path, *, respect_gitignore: bool, exclude_spec: pathspec.PathSpec | None
+    base_dir: Path,
+    *,
+    respect_gitignore: bool,
+    respect_dot_ignore: bool,
+    exclude_spec: pathspec.PathSpec | None,
 ) -> list[Path]:
     base_abs = base_dir.absolute()
     base_prefix = _dir_prefix(base_abs)
-    inherited = _inherited_ignore_layers(base_abs) if respect_gitignore else []
+    dot = respect_gitignore and respect_dot_ignore
+    inherited = _inherited_ignore_layers(base_abs, dot=dot) if respect_gitignore else []
     layers_by_dir: dict[Path, list[_IgnoreLayer]] = {}
 
     discovered: list[Path] = []
@@ -146,13 +172,11 @@ def _iter_recursive_files(
         root_abs = root_path.absolute()
         root_prefix = _dir_prefix(root_abs)
         layers = layers_by_dir.get(root_abs.parent, inherited)
-        own_layer = (
-            _ignore_layer(root_abs, root_path / ".gitignore")
-            if respect_gitignore
-            else None
+        own = (
+            _directory_layers(root_abs, git=True, dot=dot) if respect_gitignore else []
         )
-        if own_layer:
-            layers = [*layers, own_layer]
+        if own:
+            layers = [*layers, *own]
         layers_by_dir[root_abs] = layers
 
         # No .gitignore can exclude .git: git treats it as the repo boundary
@@ -180,16 +204,19 @@ def _iter_recursive_files(
 
 
 def _iter_shallow_files(
-    base_dir: Path, *, respect_gitignore: bool, exclude_spec: pathspec.PathSpec | None
+    base_dir: Path,
+    *,
+    respect_gitignore: bool,
+    respect_dot_ignore: bool,
+    exclude_spec: pathspec.PathSpec | None,
 ) -> list[Path]:
     base_abs = base_dir.absolute()
     base_prefix = _dir_prefix(base_abs)
     layers: list[_IgnoreLayer] = []
     if respect_gitignore:
-        layers = _inherited_ignore_layers(base_abs)
-        own_layer = _ignore_layer(base_abs, base_dir / ".gitignore")
-        if own_layer:
-            layers.append(own_layer)
+        dot = respect_dot_ignore
+        layers = _inherited_ignore_layers(base_abs, dot=dot)
+        layers.extend(_directory_layers(base_abs, git=True, dot=dot))
 
     discovered: list[Path] = []
     for item in base_dir.iterdir():
@@ -213,6 +240,7 @@ def find_files(
     *,
     recursive: bool = True,
     respect_gitignore: bool = True,
+    respect_dot_ignore: bool = True,
     exclude_patterns: list[str] | None = None,
 ) -> list[Path]:
     """Find files under a path, optionally recursing and applying skip rules."""
@@ -229,14 +257,12 @@ def find_files(
 
     exclude_spec = _build_spec(exclude_patterns)
 
-    files = (
-        _iter_recursive_files(
-            path, respect_gitignore=respect_gitignore, exclude_spec=exclude_spec
-        )
-        if recursive
-        else _iter_shallow_files(
-            path, respect_gitignore=respect_gitignore, exclude_spec=exclude_spec
-        )
+    walk = _iter_recursive_files if recursive else _iter_shallow_files
+    files = walk(
+        path,
+        respect_gitignore=respect_gitignore,
+        respect_dot_ignore=respect_dot_ignore,
+        exclude_spec=exclude_spec,
     )
 
     return sorted(files)

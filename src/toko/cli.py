@@ -171,7 +171,11 @@ def main(
         typer.Option("--exclude", "-e", help="Glob patterns to exclude"),
     ] = None,
     no_ignore: Annotated[
-        bool, typer.Option("--no-ignore", help="Don't respect .gitignore files")
+        bool, typer.Option("--no-ignore", help="Don't respect any ignore files")
+    ] = False,
+    no_ignore_dot: Annotated[
+        bool,
+        typer.Option("--no-ignore-dot", help="Don't respect .ignore/.rgignore files"),
     ] = False,
     no_recursive: Annotated[
         bool, typer.Option("--no-recursive", help="Don't recurse into directories")
@@ -242,6 +246,7 @@ def main(
         cost,
         header,
         list_models,
+        no_ignore_dot=no_ignore_dot,
         include_retired=include_retired,
         sort_order=sort_order,
         jobs=jobs,
@@ -322,6 +327,7 @@ def _collect_inputs(
     config: Config,
     *,
     no_ignore: bool,
+    no_ignore_dot: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> InputSelection:
@@ -333,6 +339,7 @@ def _collect_inputs(
             paths,
             config,
             no_ignore=no_ignore,
+            no_ignore_dot=no_ignore_dot,
             no_recursive=no_recursive,
             exclude_patterns=exclude_patterns,
         )
@@ -359,6 +366,7 @@ def _collect_files_from_paths(
     config: Config,
     *,
     no_ignore: bool,
+    no_ignore_dot: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> tuple[list[tuple[str, str]], bool]:
@@ -375,6 +383,7 @@ def _collect_files_from_paths(
                 collected,
                 recursive=not no_recursive,
                 respect_gitignore=should_respect_gitignore,
+                respect_dot_ignore=not no_ignore_dot,
                 exclude_patterns=exclude_patterns,
             )
         had_failures = had_failures or not ok
@@ -402,6 +411,7 @@ def _collect_from_filesystem(
     *,
     recursive: bool,
     respect_gitignore: bool,
+    respect_dot_ignore: bool,
     exclude_patterns: list[str] | None,
 ) -> bool:
     try:
@@ -409,6 +419,7 @@ def _collect_from_filesystem(
             path,
             recursive=recursive,
             respect_gitignore=respect_gitignore,
+            respect_dot_ignore=respect_dot_ignore,
             exclude_patterns=exclude_patterns,
         )
     except (FileNotFoundError, ValueError) as e:
@@ -640,6 +651,7 @@ def _do_count(
     header: bool | None,
     list_models: bool,
     *,
+    no_ignore_dot: bool = False,
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
@@ -657,6 +669,7 @@ def _do_count(
         text,
         config,
         no_ignore=no_ignore,
+        no_ignore_dot=no_ignore_dot,
         no_recursive=no_recursive,
         exclude_patterns=merged_exclude,
     )

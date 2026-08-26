@@ -5,7 +5,7 @@ Toko is a token counting tool. It is built for use as a CLI, and available as a 
 ## Highlights
 
 - Accurate token counting for OpenAI models out of the box, with optional support for Anthropic, Google, xAI, Mistral, Llama, DeepSeek, and Qwen families.
-- Reads inline text, stdin, files, directories (respects `.gitignore` automatically), and URLs.
+- Reads inline text, stdin, files, directories (skips what ripgrep skips), and URLs.
 - Compare multiple models in one run and add cost estimates powered by bundled `genai-prices` data.
 - Emits `text`, `json`, `csv`, or `tsv` output. When stdout is piped, Toko automatically switches to TSV so you can chain tools like `cut` or `awk`.
 - Caches counts in SQLite under your platform cache folder (e.g. `~/.cache/toko`) so repeated runs avoid redundant API calls.
@@ -132,8 +132,8 @@ src/toko/sort_order.py                    50
 TOTAL                                 32,896
 ```
 
-- Directories are processed recursively by default and honor `.gitignore`.
-- Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Directories are processed recursively by default and honor the same ignore files ripgrep does: `.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`.
+- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, and `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules.
 - Counting files runs eight counts at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` (1 to 64) to change that, or `--jobs 1` to count one at a time. It has no effect on `--text` or piped stdin, and URLs are still fetched one after another.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.

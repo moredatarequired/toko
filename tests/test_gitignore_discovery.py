@@ -1,4 +1,4 @@
-"""Ignore-file discovery: upward search, per-directory stack, git's exclude files."""
+"""Ignore-file discovery: upward search, per-directory stack, ripgrep parity."""
 
 import os
 import subprocess
@@ -238,3 +238,67 @@ def test_ignore_files_still_apply_when_git_config_fails(repo, tmp_path, monkeypa
     write(repo / "debug.log")
 
     assert names(find_files(repo), repo) == {"app.js"}
+
+
+def test_dot_ignore_applies_like_a_gitignore(repo):
+    write(repo / ".ignore", "*.log\n")
+    write(repo / "app.js")
+    write(repo / "debug.log")
+
+    assert names(find_files(repo), repo) == {"app.js", ".ignore"}
+
+
+def test_rgignore_applies_like_a_gitignore(repo):
+    write(repo / ".rgignore", "*.log\n")
+    write(repo / "app.js")
+    write(repo / "debug.log")
+
+    assert names(find_files(repo), repo) == {"app.js", ".rgignore"}
+
+
+def test_dot_ignore_overrides_gitignore_in_both_directions(repo):
+    write(repo / "strict" / ".gitignore", "!keep.log\n*.log\n")
+    write(repo / "strict" / ".ignore", "*.log\n")
+    write(repo / "strict" / "keep.log")
+    write(repo / "loose" / ".gitignore", "*.log\n")
+    write(repo / "loose" / ".ignore", "!keep.log\n")
+    write(repo / "loose" / "keep.log")
+
+    found = names(find_files(repo), repo)
+    assert "strict/keep.log" not in found
+    assert "loose/keep.log" in found
+
+
+def test_dot_ignore_above_the_repository_root_still_applies(repo, tmp_path):
+    write(tmp_path / ".ignore", "*.log\n")
+    write(repo / "app.js")
+    write(repo / "debug.log")
+
+    assert names(find_files(repo), repo) == {"app.js"}
+
+
+def test_gitignore_above_the_repository_root_does_not_apply(repo, tmp_path):
+    write(tmp_path / ".gitignore", "*.log\n")
+    write(repo / "app.js")
+    write(repo / "debug.log")
+
+    assert names(find_files(repo), repo) == {"app.js", "debug.log"}
+
+
+def test_no_ignore_dot_keeps_files_only_dot_ignore_excluded(repo):
+    write(repo / ".ignore", "*.log\n")
+    write(repo / ".gitignore", "*.tmp\n")
+    write(repo / "app.js")
+    write(repo / "debug.log")
+    write(repo / "scratch.tmp")
+
+    found = names(find_files(repo, respect_dot_ignore=False), repo)
+    assert "debug.log" in found
+    assert "scratch.tmp" not in found
+
+
+def test_no_ignore_also_disables_dot_ignore(repo):
+    write(repo / ".ignore", "*.log\n")
+    write(repo / "debug.log")
+
+    assert "debug.log" in names(find_files(repo, respect_gitignore=False), repo)

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from toko import models
+from toko.counter import count_tokens
 
 
 @pytest.fixture
@@ -213,6 +214,26 @@ class TestPackagedRegistry:
     def test_retired_models_appear_only_when_asked_for(self):
         assert _registry_listing(include_retired=True) == GOLDEN_LISTING_WITH_RETIRED, (
             GOLDEN_HINT
+        )
+
+    def test_no_advertised_openai_model_leans_on_tiktokens_prefix_table(self, capsys):
+        """A prefix table entry claims a family, not a name.
+
+        tiktoken resolves anything starting with "gpt-5-" through that prefix, so
+        an entry with no encoding of its own counted exactly only by accident.
+        Toko now estimates those and says so, which for a model --list-models
+        advertises is a warning on every run: declare the encoding instead.
+        """
+        estimated = {
+            name: counted.caveat
+            for name in sorted(models.list_models()["openai"])
+            if (counted := count_tokens("hello world", model=name, use_cache=False))
+            and counted.approximate
+        }
+        capsys.readouterr()
+        assert estimated == {}, (
+            "these models are advertised but counted approximately; give each an "
+            f"encoding in src/toko/data/models.toml: {sorted(estimated)}"
         )
 
     def test_the_packaged_registry_loads_without_a_word_on_stderr(self, capsys):
@@ -592,6 +613,31 @@ class TestUserOverlay:
         listed = reloaded.list_models(include_retired=True)["google"]
         assert "models/gemini-my-model" in listed
         assert "models/Gemini-My-Model" not in listed
+
+    def test_a_user_encoding_wins_over_tiktokens_prefix_table(self, user_registry):
+        """The documented per-model `encoding` override, on a name tiktoken claims.
+
+        tiktoken resolves "gpt-4-1" through its "gpt-4-" prefix to cl100k_base, which
+        used to answer before the registry was consulted at all -- so the one field a
+        user has for teaching toko an encoding did nothing for any name a prefix
+        covered. "Café 日本語 🎉 résumé" is 13 tokens on cl100k_base and 7 on
+        o200k_base, so the count alone says which encoding was used.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "gpt-4-1"
+            provider = "openai"
+            encoding = "o200k_base"
+        """)
+        assert reloaded.get_model("gpt-4-1").encoding == "o200k_base"
+
+        counted = count_tokens(
+            "Café 日本語 🎉 résumé", model="gpt-4-1", use_cache=False
+        )
+
+        assert counted.count == 7
+        assert counted.approximate is False
+        assert counted.caveat is None
 
     def test_a_capitalised_openai_name_keeps_its_registry_metadata(self, user_registry):
         """OpenAI has no lowercasing resolver of its own, unlike the others.

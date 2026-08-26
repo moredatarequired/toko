@@ -347,8 +347,10 @@ retired = "unknown"
 #
 # tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
 # table only grows on release. Naming an encoding here marks it as verified, so
-# counting stays exact and warning-free; anything absent is estimated with
-# o200k_base and says so on stderr.
+# counting stays exact and warning-free; anything absent is estimated and says so
+# on stderr. Every entry needs one: tiktoken's prefix table would resolve
+# gpt-5-mini through "gpt-5-", but a prefix is a guess about a family, not
+# knowledge of a name, so toko no longer takes an exact count from it.
 #
 # `listed` controls whether --list-models advertises the model on top of
 # tiktoken's own table.
@@ -356,18 +358,22 @@ retired = "unknown"
 [[model]]
 name = "gpt-4.1-mini"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-4.1-nano"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5-mini"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5-nano"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5.1"

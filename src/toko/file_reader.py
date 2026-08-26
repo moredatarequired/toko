@@ -198,6 +198,8 @@ def _iter_recursive_files(
         for filename in filenames:
             if filename == ".gitignore":
                 continue
+            if (root_path / filename).is_symlink():
+                continue
             if _should_skip(
                 root_prefix + filename,
                 base_prefix=base_prefix,
@@ -227,7 +229,7 @@ def _iter_shallow_files(
 
     discovered: list[Path] = []
     for item in base_dir.iterdir():
-        if not item.is_file():
+        if item.is_symlink() or not item.is_file():
             continue
         if item.name == ".gitignore":
             continue

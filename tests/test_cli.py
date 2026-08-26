@@ -4,6 +4,7 @@ import ast
 import json
 import os
 import re
+import socket
 import sqlite3
 from pathlib import Path
 
@@ -709,14 +710,17 @@ def test_bad_url_does_not_abort_good_url_or_file(tmp_path):
 
 def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
     (tmp_path / "sample.txt").write_text("hello world")
-    # A self-referential symlink is unreadable for every user, including root.
-    (tmp_path / "loop.txt").symlink_to("loop.txt")
+    # Opening a bound unix socket fails for every user, including root, and
+    # unlike a symlink loop it is a real directory entry the walk still yields.
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind(str(tmp_path / "unreadable.sock"))
 
-    result = _invoke_cli(["--format", "csv", str(tmp_path)])
+        result = _invoke_cli(["--format", "csv", str(tmp_path)])
+
     assert result.exit_code == 1
     assert "sample.txt,2" in result.stdout
     assert "Error reading" in result.stderr
-    assert "loop.txt" in result.stderr
+    assert "unreadable.sock" in result.stderr
 
 
 def test_missing_path_reports_only_the_specific_error(tmp_path):

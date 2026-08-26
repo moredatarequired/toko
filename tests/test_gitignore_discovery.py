@@ -331,3 +331,13 @@ def test_a_nested_repository_contributes_its_own_info_exclude(repo):
     write(nested / "target" / "build.rs")
 
     assert names(find_files(repo), repo) == {"vendor/lib/src.rs"}
+
+
+def test_symlinks_are_not_followed_or_listed(repo):
+    write(repo / "real.txt")
+    write(repo / "tree" / "inner.txt")
+    (repo / "link.txt").symlink_to(repo / "real.txt")
+    (repo / "link_dir").symlink_to(repo / "tree")
+
+    assert names(find_files(repo), repo) == {"real.txt", "tree/inner.txt"}
+    assert names(find_files(repo, recursive=False), repo) == {"real.txt"}

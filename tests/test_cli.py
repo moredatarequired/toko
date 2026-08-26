@@ -747,7 +747,10 @@ def test_a_prefixed_retired_name_still_counts_when_opted_in():
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "openai/text-davinci-003\t2\ttrue"
+    # One model asked for, so a piped run prints the bare number; that the count is
+    # approximate is on stderr, where every warning about this name goes.
+    assert result.stdout.strip() == "2"
+    assert "unknown OpenAI model 'openai/text-davinci-003'" in result.stderr
 
 
 @pytest.mark.parametrize("requested", ["curie", "anthropic/curie"])
@@ -786,7 +789,7 @@ def test_the_gate_leaves_a_live_provider_prefixed_name_resolving_as_it_did():
     result = _invoke_cli(["-m", "openai/gpt-3.5-turbo", "--text", "hello world"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "openai/gpt-3.5-turbo\t2\ttrue"
+    assert result.stdout.strip() == "2"
     assert "unknown OpenAI model 'openai/gpt-3.5-turbo'" in result.stderr
 
 
@@ -996,7 +999,7 @@ def test_counting_run_uses_prices_from_an_earlier_update():
 def test_count_with_text():
     result = _invoke_cli(["--header", "--format", "tsv", "--text", "hello world"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
+    assert result.stdout.strip() == "model\ttokens\tapproximate\ngpt-5\t2\tfalse"
 
 
 def test_count_with_text_default_output():
@@ -1009,7 +1012,7 @@ def test_count_with_text_default_output():
 def test_count_from_stdin():
     result = _invoke_cli(["--header", "--format", "tsv"], stdin="hello world")
     assert result.exit_code == 0
-    assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
+    assert result.stdout.strip() == "model\ttokens\tapproximate\ngpt-5\t2\tfalse"
 
 
 def test_count_with_multiple_models():
@@ -1027,7 +1030,9 @@ def test_count_with_multiple_models():
         ]
     )
     assert result.exit_code == 0
-    assert result.stdout.strip() == "model\ttokens\ngpt-5\t1\ngpt-5-mini\t1"
+    assert result.stdout.strip() == (
+        "model\ttokens\tapproximate\ngpt-5\t1\tfalse\ngpt-5-mini\t1\tfalse"
+    )
 
 
 def test_cost_column_in_tsv():
@@ -1046,11 +1051,19 @@ def test_cost_column_in_tsv():
         ]
     )
     lines = [line for line in result.stdout.splitlines() if line]
-    assert lines[0] == "model\ttokens\tcost"
+    assert lines[0] == "model\ttokens\tcost\tapproximate"
     assert lines[1].startswith("gpt-5\t")
 
 
-_COUNT_KEYS = {"model", "tokens", "approximate", "cost", "caveats", "retirement"}
+_COUNT_KEYS = {
+    "model",
+    "tokens",
+    "approximate",
+    "cost",
+    "caveats",
+    "retirement",
+    "reason",
+}
 
 
 def _envelope(result) -> dict:
@@ -1085,6 +1098,7 @@ def test_json_wraps_a_text_run_in_the_envelope():
                         "cost": None,
                         "caveats": [],
                         "retirement": None,
+                        "reason": None,
                     }
                 ],
             }
@@ -1097,6 +1111,7 @@ def test_json_wraps_a_text_run_in_the_envelope():
                 "cost": None,
                 "caveats": [],
                 "retirement": None,
+                "reason": None,
             }
         ],
     }
@@ -1187,6 +1202,83 @@ def test_json_gives_an_exact_and_an_approximate_count_the_same_keys():
     assert [set(count) for count in counts] == [_COUNT_KEYS, _COUNT_KEYS]
     assert [count["approximate"] for count in counts] == [False, True]
     assert counts[0]["caveats"] == []
+
+
+def test_json_says_why_a_model_has_no_count(monkeypatch):
+    """A model that failed is in the document, with a null count and the reason for it.
+
+    The reason was already on stderr; what is new is that a machine-read document says
+    which model has no number and why, rather than leaving the consumer to notice that
+    a model it asked for is missing from the array.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+
+    result = _invoke_cli(
+        [
+            "--format",
+            "json",
+            "-m",
+            "gpt-5",
+            "-m",
+            "claude-sonnet-4-5",
+            "--text",
+            "hello",
+        ]
+    )
+
+    assert result.exit_code == 0
+    payload = _envelope(result)
+    counts = payload["results"][0]["counts"]
+    assert [count["model"] for count in counts] == ["gpt-5", "claude-sonnet-4-5"]
+    assert [set(count) for count in counts] == [_COUNT_KEYS, _COUNT_KEYS]
+
+    failed = counts[1]
+    assert failed["tokens"] is None
+    assert failed["approximate"] is None
+    assert failed["cost"] is None
+    assert "ANTHROPIC_API_KEY" in failed["reason"]
+    # The count that succeeded has the key too, holding null: no key appears or
+    # disappears with what the counting produced.
+    assert counts[0]["reason"] is None
+    assert payload["totals"] == counts
+
+
+def test_json_says_why_one_file_of_several_has_no_count(tmp_path, monkeypatch):
+    """The reason is per source: the total names the first failure, not every file."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+    args = _two_file_args(tmp_path)
+
+    result = _invoke_cli(["--format", "json", "-m", "claude-sonnet-4-5", *args])
+
+    assert result.exit_code == 1
+    payload = _envelope(result)
+    reasons = [source["counts"][0]["reason"] for source in payload["results"]]
+    assert len(reasons) == 2
+    assert all("ANTHROPIC_API_KEY" in reason for reason in reasons)
+    assert payload["totals"][0]["tokens"] is None
+    assert payload["totals"][0]["reason"] == reasons[0]
+
+
+def test_the_failure_reason_stays_out_of_the_delimited_formats(monkeypatch):
+    """Free text belongs where it can be quoted, which is #20's rule for `caveat`.
+
+    A delimited cell would have to carry a sentence with commas and quotes in it, and
+    the actionable part -- that there is no count -- is the empty cell itself.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+    args = ["-m", "claude-sonnet-4-5", "--text", "hello"]
+
+    document = json.loads(_invoke_cli(["--format", "json", *args]).stdout)
+    reason = document["totals"][0]["reason"]
+    assert reason
+
+    for output_format in ("csv", "tsv"):
+        rows = _invoke_cli(["--header", "--format", output_format, *args])
+        assert reason not in rows.stdout
+        assert "reason" not in rows.stdout.splitlines()[0]
 
 
 def _caveat_of(count: dict) -> dict:
@@ -1412,7 +1504,15 @@ def test_every_format_reports_one_cost_for_the_same_run(tmp_path):
     )
 
 
-def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():
+def test_csv_carries_the_approximate_column_whether_or_not_a_count_is_approximate():
+    """The column set is the command's, not the counting's.
+
+    #20 added this column only to runs that had something approximate to say, to keep
+    wholly exact runs byte-identical with what came before it. The price was that the
+    same command emitted two different headers depending on the files it was pointed
+    at, so a consumer had to read the data to learn the shape. The column is
+    unconditional now, and that compatibility is gone.
+    """
     exact = _invoke_cli(
         ["--header", "--format", "csv", "-m", "gpt-5", "--text", "hello world"]
     )
@@ -1430,21 +1530,31 @@ def test_csv_gains_the_approximate_column_only_when_a_count_is_approximate():
         ]
     )
 
-    assert exact.stdout.strip() == "model,tokens\ngpt-5,2"
+    assert exact.stdout.strip() == "model,tokens,approximate\ngpt-5,2,false"
     assert approximate.stdout.strip() == (
         "model,tokens,approximate\ngpt-5,2,false\ngpt-6,2,true"
     )
 
 
-def test_piped_single_model_tsv_keeps_approximate_marker():
-    # Without a header there is nowhere else for the marker to go, and stderr is
-    # not where a consumer on the other end of the pipe is looking.
+def test_piped_single_model_tsv_collapses_even_when_the_count_is_approximate():
+    """One model named is one number printed, whatever the counting turned out to be.
+
+    #20 kept the full row here so the marker would not be stranded on stderr. The
+    price was that `n=$(toko -m ... --text ...)` yielded a number or a three-field row
+    depending on whether the model it named had a tokenizer of its own, which is not a
+    thing a script can branch on. Asking for the header puts the marker back on stdout.
+    """
     result = _invoke_cli(
         ["--format", "tsv", "--model", "gpt-6", "--text", "hello world"]
     )
     assert result.exit_code == 0
-    assert result.stdout.strip() == "gpt-6\t2\ttrue"
+    assert result.stdout.strip() == "2"
     assert "unknown OpenAI model 'gpt-6'" in result.stderr
+
+    with_header = _invoke_cli(
+        ["--header", "--format", "tsv", "--model", "gpt-6", "--text", "hello world"]
+    )
+    assert with_header.stdout.strip() == ("model\ttokens\tapproximate\ngpt-6\t2\ttrue")
 
 
 def test_piped_single_model_tsv_stays_bare_when_exact():
@@ -1516,8 +1626,12 @@ def test_partial_success_missing_anthropic_key(monkeypatch):
     )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected.count)
-    assert "claude-sonnet-4-5" not in result.stdout
+    # Two models named is two rows, and the one that failed keeps its row with the
+    # cells it has no count for left empty. It was asked for; it is reported.
+    assert result.stdout.splitlines() == [
+        f"gpt-5\t{expected.count}\tfalse",
+        "claude-sonnet-4-5\t\t",
+    ]
     assert "Failed to count tokens for claude-sonnet-4-5" in result.stderr
     assert "ANTHROPIC_API_KEY" in result.stderr
 
@@ -1530,6 +1644,19 @@ def test_all_fail_missing_anthropic_key(monkeypatch):
     result = _invoke_cli(["--model", "claude-sonnet-4-5", "--text", text])
     assert result.exit_code != 0
     assert "Error: All models failed to count tokens" in result.stderr
+    # A run where everything failed prints the shape its command asked for, rather
+    # than nothing at all: one model named and a pipe on the other end is one line,
+    # empty because there is no count to put on it. The exit code carries the failure.
+    assert result.stdout == "\n"
+
+    shaped = _invoke_cli(
+        ["--header", "--format", "csv", "-m", "claude-sonnet-4-5", "--text", text]
+    )
+    assert shaped.exit_code != 0
+    assert shaped.stdout.splitlines() == [
+        "model,tokens,approximate",
+        "claude-sonnet-4-5,,",
+    ]
 
 
 def test_partial_success_missing_google_key(monkeypatch):
@@ -1542,8 +1669,10 @@ def test_partial_success_missing_google_key(monkeypatch):
     )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected.count)
-    assert "gemini-2.5-flash" not in result.stdout
+    assert result.stdout.splitlines() == [
+        f"gpt-5\t{expected.count}\tfalse",
+        "models/gemini-2.5-flash\t\t",
+    ]
     assert "GOOGLE_API_KEY" in result.stderr
 
 
@@ -1562,6 +1691,8 @@ def test_anthropic_bad_response_reports_error_without_traceback():
     assert result.exit_code == 1
     assert "Unexpected response from Anthropic" in result.stderr
     assert "Error: All models failed to count tokens" in result.stderr
+    # One model, piped: one line, and nothing on it.
+    assert result.stdout == "\n"
 
 
 @respx.mock
@@ -1579,6 +1710,8 @@ def test_google_bad_response_reports_error_without_traceback():
     assert result.exit_code == 1
     assert "Unexpected response from Google" in result.stderr
     assert "Error: All models failed to count tokens" in result.stderr
+    # One model, piped: one line, and nothing on it.
+    assert result.stdout == "\n"
 
 
 def test_option_after_positional_path(tmp_path):
@@ -1587,7 +1720,7 @@ def test_option_after_positional_path(tmp_path):
 
     result = _invoke_cli([str(sample), "--total-only", "--format", "csv"])
     assert result.exit_code == 0
-    assert result.stdout.strip().endswith("TOTAL,2")
+    assert result.stdout.strip().endswith("TOTAL,2,false")
 
 
 def test_short_option_after_positional_path(tmp_path):
@@ -1726,7 +1859,7 @@ def test_a_binary_file_among_good_paths_is_skipped_without_failing_the_run(tmp_p
     assert f"Warning: Skipping binary file {binary}" in result.stderr
     # Skipped means absent, not zero: it contributes no row and no tokens.
     assert binary.name not in result.stdout
-    assert result.stdout.splitlines() == [f"{good},2"]
+    assert result.stdout.splitlines() == [f"{good},2,false"]
 
 
 def test_a_partial_failure_still_emits_a_whole_envelope_with_short_totals(tmp_path):
@@ -1760,14 +1893,16 @@ def test_total_only_csv(tmp_path):
     args = _two_file_args(tmp_path)
     result = _invoke_cli(["--total-only", "--format", "csv", *args])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "TOTAL,6"
+    assert result.stdout.strip() == "TOTAL,6,false"
 
 
 def test_total_only_csv_with_header(tmp_path):
     args = _two_file_args(tmp_path)
     result = _invoke_cli(["--header", "--total-only", "--format", "csv", *args])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "file,gpt-5\nTOTAL,6"
+    assert result.stdout.strip() == (
+        "file,gpt-5_tokens,gpt-5_approximate\nTOTAL,6,false"
+    )
 
 
 def test_file_csv_marks_each_approximate_model_column(tmp_path):
@@ -1786,7 +1921,7 @@ def test_total_only_tsv(tmp_path):
     args = _two_file_args(tmp_path)
     result = _invoke_cli(["--total-only", "--format", "tsv", *args])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "TOTAL\t6"
+    assert result.stdout.strip() == "TOTAL\t6\tfalse"
 
 
 def test_total_only_json(tmp_path):
@@ -1805,6 +1940,7 @@ def test_total_only_json(tmp_path):
             "cost": None,
             "caveats": [],
             "retirement": None,
+            "reason": None,
         }
     ]
 
@@ -1857,7 +1993,7 @@ def test_total_only_leaves_multi_model_text_input_unchanged():
     total_only = _invoke_cli(["--total-only", *args])
     assert plain.exit_code == 0
     assert total_only.exit_code == 0
-    assert plain.stdout.strip() == "gpt-5\t2\ngpt-4.1\t2"
+    assert plain.stdout.strip() == "gpt-5\t2\tfalse\ngpt-4.1\t2\tfalse"
     assert total_only.stdout == plain.stdout
 
 
@@ -1876,7 +2012,7 @@ def test_without_total_only_keeps_per_file_rows_csv(tmp_path):
     result = _invoke_cli(["--format", "csv", *args])
     assert result.exit_code == 0
     lines = [line for line in result.stdout.splitlines() if line]
-    assert [line.split(",")[-1] for line in lines] == ["2", "4"]
+    assert [line.split(",")[1] for line in lines] == ["2", "4"]
     assert not any(line.startswith("TOTAL") for line in lines)
 
 
@@ -1930,8 +2066,10 @@ def test_partial_success_missing_hf_token(monkeypatch):
         )
     assert result.exit_code == 0
     expected = count_tokens(text, model="gpt-5")
-    assert result.stdout.strip() == str(expected.count)
-    assert "meta-llama/Llama-3.2-1B" not in result.stdout
+    assert result.stdout.splitlines() == [
+        f"gpt-5\t{expected.count}\tfalse",
+        "meta-llama/Llama-3.2-1B\t\t",
+    ]
     assert "Failed to count tokens for meta-llama/Llama-3.2-1B" in result.stderr
     assert "HF_TOKEN" in result.stderr
 
@@ -2060,12 +2198,18 @@ def test_concurrent_counting_matches_a_sequential_run(tmp_path):
     assert concurrent.stdout == sequential.stdout
 
     rows = _csv_rows(concurrent.stdout)
-    assert rows[0] == ["file", "gpt-5", "gpt-4"]
+    assert rows[0] == [
+        "file",
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+        "gpt-4_tokens",
+        "gpt-4_approximate",
+    ]
     assert rows[1][0] == str(tree / "aaa_big.txt")
     assert [row[0] for row in rows[1:]] == [
         str(path) for path in sorted(tree.iterdir())
     ]
-    assert rows[2][1] != rows[2][2]
+    assert rows[2][1] != rows[2][3]
 
 
 def test_concurrent_counting_reports_failures_like_a_sequential_run(
@@ -2101,7 +2245,11 @@ def test_concurrent_counting_reports_failures_like_a_sequential_run(
     assert (
         "Failed to count tokens for claude-opus-4-5 on 13 file(s)" in concurrent.stderr
     )
-    assert "claude-opus-4-5" not in concurrent.stdout
+    # The model that failed everywhere keeps its columns, empty on every row: it was
+    # named on the command line, so it is part of this command's shape.
+    rows = _csv_rows(concurrent.stdout)
+    assert rows[0][3:] == ["claude-opus-4-5_tokens", "claude-opus-4-5_approximate"]
+    assert {tuple(row[3:]) for row in rows[1:]} == {("", "")}
 
 
 def test_every_model_failing_still_exits_nonzero_when_concurrent(tmp_path, monkeypatch):
@@ -2109,10 +2257,21 @@ def test_every_model_failing_still_exits_nonzero_when_concurrent(tmp_path, monke
     assert not os.environ.get("ANTHROPIC_API_KEY")
     tree = _write_tree(tmp_path)
 
-    result = _invoke_cli(["-m", "claude-opus-4-5", str(tree)])
+    result = _invoke_cli(
+        ["--header", "--format", "csv", "-m", "claude-opus-4-5", str(tree)]
+    )
 
     assert result.exit_code == 1
     assert "Error: All models failed for all files" in result.stderr
+    # Nonzero and still the shape the command asked for: the header, one row per file,
+    # and every count cell empty. A run where everything failed is not a run with no
+    # output; it is a run whose cells are empty.
+    rows = _csv_rows(result.stdout)
+    assert rows[0] == ["file", "claude-opus-4-5_tokens", "claude-opus-4-5_approximate"]
+    assert [row[0] for row in rows[1:]] == [
+        str(path) for path in sorted(tree.iterdir())
+    ]
+    assert {tuple(row[1:]) for row in rows[1:]} == {("", "")}
 
 
 def test_a_warn_once_notice_is_still_printed_once_across_workers(tmp_path):
@@ -2141,9 +2300,15 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
     rows = _csv_rows(result.stdout)
-    assert rows[0] == ["file", "gpt-5", "gpt-4"]
+    assert rows[0] == [
+        "file",
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+        "gpt-4_tokens",
+        "gpt-4_approximate",
+    ]
     assert len(rows) == 14
-    for path, gpt_5, gpt_4 in rows[1:]:
+    for path, gpt_5, _gpt_5_approximate, gpt_4, _gpt_4_approximate in rows[1:]:
         content = Path(path).read_text()
         # Every count the run reported is readable again under its own model, so no
         # write landed under another thread's key or was lost to a locked database.
@@ -2192,8 +2357,14 @@ def test_columns_keep_model_order_when_a_model_fails_on_the_first_file(
     # The order the models were named, not the order the counts arrived in: the first
     # file has no claude count at all, so a column order read off the results would
     # put gpt-5 first.
-    assert rows[0] == ["file", "claude-opus-4-5", "gpt-5"]
-    assert rows[1][1] == "N/A"
+    assert rows[0] == [
+        "file",
+        "claude-opus-4-5_tokens",
+        "claude-opus-4-5_approximate",
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+    ]
+    assert rows[1][1:3] == ["", ""]
     assert rows[2][1] == "7"
 
 
@@ -2206,14 +2377,17 @@ def test_json_arrays_and_table_columns_agree_on_one_model_order(tmp_path, monkey
 
     assert table.exit_code == 0
     assert document.exit_code == 0
-    columns = _csv_rows(table.stdout)[0][1:]
+    columns = [
+        column.removesuffix("_tokens")
+        for column in _csv_rows(table.stdout)[0][1:]
+        if column.endswith("_tokens")
+    ]
     payload = json.loads(document.stdout)
     assert [count["model"] for count in payload["totals"]] == columns
     for source in payload["results"]:
-        listed = [count["model"] for count in source["counts"]]
-        # A source keeps only the models it could be counted for, but in the order the
-        # columns use, so the two can be lined up.
-        assert listed == [model for model in columns if model in listed]
+        # Every source lists every model the run asked for, in the column order, so
+        # the two line up without matching up arrays of different lengths.
+        assert [count["model"] for count in source["counts"]] == columns
 
 
 def test_model_order_is_the_same_at_every_jobs_setting(tmp_path, monkeypatch):

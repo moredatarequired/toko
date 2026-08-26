@@ -225,6 +225,60 @@ def test_an_echoed_key_is_redacted_from_the_caveat_json_prints_on_stdout(
     assert "***" in entry["caveats"][0]["reason"]
 
 
+def test_an_echoed_key_is_redacted_from_the_failure_reason_json_prints_on_stdout(
+    local_api, monkeypatch, tmp_path
+):
+    """The reason a model has no count now rides on stdout as well as stderr.
+
+    It is the same string the warning carries, so it is redacted at the source rather
+    than on the way to a stream -- but stdout is the likelier place for it to be
+    captured, which is why this path is pinned separately.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", SENTINEL)
+    local_api.respond(200, {"detail": f"key {SENTINEL} is not authorized"})
+
+    result = runner.invoke(
+        app, ["--format", "json", "-m", "claude-sonnet-4-5", "-t", "hello"]
+    )
+
+    assert result.exit_code == 1
+    assert SENTINEL not in result.stdout
+    # Not vacuous: the body is quoted into the reason, it is just redacted.
+    entry = json.loads(result.stdout)["totals"][0]
+    assert entry["tokens"] is None
+    assert "***" in entry["reason"]
+    assert "not authorized" in entry["reason"]
+
+
+def test_a_key_holding_a_control_character_stays_out_of_the_json_reason(
+    local_api, monkeypatch, tmp_path
+):
+    """Search-and-replace cannot redact such a key, so it must never reach the text.
+
+    httpx refuses to send the header, so the failure is reported by exception type and
+    endpoint and quotes nothing the provider said. Checked here rather than assumed:
+    the reason is what this change puts on stdout.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    head, tail = "toko-key-head-do-not-log", "toko-key-tail-do-not-log"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", f"{head}\n{tail}")
+    local_api.respond(401, {"error": "unauthorized"})
+
+    result = runner.invoke(
+        app, ["--format", "json", "-m", "claude-sonnet-4-5", "-t", "hello"]
+    )
+
+    assert result.exit_code == 1
+    reason = json.loads(result.stdout)["totals"][0]["reason"]
+    assert head not in reason
+    assert tail not in reason
+    assert "Illegal header value" not in reason
+    # A user still has to be able to act on this.
+    assert "LocalProtocolError" in reason
+    assert local_api.base in reason
+
+
 def test_the_xai_approximation_survives_a_key_holding_a_non_utf8_byte(
     local_api, monkeypatch, capsys
 ):

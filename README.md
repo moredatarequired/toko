@@ -97,9 +97,9 @@ toko --header --format tsv --model gpt-5-mini --model claude-opus-4-5 --text "Th
 ```
 
 ```txt
-model	tokens	cost
-gpt-5-mini	4	0.000001
-claude-opus-4-5	11	0.000055
+model	tokens	cost	approximate
+gpt-5-mini	4	0.000001	false
+claude-opus-4-5	11	0.000055	false
 ```
 
 Costs come from the bundled `genai-prices` feed. A model it has no price for shows `N/A`
@@ -144,9 +144,11 @@ TOTAL                                 32,896
 directory stay together. A directory scan already arrives in near-path order, but not the
 same one: the scan compares path components, so `src/toko.py` lands after everything under
 `src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
-model column: model columns run in the order you named the models in, minus any model no
-file could be counted for, so the leftmost is your first `--model` unless that one failed
-everywhere. Files the model could not be counted for keep their `N/A` and sort last. The
+model column, which is always your first `--model`: model columns run in the order you
+named the models in, and a model no file could be counted for keeps its column rather
+than dropping out of that order. Files the model has no count for sort last, after every
+file that has one, because no count is not a count of zero; within each group the path
+breaks the tie. Those cells read `N/A` in the text table and are empty in CSV and TSV. The
 `TOTAL` row stays at the bottom whichever order you pick, and the order applies to every
 format, not just the text table, so `--sort count --format json` lists its sources in the
 same order the table would show. Runs that count `--text` or stdin have no file rows, so
@@ -176,7 +178,8 @@ toko --model gpt-5 --format json LICENSE
           "approximate": false,
           "cost": null,
           "caveats": [],
-          "retirement": null
+          "retirement": null,
+          "reason": null
         }
       ]
     }
@@ -188,7 +191,8 @@ toko --model gpt-5 --format json LICENSE
       "approximate": false,
       "cost": null,
       "caveats": [],
-      "retirement": null
+      "retirement": null,
+      "reason": null
     }
   ]
 }
@@ -203,35 +207,57 @@ Every JSON run emits that one document, whatever flags it was given:
   the sources. Both keys are always present and always arrays. `--total-only` empties
   `results` rather than changing the document's shape, and a `--text` run's totals
   simply repeat its single set of counts.
-- A count object always carries all six of `model`, `tokens`, `approximate`, `cost`,
-  `caveats` and `retirement`. No key appears or disappears with a flag: `cost` is
-  `null` without `--cost`, `caveats` is `[]` when the count is the model's own, and
-  `retirement` is `null` for a live model. `jq '.totals[] | .tokens'` reads any run
-  that printed a document.
-- Every count array in a document — each `results[].counts` and `totals` — lists its
-  models in one order, the order you named them with `--model`, so no array has to be
-  re-read against a second order. What the arrays share is that order, not their
-  lengths: a model a source could not be counted for is simply absent from that
-  source's array while the rest keep their places (and a model no source could be
-  counted for takes no place in the order at all), and `totals` sums only the sources
-  that produced a count. **Match on `model`; never index or zip the arrays together.**
+- A count object always carries all seven of `model`, `tokens`, `approximate`, `cost`,
+  `caveats`, `retirement` and `reason`. No key appears or disappears with a flag or
+  with what the counting produced: `cost` is `null` without `--cost`, `caveats` is `[]`
+  when the count is the model's own, and `retirement` is `null` for a live model.
+  `jq '.totals[] | .tokens'` reads any run that printed a document.
+- `tokens` is `null` exactly when the model could not be counted, and `reason` then
+  holds the failure — the same sentence the warning on stderr carries. On a count that
+  succeeded, `reason` is `null`; on one that did not, `approximate` and `cost` are
+  `null` too, since there is no count for them to describe. `reason` is a human-readable
+  explanation and explicitly **not** machine-parseable: branch on `tokens == null`, not
+  on its wording. It is JSON-only, like `caveats`, because a delimited cell cannot carry
+  a free-text sentence.
+- Every count array in a document — each `results[].counts` and `totals` — holds one
+  entry per model you named with `--model`, in that order, whether or not that model
+  could be counted for that source. Which models a document describes is a function of
+  the command, not of what the counting managed to produce, so a run against one
+  directory and the same run against another describe the same models. `totals` still
+  sums only the sources that produced a count, and is `null` for a model none did.
+  **Match on `model` anyway; never index or zip the arrays together.**
 
 ```sh
 toko --header --model gpt-5 --format csv --text "hello world"
 ```
 
 ```csv
-model,tokens
-gpt-5,2
+model,tokens,approximate
+gpt-5,2,false
 ```
 
-Use `--format tsv` to force TSV even when running interactively. The text table is the
-one written for people, and it keeps the `$`; CSV and TSV write the `cost` column for a
-program instead:
+Use `--format tsv` to force TSV even when running interactively.
+
+CSV and TSV have one shape per command, and you can work it out before you run it. A
+`--text` or stdin run is model-major: a `model` column, a `tokens` column, a `cost`
+column if and only if you passed `--cost`, and an `approximate` column, then one row per
+`--model` you named. A run over paths is file-major: a `file` column, then
+`<model>_tokens`, `<model>_cost` (with `--cost`) and `<model>_approximate` for each
+`--model` in the order you named them, then one row per source — or, with
+`--total-only`, one `TOTAL` row in place of them. Nothing in that depends on what the
+counting produced: a model that failed everywhere keeps its columns, and a run in which
+every count failed prints the same header and the same rows with the cells empty.
+`--no-header` removes the header row and nothing else. The one command that emits
+something other than the two shapes above is a headerless single-model TSV `--text` or
+stdin run, which collapses to a bare number — and that too is decided by the command
+rather than by the counting, as the next section describes.
+
+The text table is the one written for people, and it keeps the `$`; CSV and TSV write
+the `cost` column for a program instead:
 
 - **A bare number, never a currency symbol** — no `$`, and no rounding to `0.000000`
-  for a fraction of a cent. `float()` accepts every non-empty cell toko writes; the one
-  cell it will not accept is the empty one described in the last bullet.
+  for a fraction of a cent. `float()` accepts every non-empty cell toko writes in a
+  `cost` column; the empty ones are described in the last bullet.
 - **Always positional decimal, never an exponent.** A fraction of a cent is written
   `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column correctly and `bc`
   can read a cell at all — both of which mis-handle exponent form, `sort -n` silently.
@@ -239,11 +265,14 @@ program instead:
   significant digits once, where it is produced, so the delimited cell and the JSON
   number are one value written two ways. Where there is no cost the two say so
   differently: JSON writes `null`, the cell is empty.
-- **An empty cell for a model with no price.** No number would be honest there — `0`
-  reads as free — so the cell holds nothing. Beware that this is an *empty field*, not
-  a missing one: `awk -F'\t'` and `awk -F,` see it correctly, but bare `awk` splits on
-  runs of whitespace and collapses the empty cell away, shifting every field after it
-  left. Since headerless TSV is what a piped run emits by default, pass `-F'\t'`.
+- **An empty cell for a model with no price, and for one with no count.** No number
+  would be honest in either — `0` reads as free, and as zero tokens — so the cell holds
+  nothing; where it is the count that is missing, the `<model>_tokens` and
+  `<model>_approximate` cells are empty too, and `--format json` says why under
+  `reason`. Beware that this is an *empty field*, not a missing one: `awk -F'\t'` and
+  `awk -F,` see it correctly, but bare `awk` splits on runs of whitespace and collapses
+  the empty cell away, shifting every field after it left. Since headerless TSV is what
+  a piped run emits by default, pass `-F'\t'`.
 
 ### What a piped run emits without `--format`
 
@@ -255,16 +284,20 @@ to a bare number, which is what makes the usual scripting shape work:
 n=$(toko -m gpt-5 --text "hello world")   # 2
 ```
 
-Two exceptions are worth knowing before you parse the output:
+What decides that shape is the command, never the counting: one `--model` and a
+non-TTY stdout is a bare number whatever comes back, including nothing — a model that
+failed prints an empty line, and the run exits `1`. Two things are worth knowing before
+you parse the output:
 
 - The collapse to a bare number is for `--text` and stdin only. Give `toko` a path and
   you get a `file<TAB>tokens` row per file, because the filename has to go somewhere.
-- An **approximate** count never collapses. It keeps its full row so the marker travels
-  with the number, rather than being stranded on stderr where the process on the other
-  end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
-  `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
-  read `.totals[].tokens`, if a run of yours can hit any of the three paths that
-  produce an approximate count — they are listed under **Library usage** below.
+- A bare number has nowhere to say that a count is **approximate**, and the marker is
+  on stderr, which the process at the other end of the pipe is not reading. Ask for a
+  shape that has somewhere to put it if a run of yours can hit any of the three paths
+  that produce an approximate count — they are listed under **Library usage** below.
+  `--header` is enough: `toko --header --format tsv -m gpt-6 --text "hello world"`
+  writes `model<TAB>tokens<TAB>approximate` and then `gpt-6<TAB>2<TAB>true`. So is
+  `--format json`, where every count carries `approximate` of its own.
 
 ## Exit codes
 
@@ -298,15 +331,17 @@ A run exits `1` when:
 > **A nonzero exit means the totals cover only what succeeded.** Toko prints the
 > results for the inputs it could read *before* it exits `1`, so a partial failure
 > still emits a complete, well-formed document — a full JSON envelope with both
-> `results` and `totals`, or a full table — and nothing in it is marked. The totals
-> simply sum a smaller set of files than a successful run would. There is no field to
-> check for this: check the exit code before you trust a total, and read stderr for
+> `results` and `totals`, or a full table, of exactly the shape a successful run of the
+> same command emits. A model that failed is marked, by a `null` `tokens` with a
+> `reason` in JSON and by empty cells in CSV and TSV. An *input* that failed is not:
+> the totals simply sum a smaller set of files than a successful run would, and no
+> field says so. Check the exit code before you trust a total, and read stderr for
 > which inputs are missing.
 
 One known inconsistency, which this table describes rather than hides: a model that
 fails among several — a missing `ANTHROPIC_API_KEY`, say — leaves a warning on stderr,
-drops its column from the output, and still exits `0`, while a *path* that fails among
-several exits `1`. Making the two agree is breaking change 4 of
+keeps its column with every cell empty, and still exits `0`, while a *path* that fails
+among several exits `1`. Making the two agree is breaking change 4 of
 [issue #28](https://github.com/moredatarequired/toko/issues/28); until it lands, check
 stderr, or count one model per invocation if a partial result would be dangerous.
 

@@ -58,10 +58,12 @@ def _render_table(table: Table, *, width: int | None = None) -> str:
 def format_table(
     results: dict[str, TokenCount],
     *,
+    models: list[str] | None = None,
     show_costs: bool = False,
     include_header: bool = True,
 ) -> str:
     """Format results as a table using rich."""
+    models = list(results) if models is None else models
     table = _plain_table(include_header=include_header)
     table.add_column("Model", style="cyan")
     table.add_column("Tokens", justify="right", style="green")
@@ -69,10 +71,19 @@ def format_table(
     if show_costs:
         table.add_column("Cost", justify="right", style="yellow")
 
-    for model, counted in results.items():
-        row = [model, f"{counted.count:,}"]
-        if show_costs:
-            row.append(format_cost(counted.cost))
+    for model in models:
+        counted = results.get(model)
+        # A model that could not be counted keeps its row and says N/A, the same way
+        # the per-file table already says it: a row missing outright would leave the
+        # reader to notice that a model they named is not on the page.
+        if counted is None:
+            row = [model, "N/A"]
+            if show_costs:
+                row.append("N/A")
+        else:
+            row = [model, f"{counted.count:,}"]
+            if show_costs:
+                row.append(format_cost(counted.cost))
         table.add_row(*row)
 
     return _render_table(table)
@@ -81,20 +92,23 @@ def format_table(
 def format_text(
     results: dict[str, TokenCount],
     *,
+    models: list[str] | None = None,
     show_costs: bool = False,
     include_header: bool = True,
 ) -> str:
     """Format results as human-readable text."""
-    if len(results) == 1 and not show_costs:
-        # Single model without costs - just show the count
-        return str(next(iter(results.values())).count)
+    models = list(results) if models is None else models
+    if len(models) == 1 and not show_costs:
+        # One model asked for is one number printed, and an empty line when that model
+        # failed: how many lines this prints is a function of the command, not of what
+        # the counting produced.
+        counted = results.get(models[0])
+        return "" if counted is None else str(counted.count)
 
     # Multiple models or costs requested - use table format
-    return format_table(results, show_costs=show_costs, include_header=include_header)
-
-
-def _any_approximate(results: dict[str, TokenCount]) -> bool:
-    return any(counted.approximate for counted in results.values())
+    return format_table(
+        results, models=models, show_costs=show_costs, include_header=include_header
+    )
 
 
 def _caveat_payload(caveat: Caveat) -> dict[str, object]:
@@ -118,11 +132,26 @@ def _retirement_payload(retirement: Retirement | None) -> dict[str, object] | No
     }
 
 
-def _count_payload(model: str, counted: TokenCount) -> dict[str, object]:
-    # Every key is present on every count, whatever was asked for: a reader that
-    # tests for a key would otherwise be testing which flags the run was given.
-    # Costs stay raw numbers (or null) rather than the display strings the table
-    # formats use, so the output remains machine-readable.
+def _count_payload(
+    model: str, counted: TokenCount | None, reason: str | None
+) -> dict[str, object]:
+    # Every key is present on every count, whatever was asked for and whatever the
+    # counting produced: a reader that tests for a key would otherwise be testing
+    # which flags the run was given. Costs stay raw numbers (or null) rather than the
+    # display strings the table formats use, so the output remains machine-readable.
+    if counted is None:
+        # There is no count, so there is nothing to say about it: `tokens` is null
+        # exactly when `reason` says why, and the fields that describe a count say
+        # nothing rather than guessing at a default.
+        return {
+            "model": model,
+            "tokens": None,
+            "approximate": None,
+            "cost": None,
+            "caveats": [],
+            "retirement": None,
+            "reason": reason,
+        }
     return {
         "model": model,
         "tokens": counted.count,
@@ -130,19 +159,24 @@ def _count_payload(model: str, counted: TokenCount) -> dict[str, object]:
         "cost": counted.cost,
         "caveats": [_caveat_payload(caveat) for caveat in counted.caveats],
         "retirement": _retirement_payload(counted.retirement),
+        "reason": None,
     }
 
 
 def _counts_payload(
-    results: dict[str, TokenCount], models: list[str]
+    results: dict[str, TokenCount],
+    models: list[str],
+    errors: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
-    # Ordered by the document's one model order rather than by whatever this
-    # particular source happens to hold, so every count array in the document lists
-    # its models the same way. Same order, not same length: a model this source could
-    # not be counted for is simply absent, and `totals` sums whichever files got that
-    # far, so a reader matches on `model` rather than on position.
+    # One entry per model the run asked for, in the document's one model order, so
+    # every count array in the document is the same length and lists its models the
+    # same way. A model this source could not be counted for is present with a null
+    # `tokens` and the `reason` it failed rather than absent, because which models a
+    # document describes is a function of the command, not of what the counting
+    # managed to produce.
+    errors = errors or {}
     return [
-        _count_payload(model, results[model]) for model in models if model in results
+        _count_payload(model, results.get(model), errors.get(model)) for model in models
     ]
 
 
@@ -162,9 +196,17 @@ def _envelope(results: list[dict[str, object]], totals: list[dict[str, object]])
     )
 
 
-def format_json(results: dict[str, TokenCount], *, total_only: bool = False) -> str:
+def format_json(
+    results: dict[str, TokenCount],
+    *,
+    models: list[str] | None = None,
+    errors: dict[str, str] | None = None,
+    total_only: bool = False,
+) -> str:
     """Format counts of a text input (``--text`` or stdin) as the JSON envelope."""
-    counts = _counts_payload(results, list(results))
+    counts = _counts_payload(
+        results, list(results) if models is None else models, errors
+    )
     # One source and one count per model, so the totals repeat the results rather
     # than summing anything. Repeating them keeps the document one shape.
     sources = (
@@ -180,30 +222,26 @@ def format_json(results: dict[str, TokenCount], *, total_only: bool = False) -> 
 def _format_delimited(
     results: dict[str, TokenCount],
     *,
+    models: list[str],
     separator: str,
     include_header: bool,
     show_costs: bool,
 ) -> str:
-    # The column only appears when it has something to say, so runs that are wholly
-    # exact keep the two-column shape every existing consumer parses.
-    show_approximate = _any_approximate(results)
-
+    # Which columns there are, and how many rows follow, is decided by the command
+    # alone: the models it named, and whether it asked for costs. Nothing here reads
+    # the counts to choose a shape, so two runs of one command always parse alike.
     rows: list[list[str]] = []
     if include_header:
         header = ["model", "tokens"]
         if show_costs:
             header.append("cost")
-        if show_approximate:
-            header.append("approximate")
+        header.append("approximate")
         rows.append(header)
 
-    for model, counted in results.items():
-        fields = [model, str(counted.count)]
-        if show_costs:
-            fields.append(format_cost_value(counted.cost))
-        if show_approximate:
-            fields.append(_approximate_field(counted.approximate))
-        rows.append(fields)
+    rows.extend(
+        [model, *_delimited_cells(results.get(model), show_costs=show_costs)]
+        for model in models
+    )
     return _render_delimited(rows, separator)
 
 
@@ -224,24 +262,34 @@ def _render_delimited(rows: list[list[str]], separator: str) -> str:
 def format_csv(
     results: dict[str, TokenCount],
     *,
+    models: list[str] | None = None,
     include_header: bool = True,
     show_costs: bool = False,
 ) -> str:
     """Format results as CSV."""
     return _format_delimited(
-        results, separator=",", include_header=include_header, show_costs=show_costs
+        results,
+        models=list(results) if models is None else models,
+        separator=",",
+        include_header=include_header,
+        show_costs=show_costs,
     )
 
 
 def format_tsv(
     results: dict[str, TokenCount],
     *,
+    models: list[str] | None = None,
     include_header: bool = True,
     show_costs: bool = False,
 ) -> str:
     """Format results as TSV."""
     return _format_delimited(
-        results, separator="\t", include_header=include_header, show_costs=show_costs
+        results,
+        models=list(results) if models is None else models,
+        separator="\t",
+        include_header=include_header,
+        show_costs=show_costs,
     )
 
 
@@ -249,25 +297,35 @@ def format_output(
     results: dict[str, TokenCount],
     output_format: OutputFormat | str = "text",
     *,
+    models: list[str] | None = None,
+    errors: dict[str, str] | None = None,
     show_costs: bool = False,
     include_header: bool = True,
     total_only: bool = False,
 ) -> str:
     """Format token count results according to specified format.
 
+    ``models`` is the order the models were asked for; the rows follow it rather than
+    the order the counts happen to be stored in, and a model with no count keeps its
+    place. ``errors`` maps such a model to why it has none, and reaches JSON alone.
+
     Raises:
         ValueError: If format is not supported
     """
     if output_format == OutputFormat.TEXT:
         return format_text(
-            results, show_costs=show_costs, include_header=include_header
+            results, models=models, show_costs=show_costs, include_header=include_header
         )
     if output_format == OutputFormat.JSON:
-        return format_json(results, total_only=total_only)
+        return format_json(results, models=models, errors=errors, total_only=total_only)
     if output_format == OutputFormat.CSV:
-        return format_csv(results, include_header=include_header, show_costs=show_costs)
+        return format_csv(
+            results, models=models, include_header=include_header, show_costs=show_costs
+        )
     if output_format == OutputFormat.TSV:
-        return format_tsv(results, include_header=include_header, show_costs=show_costs)
+        return format_tsv(
+            results, models=models, include_header=include_header, show_costs=show_costs
+        )
     raise ValueError(f"Unknown format: {output_format}")
 
 
@@ -275,6 +333,8 @@ def _format_file_json(
     file_results: dict[str, dict[str, TokenCount]],
     *,
     models: list[str],
+    errors: dict[str, dict[str, str]],
+    total_reasons: dict[str, str],
     total_only: bool,
 ) -> str:
     totals = _compute_totals(file_results, models=models)
@@ -286,12 +346,27 @@ def _format_file_json(
         else [
             {
                 "source": _source_payload(filename),
-                "counts": _counts_payload(counts, models),
+                "counts": _counts_payload(counts, models, errors.get(filename)),
             }
             for filename, counts in file_results.items()
         ]
     )
-    return _envelope(results, _counts_payload(totals, models))
+    return _envelope(results, _counts_payload(totals, models, total_reasons))
+
+
+def _model_reasons(
+    file_results: dict[str, dict[str, TokenCount]], errors: dict[str, dict[str, str]]
+) -> dict[str, str]:
+    """Why each model has no total: the first failure it hit, in input order.
+
+    Read in ``file_results`` order rather than in ``errors`` order, and called before
+    the rows are sorted, so ``--sort`` cannot change which failure a total names.
+    """
+    reasons: dict[str, str] = {}
+    for filename in file_results:
+        for model, reason in errors.get(filename, {}).items():
+            reasons.setdefault(model, reason)
+    return reasons
 
 
 def _collect_models(
@@ -299,18 +374,19 @@ def _collect_models(
 ) -> list[str]:
     # The one order a run's output uses: the table columns, the delimited columns and
     # both JSON arrays all read it, so nothing in a document has to be re-read against a
-    # second order. `requested` is the order the models were asked for, which is the
-    # order to show them in whichever sources each one could be counted for. Without it
-    # the best available order is first encounter, which is the same order right up
-    # until a model fails on an early source and succeeds on a later one.
-    counted = dict.fromkeys(
-        model for counts in file_results.values() for model in counts
-    )
+    # second order. `requested` is the order the models were asked for, and it is the
+    # whole answer: every source lists every one of them. Without it the best available
+    # order is first encounter, which is the same order right up until a model fails on
+    # an early source and succeeds on a later one.
     if requested is None:
-        return list(counted)
-    # A model no source could be counted for has no column and no total to put in one,
-    # so it drops out; the rest keep the order they were asked in.
-    return [model for model in dict.fromkeys(requested) if model in counted]
+        return list(
+            dict.fromkeys(model for counts in file_results.values() for model in counts)
+        )
+    # Every model asked for keeps its place, including one no source could be counted
+    # for: it takes a column of empty cells rather than vanishing, because a user who
+    # named a model is owed the news that it failed, and because a column set that
+    # depends on what the counting produced cannot be parsed without reading it first.
+    return list(dict.fromkeys(requested))
 
 
 def _format_file_table_delimited(
@@ -322,18 +398,16 @@ def _format_file_table_delimited(
     include_header: bool,
     show_costs: bool,
 ) -> str:
-    show_approximate = any(_any_approximate(counts) for counts in file_results.values())
+    # Three columns per model, or two without --cost: the models named on the command
+    # line and the flags beside them are the whole of what decides the header, so a
+    # consumer knows the shape before the run and every run of one command matches.
     rows: list[list[str]] = []
-    if show_costs or show_approximate:
-        headers = ["file"]
-        for model in models:
-            headers.append(f"{model}_tokens")
-            if show_costs:
-                headers.append(f"{model}_cost")
-            if show_approximate:
-                headers.append(f"{model}_approximate")
-    else:
-        headers = ["file", *models]
+    headers = ["file"]
+    for model in models:
+        headers.append(f"{model}_tokens")
+        if show_costs:
+            headers.append(f"{model}_cost")
+        headers.append(f"{model}_approximate")
 
     if include_header:
         rows.append(headers)
@@ -342,49 +416,37 @@ def _format_file_table_delimited(
         totals = _compute_totals(file_results, models=models)
         total_row: list[str] = ["TOTAL"]
         for model in models:
-            total_row.extend(
-                _delimited_cells(
-                    totals[model],
-                    show_costs=show_costs,
-                    show_approximate=show_approximate,
-                )
-            )
+            # .get, because a model no file could be counted for has no total; its
+            # cells are empty, the same as a file that model missed.
+            total_row.extend(_delimited_cells(totals.get(model), show_costs=show_costs))
         rows.append(total_row)
         return _render_delimited(rows, separator)
 
     for filename, model_counts in file_results.items():
         row: list[str] = [filename]
         for model in models:
-            row.extend(
-                _delimited_cells(
-                    model_counts.get(model),
-                    show_costs=show_costs,
-                    show_approximate=show_approximate,
-                )
-            )
+            row.extend(_delimited_cells(model_counts.get(model), show_costs=show_costs))
         rows.append(row)
 
     return _render_delimited(rows, separator)
 
 
-def _delimited_cells(
-    counted: TokenCount | None, *, show_costs: bool, show_approximate: bool
-) -> list[str]:
+def _delimited_cells(counted: TokenCount | None, *, show_costs: bool) -> list[str]:
     if counted is None:
-        # No count at all for this file and model. The cost cell stays empty rather
-        # than saying N/A, so the column holds only numbers and blanks.
-        cells = ["N/A"]
+        # No count at all for this file and model. Every cell is empty rather than
+        # holding a stand-in like N/A: a column a consumer reads as a number has to
+        # hold numbers and blanks and nothing else. Why it is empty is in the JSON
+        # `reason`, which is where free text can be quoted safely.
+        cells = [""]
         if show_costs:
             cells.append("")
-        if show_approximate:
-            cells.append("N/A")
+        cells.append("")
         return cells
 
     cells = [str(counted.count)]
     if show_costs:
         cells.append(format_cost_value(counted.cost))
-    if show_approximate:
-        cells.append(_approximate_field(counted.approximate))
+    cells.append(_approximate_field(counted.approximate))
     return cells
 
 
@@ -417,9 +479,12 @@ def _format_file_table_text(
         totals = _compute_totals(file_results, models=models)
         total_row: list[str] = ["TOTAL"]
         for model in models:
-            total_row.append(f"{totals[model].count:,}")
+            # .get: a model no file could be counted for has no total, and says so the
+            # same way its rows do.
+            total = totals.get(model)
+            total_row.append("N/A" if total is None else f"{total.count:,}")
             if show_costs:
-                total_row.append(format_cost(totals[model].cost))
+                total_row.append("N/A" if total is None else format_cost(total.cost))
         table.add_row(*total_row, style="bold")
 
     return _render_table(table, width=200)
@@ -541,6 +606,7 @@ def format_file_table(
     total_only: bool = False,
     *,
     models: list[str] | None = None,
+    errors: dict[str, dict[str, str]] | None = None,
     show_costs: bool = False,
     include_header: bool = True,
     sort_order: SortOrder | str = SortOrder.INPUT,
@@ -548,10 +614,14 @@ def format_file_table(
     """Format per-file token counts with files as rows and models as columns.
 
     ``models`` is the order the models were asked for; the columns and the JSON arrays
-    follow it rather than the order the counts happen to be stored in. Omit it and the
-    order is first encounter in ``file_results``.
+    follow it rather than the order the counts happen to be stored in, and a model no
+    file could be counted for keeps its column. Omit it and the order is first
+    encounter in ``file_results``. ``errors`` maps a filename to why each model has no
+    count for it, and reaches JSON alone.
     """
     models = _collect_models(file_results, models)
+    errors = errors or {}
+    total_reasons = _model_reasons(file_results, errors)
     if not total_only:
         # A total-only run prints no file rows to order, and sorting anyway would leak
         # into the one row it does print: _compute_totals joins the per-file caveats in
@@ -561,7 +631,13 @@ def format_file_table(
         )
 
     if output_format == OutputFormat.JSON:
-        return _format_file_json(file_results, models=models, total_only=total_only)
+        return _format_file_json(
+            file_results,
+            models=models,
+            errors=errors,
+            total_reasons=total_reasons,
+            total_only=total_only,
+        )
 
     if output_format in (OutputFormat.CSV, OutputFormat.TSV):
         return _format_file_table_delimited(

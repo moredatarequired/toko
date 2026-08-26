@@ -451,18 +451,16 @@ def _handle_text_input(
     include_header: bool,
 ) -> None:
     results: dict[str, TokenCount] = {}
+    errors: dict[str, str] = {}
 
     for model_name in models:
         try:
             results[model_name] = count_tokens(text, model=model_name)
         except ValueError as e:
+            errors[model_name] = str(e)
             typer.echo(
                 f"Warning: Failed to count tokens for {model_name}: {e}", err=True
             )
-
-    if not results:
-        typer.echo("Error: All models failed to count tokens", err=True)
-        raise typer.Exit(1)
 
     if include_costs:
         results = _attach_costs(results)
@@ -472,21 +470,29 @@ def _handle_text_input(
         output_format == OutputFormat.TSV
         and not include_costs
         and not include_header
-        and len(results) == 1
-        # A bare number would strand the approximate marker on stderr, which is
-        # exactly where a piping consumer will not see it.
-        and not any(counted.approximate for counted in results.values())
+        # The models asked for, not the counts that came back: a run collapses to a
+        # bare number because one model was named, and it still prints one line when
+        # that model fails. Which shape a command emits is settled before it runs.
+        and len(models) == 1
     ):
         adjusted_format = OutputFormat.TEXT
 
     output = format_output(
         results,
         output_format=adjusted_format,
+        models=models,
+        errors=errors,
         show_costs=include_costs,
         include_header=include_header,
         total_only=total_only,
     )
     typer.echo(output)
+
+    # After the output, not instead of it: the run failed, and it still owes the
+    # reader the shape the command asked for, with the cells it could not fill empty.
+    if not results:
+        typer.echo("Error: All models failed to count tokens", err=True)
+        raise typer.Exit(1)
 
 
 def _count_one(job: tuple[str, str]) -> TokenCount | str:
@@ -572,11 +578,6 @@ def _handle_file_inputs(
     if model_errors:
         _emit_model_error_summary(model_errors, file_errors)
 
-    has_results = any(file_results[file] for file in file_results)
-    if not has_results:
-        typer.echo("Error: All models failed for all files", err=True)
-        raise typer.Exit(1)
-
     if include_costs:
         file_results = _attach_file_costs(file_results)
 
@@ -585,11 +586,20 @@ def _handle_file_inputs(
         output_format=output_format,
         total_only=total_only,
         models=models,
+        errors=file_errors,
         show_costs=include_costs,
         include_header=include_header,
         sort_order=sort_order,
     )
     typer.echo(output)
+
+    # After the output, not instead of it: a run where everything failed has the same
+    # shape as one where nothing did -- the same header, the same row per file -- with
+    # every count cell empty. The exit code is what says the run failed.
+    has_results = any(file_results[file] for file in file_results)
+    if not has_results:
+        typer.echo("Error: All models failed for all files", err=True)
+        raise typer.Exit(1)
 
 
 def _attach_costs(counts: dict[str, TokenCount]) -> dict[str, TokenCount]:

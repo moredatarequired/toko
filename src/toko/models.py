@@ -972,13 +972,13 @@ def retirement_for_requested(requested: str) -> Retirement | None:
 
     The candidate order is what "as spelled" means, so this walk is first-non-None and
     not any-non-None: the typed spelling is reported when it resolves, and only a
-    normalization of it answers otherwise. Reversing the loop left all 796 tests green
-    while moving the reported retirement onto the suffix-stripped base for every
-    "-latest" spelling in the gemini-2.0-flash family -- 11 of them across the registry's
-    names and Google's declared aliases, whatever prefixes each is probed behind -- and
-    onto a different date for exactly one of those, namely
+    normalization of it answers otherwise. Reversing the loop moves the reported
+    retirement onto the suffix-stripped base for every "-latest" spelling in the
+    gemini-2.0-flash family -- 11 of them across the registry's names and Google's
+    declared aliases -- and onto a different date for exactly one of those, namely
     gemini-2.0-flash-preview-image-generation-latest: 2026-06-01 as typed against
-    2025-11-14 stripped.
+    2025-11-14 stripped. Nothing in the suite caught that until the fences below were
+    added.
 
     Two orderings carry "as spelled" between them, and they need separate fences.
     test_the_spelling_as_typed_decides_which_retirement_is_reported fences this loop

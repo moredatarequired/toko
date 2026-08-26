@@ -6,6 +6,7 @@ from importlib import resources
 from types import SimpleNamespace
 
 import pytest
+import tiktoken
 
 from toko import models
 from toko.counter import count_tokens
@@ -244,6 +245,33 @@ class TestPackagedRegistry:
             "these registry entries are counted approximately, so every run of one "
             "warns; give each an encoding in src/toko/data/models.toml: "
             f"{sorted(estimated)}"
+        )
+
+    def test_every_declared_openai_encoding_is_the_one_tiktoken_resolves(self):
+        """Declaring an encoding is only an improvement if it is the right one.
+
+        The guard above asks whether an entry counts exactly, which any spelling
+        of a real encoding satisfies -- so a wrong-but-valid encoding is exact and
+        silently wrong. tiktoken is the authority for the names it knows, whether
+        it knows them exactly or through a prefix, so every declaration it can
+        adjudicate must agree with it. Names tiktoken cannot resolve at all are
+        skipped: there is nothing to compare them against.
+        """
+        declared, resolved = {}, {}
+        for info in models.MODELS.values():
+            if info.provider != "openai" or info.encoding is None:
+                continue
+            try:
+                resolved[info.name] = tiktoken.encoding_for_model(info.name).name
+            except KeyError:
+                continue
+            declared[info.name] = info.encoding
+
+        assert resolved, "tiktoken resolved no OpenAI entry, so this guard is vacuous"
+        assert declared == resolved, (
+            "these registry entries name an encoding tiktoken disagrees with, so "
+            "they count exactly and wrongly; fix src/toko/data/models.toml: "
+            f"{sorted(name for name in declared if declared[name] != resolved[name])}"
         )
 
     def test_the_packaged_registry_loads_without_a_word_on_stderr(self, capsys):

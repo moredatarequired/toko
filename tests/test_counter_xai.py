@@ -58,7 +58,7 @@ def test_xai_prefers_api(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_xai_falls_back_to_transformers(monkeypatch):
+def test_xai_falls_back_to_transformers(monkeypatch, capsys):
     monkeypatch.setenv("XAI_API_KEY", "test-key")
 
     def fake_post(*_args, **_kwargs):
@@ -69,6 +69,11 @@ def test_xai_falls_back_to_transformers(monkeypatch):
 
     counted = counter.count_tokens("hi", "grok-4.5", use_cache=False)
     assert counted.count == len("hi")
+    # A request that escaped to the real endpoint would fall back just the same, on a
+    # connection error or a 404; only the stub reports the error it was told to raise.
+    assert (
+        "HTTPError contacting https://api.x.ai/v1/tokenize" in capsys.readouterr().err
+    )
 
 
 def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):

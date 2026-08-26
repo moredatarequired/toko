@@ -9,8 +9,6 @@ import respx
 
 from toko.file_reader import fetch_url, find_files, read_file, read_gitignore
 
-pytestmark = pytest.mark.usefixtures("isolated_git_env")
-
 
 def test_read_file():
     """Test reading a file."""

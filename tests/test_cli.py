@@ -647,12 +647,12 @@ def test_a_google_prefix_leaves_a_retired_gemini_unread(requested):
 def test_a_huggingface_prefix_leaves_a_retired_tail_unread():
     """Dropping "huggingface" from the exclusion set has to fail here.
 
-    The exclusion carves out two Hub organisations, and google was the only one fenced:
-    removing huggingface left all 776 tests green while the README went on promising the
-    carve-out. huggingface/ owns real repos (huggingface/CodeBERTa-small-v1), so like
-    google/ it is an owner, and a retired tail is the one shape that shows it -- strip
-    the owner and the gate refuses a shut-down engine, keep it and the name stays a Hub
-    repo id.
+    The exclusion carves out two Hub organisations, and google was the only one fenced
+    until this test: removing huggingface fails here and leaves the rest of the suite
+    green, while the README went on promising the carve-out. huggingface/ owns real
+    repos (huggingface/CodeBERTa-small-v1), so like google/ it is an owner, and a retired
+    tail is the one shape that shows it -- strip the owner and the gate refuses a
+    shut-down engine, keep it and the name stays a Hub repo id.
     """
     assert retirement_candidates("huggingface/text-davinci-003") == [
         "huggingface/text-davinci-003"
@@ -671,9 +671,10 @@ def test_a_huggingface_prefix_leaves_a_retired_tail_unread():
 def test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip(requested):
     """Every segment has to route, not just the first one.
 
-    Narrowing _routed_model_name's `all(...)` to the leading segment left all 796 tests
-    green -- every other multi-segment case in the suite routes the whole way down -- and
-    flipped `-m openai/Xenova/text-davinci-003` from a count to "retired (2024-01-04)".
+    Narrowing _routed_model_name's `all(...)` to the leading segment fails both cases
+    here and leaves the rest of the suite green -- every other multi-segment case routes
+    the whole way down -- and flips `-m openai/Xenova/text-davinci-003` from a count to
+    "retired (2024-01-04)".
     Xenova/text-davinci-003 is a live Hub repo, so a prefix ending in its owner is not
     pure addressing however it starts, and refusing it would be false about a repo that
     is still served. Asserted on the gate rather than a run: whether the Hub answers for
@@ -687,10 +688,11 @@ def test_a_retirement_with_no_published_date_says_so():
     """RETIREMENT_DATE_UNKNOWN is the registry's stand-in, never a date to print.
 
     Collapsing retirement_of's `date=None if retired == RETIREMENT_DATE_UNKNOWN` to a
-    plain `date=model_info.retired` kept all 796 tests green and turned this refusal into
-    "is retired (unknown)" -- the sentinel leaking into the message as though "unknown"
-    were the day xAI shut the model down. Three packaged entries carry it (grok-3-mini,
-    grok-2-1212, grok-2-vision-1212) and nothing else asserted on the wording.
+    plain `date=model_info.retired` fails this test and no other, turning this refusal
+    into "is retired (unknown)" -- the sentinel leaking into the message as though
+    "unknown" were the day xAI shut the model down. Three packaged entries carry it
+    (grok-3-mini, grok-2-1212, grok-2-vision-1212) and nothing else asserts on the
+    wording.
     """
     result = _invoke_cli(["-m", "grok-3-mini", "--text", "hello world"])
 
@@ -705,8 +707,8 @@ def test_the_spelling_as_typed_decides_which_retirement_is_reported():
 
     The order is the whole of "as spelled": the typed name comes before its -latest
     strip, so a spelling that resolves on its own reports its own retirement. Reversing
-    the loop in retirement_for_requested killed nothing across 796 tests while moving the
-    reported retirement onto the stripped base for every -latest spelling in the
+    the loop in retirement_for_requested fails this test while moving the reported
+    retirement onto the stripped base for every -latest spelling in the
     gemini-2.0-flash family -- 11 of them across the registry's names and Google's
     declared aliases -- and onto a different date for exactly one. This is that one:
     Google's -latest pass-through resolves the typed name to the gemini-2.0-flash-001

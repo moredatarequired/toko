@@ -831,9 +831,10 @@ def retirement_of(model_info: ModelInfo) -> Retirement | None:
     name = model_info.name.removeprefix("models/")
     if model_info.retired is not None:
         # RETIREMENT_DATE_UNKNOWN has to become None here, because everything downstream
-        # reads a date as a date: passing the sentinel through left all 796 tests green
-        # and printed "is retired (unknown)" for grok-3-mini, as though "unknown" were the
-        # day xAI shut it down. Fenced by test_a_retirement_with_no_published_date_says_so.
+        # reads a date as a date: passing the sentinel through prints "is retired
+        # (unknown)" for grok-3-mini, as though "unknown" were the day xAI shut it down.
+        # Fenced by test_a_retirement_with_no_published_date_says_so, the one test in the
+        # suite that catches it.
         return Retirement(
             model=name,
             date=None
@@ -909,10 +910,11 @@ def _routed_model_name(name: str) -> str | None:
     # Each segment is case-folded because a user types the provider's branding ("XAI/",
     # "OpenRouter/"), not the lowercase spelling --list-models prints.
     #
-    # Every segment, not just the first: narrowing this to prefix.split("/")[:1] left all
-    # 796 tests green and flipped `-m openai/Xenova/text-davinci-003` from a count to a
-    # retirement refusal, which is false about a live Hub repo. Fenced by
-    # test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip.
+    # Every segment, not just the first: narrowing this to prefix.split("/")[:1] flips
+    # `-m openai/Xenova/text-davinci-003` from a count to a retirement refusal, which is
+    # false about a live Hub repo. Fenced by
+    # test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip, the only test in
+    # the suite that catches it.
     if all(
         not segment or segment.lower() in _ROUTING_PREFIX_SEGMENTS
         for segment in prefix.split("/")

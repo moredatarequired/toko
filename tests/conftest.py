@@ -27,6 +27,21 @@ warnings.filterwarnings(
 )
 
 
+# Every variable that redirects git away from directory-based discovery. Anything
+# that can point git at a different repository, index or object store belongs here.
+GIT_LOCATION_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_CEILING_DIRECTORIES",
+)
+
+
 @pytest.fixture(autouse=True)
 def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
     """Keep every test off the developer's real git config and home directory.
@@ -36,6 +51,14 @@ def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
     passes or fails according to whose machine it runs on. The home is made outside
     `tmp_path` so that a test asserting on the exact contents of its own `tmp_path`
     does not have to know this fixture exists.
+
+    GIT_LOCATION_VARS are cleared because several tests build fixtures by running
+    `git init` and `git commit` inside `tmp_path`, and those variables override
+    directory-based discovery: with GIT_DIR set, a commit made in a fixture is
+    written to whatever repository GIT_DIR names instead. Git exports GIT_DIR when
+    it invokes a hook, and lefthook's pre-commit hook runs this suite, so leaving
+    them set means `git commit` in a checkout rewrites that checkout's own HEAD and
+    index with fixture data. That is not hypothetical; it happened.
     """
     home = tmp_path_factory.mktemp("home")
     (home / ".config").mkdir()
@@ -43,6 +66,8 @@ def isolated_git_env(monkeypatch, tmp_path_factory) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for redirect in GIT_LOCATION_VARS:
+        monkeypatch.delenv(redirect, raising=False)
     return home
 
 

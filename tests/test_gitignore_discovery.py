@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import GIT_LOCATION_VARS
 from toko import file_reader
 from toko.file_reader import find_files
 
@@ -506,3 +507,25 @@ def test_a_symlinked_device_node_is_not_counted_even_when_following(repo):
     (repo / "zerolink").symlink_to("/dev/zero")
 
     assert names(find_files(repo, follow_symlinks=True), repo) == {"real.txt"}
+
+
+def test_a_fixture_repo_is_never_the_ambient_one(repo):
+    """Fixture git commands must not reach the repository the suite is running in.
+
+    GIT_DIR and friends override directory-based discovery, and git exports GIT_DIR
+    when it runs a hook -- so with lefthook's pre-commit hook running this suite, a
+    leaked GIT_DIR sends every fixture `git commit` into the developer's own checkout
+    and rewrites its HEAD and index. The isolation fixture clears them; this pins that.
+    """
+    for redirect in GIT_LOCATION_VARS:
+        assert redirect not in os.environ, f"{redirect} would redirect fixture git"
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],  # noqa: S607
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    assert Path(resolved).parent == repo.resolve()

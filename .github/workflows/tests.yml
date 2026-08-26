@@ -30,15 +30,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          # Exact, so setup-uv installs it without asking the GitHub releases API
-          # which version "latest" is. v6 has no built-in hash for 0.12.3 and skips
-          # verification silently without an explicit checksum. This step is
-          # duplicated in git-hooks-checks.yml and release.yml: the action SHA, the
-          # version and the checksum have to match across all three. Dependabot
-          # bumps the action SHA and nothing else, so the version and checksum are
-          # hand-maintained.
+          # The checksum is redundant today - the pinned action bundles a hash for
+          # 0.12.3 - but that table only covers versions the pinned release knew
+          # about, so raising the version alone would drop verification silently:
+          # one debug line, green build. This step is duplicated in
+          # git-hooks-checks.yml and release.yml: the action SHA, the version and
+          # the checksum have to match across all three. Dependabot bumps the
+          # action SHA and nothing else, so the other two are hand-maintained.
           version: "0.12.3"
           checksum: "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101" # pragma: allowlist secret
           enable-cache: true

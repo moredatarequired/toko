@@ -26,6 +26,17 @@ warnings.filterwarnings(
 )
 
 
+@pytest.fixture
+def isolated_git_env(monkeypatch, tmp_path):
+    """Keep a test off the developer's real git config and home directory."""
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
 @pytest.fixture(autouse=True)
 def _cache_root(tmp_path):
     cache_root = tmp_path / "cache"

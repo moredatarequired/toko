@@ -69,6 +69,8 @@ DOT_IGNORE_FILES = (".ignore", ".rgignore")
 def _directory_layers(directory: Path, *, git: bool, dot: bool) -> list[_IgnoreLayer]:
     sources: list[Path] = []
     if git:
+        if (directory / ".git").exists():
+            sources.append(directory / ".git" / "info" / "exclude")
         sources.append(directory / ".gitignore")
     if dot:
         sources.extend(directory / name for name in DOT_IGNORE_FILES)
@@ -103,7 +105,9 @@ def _global_excludes_file(repo_root: Path) -> Path:
     return config_home / "git" / "ignore"
 
 
-def _inherited_ignore_layers(directory: Path, *, dot: bool) -> list[_IgnoreLayer]:
+def _inherited_ignore_layers(
+    directory: Path, repo_root: Path | None, *, dot: bool
+) -> list[_IgnoreLayer]:
     """Ignore rules reaching `directory` from the directories above it.
 
     Ordered weakest first: a path is resolved against the last pattern that
@@ -111,18 +115,11 @@ def _inherited_ignore_layers(directory: Path, *, dot: bool) -> list[_IgnoreLayer
     Git's rules stop at the repository root; .ignore and .rgignore do not
     belong to git and keep going up.
     """
-    repo_root = _find_repo_root(directory)
     layers: list[_IgnoreLayer] = []
     if repo_root is not None:
-        root_sources = (
-            _global_excludes_file(repo_root),
-            repo_root / ".git" / "info" / "exclude",
-        )
-        layers.extend(
-            layer
-            for layer in (_ignore_layer(repo_root, s) for s in root_sources)
-            if layer is not None
-        )
+        global_layer = _ignore_layer(repo_root, _global_excludes_file(repo_root))
+        if global_layer is not None:
+            layers.append(global_layer)
     for ancestor in reversed(directory.parents):
         layers.extend(
             _directory_layers(ancestor, git=_is_within(ancestor, repo_root), dot=dot)
@@ -163,8 +160,14 @@ def _iter_recursive_files(
     base_abs = base_dir.absolute()
     base_prefix = _dir_prefix(base_abs)
     dot = respect_gitignore and respect_dot_ignore
-    inherited = _inherited_ignore_layers(base_abs, dot=dot) if respect_gitignore else []
+    repo_root = _find_repo_root(base_abs) if respect_gitignore else None
+    inherited = (
+        _inherited_ignore_layers(base_abs, repo_root, dot=dot)
+        if respect_gitignore
+        else []
+    )
     layers_by_dir: dict[Path, list[_IgnoreLayer]] = {}
+    git_by_dir: dict[Path, bool] = {}
 
     discovered: list[Path] = []
     for root, dirs, filenames in os.walk(base_dir):
@@ -172,9 +175,12 @@ def _iter_recursive_files(
         root_abs = root_path.absolute()
         root_prefix = _dir_prefix(root_abs)
         layers = layers_by_dir.get(root_abs.parent, inherited)
-        own = (
-            _directory_layers(root_abs, git=True, dot=dot) if respect_gitignore else []
+        git = (
+            git_by_dir.get(root_abs.parent, repo_root is not None)
+            or (root_path / ".git").exists()
         )
+        git_by_dir[root_abs] = git
+        own = _directory_layers(root_abs, git=git, dot=dot) if respect_gitignore else []
         if own:
             layers = [*layers, *own]
         layers_by_dir[root_abs] = layers
@@ -215,8 +221,9 @@ def _iter_shallow_files(
     layers: list[_IgnoreLayer] = []
     if respect_gitignore:
         dot = respect_dot_ignore
-        layers = _inherited_ignore_layers(base_abs, dot=dot)
-        layers.extend(_directory_layers(base_abs, git=True, dot=dot))
+        repo_root = _find_repo_root(base_abs)
+        layers = _inherited_ignore_layers(base_abs, repo_root, dot=dot)
+        layers.extend(_directory_layers(base_abs, git=repo_root is not None, dot=dot))
 
     discovered: list[Path] = []
     for item in base_dir.iterdir():

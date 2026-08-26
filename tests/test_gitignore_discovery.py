@@ -9,16 +9,7 @@ import pytest
 from toko import file_reader
 from toko.file_reader import find_files
 
-
-@pytest.fixture(autouse=True)
-def _isolated_git_env(monkeypatch, tmp_path):
-    """Keep every test off the developer's real git config and home directory."""
-    home = tmp_path / "home"
-    (home / ".config").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+pytestmark = pytest.mark.usefixtures("isolated_git_env")
 
 
 def git(*args: str, cwd: Path) -> None:
@@ -302,3 +293,41 @@ def test_no_ignore_also_disables_dot_ignore(repo):
     write(repo / "debug.log")
 
     assert "debug.log" in names(find_files(repo, respect_gitignore=False), repo)
+
+
+def test_gitignore_outside_a_repository_has_no_effect(tmp_path):
+    plain = tmp_path / "plain"
+    write(plain / ".gitignore", "*.log\n")
+    write(plain / "app.js")
+    write(plain / "debug.log")
+
+    assert names(find_files(plain), plain) == {"app.js", "debug.log"}
+
+
+def test_dot_ignore_outside_a_repository_still_applies(tmp_path):
+    plain = tmp_path / "plain"
+    write(plain / ".ignore", "*.log\n")
+    write(plain / "app.js")
+    write(plain / "debug.log")
+
+    assert names(find_files(plain), plain) == {"app.js", ".ignore"}
+
+
+def test_core_excludes_file_does_not_apply_outside_a_repository(tmp_path):
+    write(tmp_path / "home" / ".config" / "git" / "ignore", "*.swp\n")
+    plain = tmp_path / "plain"
+    write(plain / "notes.txt")
+    write(plain / "notes.swp")
+
+    assert names(find_files(plain), plain) == {"notes.txt", "notes.swp"}
+
+
+def test_a_nested_repository_contributes_its_own_info_exclude(repo):
+    nested = repo / "vendor" / "lib"
+    nested.mkdir(parents=True)
+    git("init", "-q", cwd=nested)
+    write(nested / ".git" / "info" / "exclude", "target/\n")
+    write(nested / "src.rs")
+    write(nested / "target" / "build.rs")
+
+    assert names(find_files(repo), repo) == {"vendor/lib/src.rs"}

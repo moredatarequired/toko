@@ -9,6 +9,8 @@ import respx
 
 from toko.file_reader import fetch_url, find_files, read_file, read_gitignore
 
+pytestmark = pytest.mark.usefixtures("isolated_git_env")
+
 
 def test_read_file():
     """Test reading a file."""
@@ -99,6 +101,8 @@ def test_find_files_gitignore():
     """Test .gitignore respect."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
+        # A .gitignore only binds inside a repository, as it does for git and rg.
+        (tmpdir_path / ".git").mkdir()
 
         # Create files
         (tmpdir_path / "included.txt").write_text("include")
@@ -121,6 +125,7 @@ def test_find_files_gitignore_directories():
     """Test .gitignore with directories."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
+        (tmpdir_path / ".git").mkdir()
 
         # Create structure
         (tmpdir_path / "file.txt").write_text("test")

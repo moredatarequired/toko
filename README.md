@@ -114,26 +114,28 @@ toko --exclude '**/__pycache__/*' src/
 File                                   gpt-5
 src/toko/__init__.py                     378
 src/toko/cache.py                        863
-src/toko/cli.py                        5,112
+src/toko/cli.py                        5,605
 src/toko/config.py                     1,374
-src/toko/cost.py                       1,387
-src/toko/counter.py                    6,495
+src/toko/cost.py                       3,435
+src/toko/counter.py                    6,521
 src/toko/data/__init__.py                  8
 src/toko/data/models.toml              2,952
 src/toko/data/openrouter_models.json     359
-src/toko/file_reader.py                1,170
-src/toko/formatters.py                 3,999
-src/toko/models.py                     7,175
+src/toko/file_reader.py                3,675
+src/toko/formatters.py                 4,109
+src/toko/models.py                     7,502
 src/toko/output_format.py                 53
 src/toko/price_update.py               1,414
 src/toko/py.typed                          0
 src/toko/result.py                       107
 src/toko/sort_order.py                    50
-TOTAL                                 32,896
+TOTAL                                 38,405
 ```
 
-- Directories are processed recursively by default and skip what `rg --files` skips: the ignore files ripgrep honors (`.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`), hidden files and directories, and symlinks.
-- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules, and `--hidden` to count dotted paths such as `.env` and `.github/`. `.git` itself is never walked, with or without `--hidden`.
+- Directories are processed recursively by default and skip what `rg --files` skips: the ignore files ripgrep honors (`.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`), hidden files and directories, symlinks, and anything that is not a regular file, such as a FIFO, a socket or a device node.
+- When two ignore files disagree, `.ignore` and `.rgignore` beat `.gitignore` and `.git/info/exclude` wherever each one sits, and only between files of the same kind does the deeper one win. Git's ignore files belong to the repository that holds them: a checkout nested inside another one answers to its own rules and not to the outer repository's, exactly as `git` and `rg` treat it.
+- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules, and `--hidden` to count dotted paths such as `.env` and `.github/`. `--hidden` walks `.git` as well, the same as `rg --hidden` does, so on a real checkout it counts the loose objects, refs and packfiles inside it; add `--exclude '.git/**'` if you want the dotted paths without the object store.
+- Symlinks met while walking a directory are skipped, as `rg` skips them. Pass `--follow`/`-L` to walk them the way `rg -L` does: symlinked files are counted and symlinked directories are descended into. A symlink named directly on the command line is read either way, with or without the flag. Following stops at a cycle instead of looping forever, and a link that dangles or spirals is reported on stderr and leaves a non-zero exit while the rest of the tree is still counted.
 - Counting files runs eight counts at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` (1 to 64) to change that, or `--jobs 1` to count one at a time. It has no effect on `--text` or piped stdin, and URLs are still fetched one after another.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.
@@ -335,7 +337,10 @@ xai = "xai-..."
 # reads it: OpenAI models are tokenized locally with tiktoken.
 ```
 
-Config values act as defaults; command-line flags always win.
+Config values act as defaults; command-line flags always win. `respect_gitignore`
+governs every ignore file toko reads, not only `.gitignore`: setting it to `false` is
+what `--no-ignore` does, and drops `.git/info/exclude`, `core.excludesFile` and
+`.ignore`/`.rgignore` along with it.
 
 ## Teaching Toko about a new model
 

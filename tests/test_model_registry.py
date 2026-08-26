@@ -85,37 +85,13 @@ GOLDEN_LISTING = {
         "models/gemini-3.6-flash",
     ],
     "openai": [
-        "gpt-3.5-turbo-16k",
-        "gpt-3.5-turbo-instruct",
-        "gpt-4-32k",
-        "gpt-4-turbo",
-        "gpt-4-vision-preview",
         "gpt-4.1-mini",
         "gpt-4.1-nano",
-        "gpt-4.5-preview",
-        "gpt-4o-audio-preview",
-        "gpt-4o-mini",
-        "gpt-4o-mini-audio-preview",
-        "gpt-4o-mini-realtime-preview",
-        "gpt-4o-mini-transcribe",
-        "gpt-4o-mini-tts",
-        "gpt-4o-realtime-preview",
-        "gpt-4o-search-preview",
-        "gpt-4o-transcribe",
-        "gpt-5-image",
-        "gpt-5-image-mini",
         "gpt-5-mini",
         "gpt-5-nano",
-        "gpt-5-pro",
         "gpt-5.1",
         "gpt-5.2",
         "gpt-5.2-pro",
-        "o1-mini",
-        "o1-pro",
-        "o3-deep-research",
-        "o3-mini",
-        "o3-pro",
-        "o4-mini-deep-research",
     ],
     "xai": [
         "grok-4.20-0309-non-reasoning",
@@ -166,37 +142,13 @@ GOLDEN_LISTING_WITH_RETIRED = {
         "models/gemini-3.6-flash",
     ],
     "openai": [
-        "gpt-3.5-turbo-16k",
-        "gpt-3.5-turbo-instruct",
-        "gpt-4-32k",
-        "gpt-4-turbo",
-        "gpt-4-vision-preview",
         "gpt-4.1-mini",
         "gpt-4.1-nano",
-        "gpt-4.5-preview",
-        "gpt-4o-audio-preview",
-        "gpt-4o-mini",
-        "gpt-4o-mini-audio-preview",
-        "gpt-4o-mini-realtime-preview",
-        "gpt-4o-mini-transcribe",
-        "gpt-4o-mini-tts",
-        "gpt-4o-realtime-preview",
-        "gpt-4o-search-preview",
-        "gpt-4o-transcribe",
-        "gpt-5-image",
-        "gpt-5-image-mini",
         "gpt-5-mini",
         "gpt-5-nano",
-        "gpt-5-pro",
         "gpt-5.1",
         "gpt-5.2",
         "gpt-5.2-pro",
-        "o1-mini",
-        "o1-pro",
-        "o3-deep-research",
-        "o3-mini",
-        "o3-pro",
-        "o4-mini-deep-research",
     ],
     "xai": [
         "grok-2-1212",
@@ -264,24 +216,34 @@ class TestPackagedRegistry:
             GOLDEN_HINT
         )
 
-    def test_no_advertised_openai_model_leans_on_tiktokens_prefix_table(self, capsys):
+    def test_no_openai_registry_entry_leans_on_tiktokens_prefix_table(self, capsys):
         """A prefix table entry claims a family, not a name.
 
-        tiktoken resolves anything starting with "gpt-5-" through that prefix, so
-        an entry with no encoding of its own counted exactly only by accident.
-        Toko now estimates those and says so, which for a model --list-models
-        advertises is a warning on every run: declare the encoding instead.
+        tiktoken resolves anything starting with "gpt-5-" through that prefix, so an
+        entry with no encoding of its own counted exactly only by accident. Toko now
+        estimates those and says so, which for a name the registry claims to know is
+        a warning on every run: declare the encoding instead.
+
+        Every OpenAI entry is walked, listed or not. Whether --list-models advertises
+        a name has nothing to do with whether counting it is honest, and most of the
+        entries this guards are deliberately unlisted.
         """
+        entries = sorted(
+            {info.name for info in models.MODELS.values() if info.provider == "openai"}
+        )
+        assert entries, "no OpenAI entries found; this guard would pass vacuously"
+
         estimated = {
             name: counted.caveat
-            for name in sorted(models.list_models()["openai"])
+            for name in entries
             if (counted := count_tokens("hello world", model=name, use_cache=False))
             and counted.approximate
         }
         capsys.readouterr()
         assert estimated == {}, (
-            "these models are advertised but counted approximately; give each an "
-            f"encoding in src/toko/data/models.toml: {sorted(estimated)}"
+            "these registry entries are counted approximately, so every run of one "
+            "warns; give each an encoding in src/toko/data/models.toml: "
+            f"{sorted(estimated)}"
         )
 
     def test_the_packaged_registry_loads_without_a_word_on_stderr(self, capsys):

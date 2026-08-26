@@ -196,8 +196,9 @@ Two exceptions are worth knowing before you parse the output:
   end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
   `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
   read `tokens`, if a run of yours can hit an OpenAI name Toko does not list — a dated
-  snapshot such as `gpt-4o-2024-08-06` counts as one — or an xAI model without
-  `XAI_API_KEY`.
+  snapshot such as `gpt-4o-2024-08-06` counts as one — an xAI model without
+  `XAI_API_KEY`, or a Mistral name with no pinned tokenizer: the three cases that
+  produce an approximate count.
 
 ## Library usage
 

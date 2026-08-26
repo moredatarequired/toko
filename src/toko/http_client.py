@@ -1,7 +1,6 @@
 """One reused httpx client per process, rather than one per request."""
 
 import atexit
-import http.cookiejar
 import os
 import threading
 from urllib.request import getproxies_environment
@@ -23,18 +22,6 @@ _CERTIFICATE_VARIABLES = ("SSL_CERT_FILE", "SSL_CERT_DIR")
 
 _CLIENTS: dict[tuple[tuple[str, str], ...], httpx.Client] = {}
 _LOCK = threading.Lock()
-
-
-class _DiscardingCookieJar(http.cookiejar.CookieJar):
-    """Forget every Set-Cookie rather than replaying it on a later request.
-
-    A client per request started with an empty jar every time; one client for the whole
-    run would otherwise send a cookie picked up fetching one URL along with a fetch of
-    another the user asked for separately. No call site here wants a session.
-    """
-
-    def extract_cookies(self, response: object, request: object) -> None:
-        pass
 
 
 def _client_environment() -> tuple[tuple[str, str], ...]:
@@ -68,7 +55,7 @@ def shared_client() -> httpx.Client:
         # instead of stacking another alongside it and leaking its keepalive sockets.
         superseded = list(_CLIENTS.values())
         _CLIENTS.clear()
-        client = _CLIENTS[key] = httpx.Client(cookies=_DiscardingCookieJar())
+        client = _CLIENTS[key] = httpx.Client()
     # Closing outside the lock: close() waits on the connection pool, and nothing that
     # holds a pooled connection should be waiting on this lock behind it.
     for stale in superseded:

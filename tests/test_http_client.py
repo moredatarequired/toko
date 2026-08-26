@@ -21,6 +21,12 @@ runner = CliRunner()
 
 MODEL = "claude-opus-4-5"
 
+# A redirect that hands out the session its target requires, the way a login
+# interstitial does: the cookie is set on the 302 and checked on the page after it.
+GATE_START = "/gated/start"
+GATE_END = "/gated/end"
+GATE_COOKIE = "session=s3cret"
+
 
 def _set_https_proxy(monkeypatch, url: str) -> None:
     """Set both spellings: urllib prefers the lowercase one, whatever the run inherited."""
@@ -78,12 +84,33 @@ def local_api(monkeypatch):
             with lock:
                 tally.requests += 1
                 tally.cookies.append(self.headers.get("Cookie"))
-            payload = b"fetched over the shared client"
+
+            if self.path == GATE_START:
+                self.send_response(302)
+                self.send_header("Location", GATE_END)
+                self.send_header("Set-Cookie", f"{GATE_COOKIE}; Path=/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+            if self.path == GATE_END:
+                held = GATE_COOKIE in (self.headers.get("Cookie") or "")
+                # Not a 401: a gate that answers 200 with the wrong body is what makes a
+                # dropped cookie silent, and what a token count would be taken from.
+                self._respond(b"gated body" if held else b"interstitial body")
+                return
+
+            # Plenty of sites set one; a client that keeps it sends it back.
+            self._respond(
+                b"fetched over the shared client", cookie="sid=abc123; Path=/"
+            )
+
+        def _respond(self, payload: bytes, cookie: str | None = None):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(payload)))
-            # Plenty of sites set one; a client that keeps it sends it back.
-            self.send_header("Set-Cookie", "sid=abc123; Path=/")
+            if cookie is not None:
+                self.send_header("Set-Cookie", cookie)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -291,3 +318,15 @@ def test_a_cookie_from_one_url_is_not_sent_to_the_next(local_api):
         assert fetch_url(f"{local_api.base}/{index}.txt")
 
     assert local_api.tally.cookies == [None, None, None]
+
+
+def test_a_cookie_set_on_a_redirect_reaches_the_redirect_target(local_api):
+    """Within one fetch the redirect chain is still a session, as it was per-client.
+
+    httpx builds a redirect request from the client's jar, so a jar that dropped every
+    Set-Cookie would leave the gate serving its interstitial -- 200, no error, and a
+    confident token count for the wrong document.
+    """
+    assert fetch_url(f"{local_api.base}{GATE_START}") == "gated body"
+
+    assert local_api.tally.cookies == [None, GATE_COOKIE]

@@ -302,6 +302,16 @@ class InputSelection:
     had_failures: bool = False
 
 
+def _read_stdin() -> str:
+    """Read piped input as UTF-8 whatever the locale says.
+
+    sys.stdin decodes with the locale's encoding and surrogateescape, so under a
+    non-UTF-8 locale a piped UTF-8 file arrives as lone surrogates that the tokenizers
+    then refuse to encode -- the run fails on input it should have counted.
+    """
+    return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+
+
 def _load_runtime_config() -> Config:
     try:
         config = load_config()
@@ -375,8 +385,7 @@ def _collect_inputs(
         return InputSelection(text=None, files=files, had_failures=had_failures)
 
     if not is_stdin_empty():
-        stdin_text = sys.stdin.read()
-        return InputSelection(text=stdin_text, files=[])
+        return InputSelection(text=_read_stdin(), files=[])
 
     typer.echo(
         "Error: No input provided. Use --text, provide paths, or pipe to stdin.",
@@ -420,11 +429,10 @@ def _collect_files_from_paths(
 
 
 def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> bool:
+    # No UnicodeDecodeError arm: httpx decodes the body with errors="replace", so
+    # fetch_url returns replacement characters rather than raising on bad bytes.
     try:
         content = fetch_url(path_str)
-    except UnicodeDecodeError:
-        typer.echo(f"Error: URL content is not valid UTF-8: {path_str}", err=True)
-        return False
     except Exception as e:
         typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
         return False

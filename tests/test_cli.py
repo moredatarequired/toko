@@ -391,9 +391,12 @@ def test_a_retired_name_is_refused_however_it_is_capitalized(requested, date):
     """Three separate case folds stand between these spellings and a silent count.
 
     Every other prefixed or aliased case in the suite is spelled lowercase, so all three
-    folds were unfenced: each could be dropped with 784 tests still green while the run
-    went from refused to counted. A user types the branding ("XAI", "OpenRouter") or an
-    old shouted engine name, not the lowercase spelling --list-models prints.
+    folds were unfenced: dropping any one of them turns the run from refused to counted
+    and fails nothing in the suite outside the cases here -- the segment fold takes the
+    two branded prefixes, the "-latest" fold takes grok-3-LATEST, and the retirement_of
+    fold takes CURIE and Text-Davinci-003. A user types the branding ("XAI",
+    "OpenRouter") or an old shouted engine name, not the lowercase spelling
+    --list-models prints.
     """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
@@ -411,7 +414,9 @@ def test_a_bare_name_yields_exactly_one_candidate():
     return the whole name and retirement_candidates build it twice -- which dict.fromkeys
     then collapses. Drop the dedupe instead and nothing duplicates, because the check
     already returned None. Drop both and retirement_candidates("grok-3") is
-    ["grok-3", "grok-3"], which nothing else in the suite notices.
+    ["grok-3", "grok-3"]; the failures are this test and
+    test_the_spelling_as_typed_decides_which_retirement_is_reported, whose asserted
+    candidate list doubles the same way.
     """
     assert retirement_candidates("grok-3") == ["grok-3"]
     assert retirement_candidates("grok-3-latest") == ["grok-3-latest", "grok-3"]

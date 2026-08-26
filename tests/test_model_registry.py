@@ -683,13 +683,14 @@ class TestUserOverlay:
         """The typed spelling comes before the routed one, not just before its -latest strip.
 
         test_the_spelling_as_typed_decides_which_retirement_is_reported fences the
-        -latest axis only: building retirement_candidates' `bases` routed-first killed
-        nothing across 802 tests, because no packaged name is registered under both a
-        routed spelling and its tail. An overlay is what makes the axis reachable -- a
-        registry entry may be named for the full routed spelling and carry its own date,
-        and routed-first then answers for the tail model instead, contradicting
-        retirement_for_requested's "as spelled" contract with a date and a redirect that
-        belong to a different model.
+        -latest axis only: building retirement_candidates' `bases` routed-first leaves
+        that test green, because no packaged name is registered under both a routed
+        spelling and its tail. This test is the fence for the routed axis instead -- with
+        the build flipped it is the only failure in the suite. An overlay is what makes
+        the axis reachable -- a registry entry may be named for the full routed spelling
+        and carry its own date, and routed-first then answers for the tail model instead,
+        contradicting retirement_for_requested's "as spelled" contract with a date and a
+        redirect that belong to a different model.
         """
         reloaded = user_registry("""
             [[model]]

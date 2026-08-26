@@ -60,7 +60,7 @@ def _build_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
 
 def _read_spec(path: Path) -> pathspec.PathSpec | None:
     try:
-        patterns = path.read_text(errors="replace").splitlines()
+        patterns = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
     return _build_spec(patterns)
@@ -388,18 +388,13 @@ def find_files(
 
 
 def read_file(path: Path) -> str:
-    """Read file contents as text.
+    """Read a file as UTF-8 text.
 
-    Args:
-        path: Path to file
-
-    Returns:
-        File contents as string
-
-    Raises:
-        UnicodeDecodeError: If file is not valid UTF-8
+    The encoding is named rather than left to the locale. Every caller here reads a
+    UnicodeDecodeError as "this file is binary", so a default that is not UTF-8 would
+    quietly drop every UTF-8 file in the tree from the count instead of counting it.
     """
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def fetch_url(url: str, *, timeout: float = 30.0) -> str:

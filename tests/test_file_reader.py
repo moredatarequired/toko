@@ -1,5 +1,8 @@
 """Tests for file_reader module."""
 
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -216,3 +219,86 @@ def test_fetch_url_redirects():
 
     result = fetch_url(url)
     assert result == content
+
+
+# Together these move the interpreter's default text encoding off UTF-8: PEP 540's
+# UTF-8 mode off, and PEP 538's coercion of the C locale off too, so that LC_ALL=C is
+# left meaning ASCII instead of being rescued back into UTF-8.
+_NON_UTF8_ENV = {
+    "PYTHONUTF8": "0",
+    "PYTHONCOERCECLOCALE": "0",
+    "LC_ALL": "C",
+    "LANG": "C",
+}
+_RUN_CLI = "from toko.cli import app; app()"
+
+
+def _non_utf8_env(tmp_path: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        **_NON_UTF8_ENV,
+        # Kept off the developer's own config and counts, the way the CLI tests are.
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+    }
+
+
+def _skip_unless_the_locale_took(env: dict[str, str]) -> None:
+    got = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", "import locale; print(locale.getpreferredencoding(0))"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if got.lower().replace("_", "-") in {"utf-8", "utf8"}:
+        pytest.skip(f"this interpreter stays on UTF-8 ({got}); nothing to prove")
+
+
+def _run_toko(args: list[str], env: dict[str, str], stdin: bytes | None = None):
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _RUN_CLI, *args],
+        env=env,
+        input=stdin,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_a_utf8_file_is_counted_the_same_whatever_the_locale_says(tmp_path):
+    """A locale-dependent decode reads a UTF-8 file as binary and drops it silently.
+
+    The count does not merely fail, it comes back smaller and exits 0, so the caller
+    has no way to tell the answer is wrong.
+    """
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "ascii.txt").write_text("hello world", encoding="utf-8")
+    (tree / "accented.txt").write_text("h\u00e9llo w\u00f6rld", encoding="utf-8")
+    env = _non_utf8_env(tmp_path)
+    _skip_unless_the_locale_took(env)
+
+    result = _run_toko(["--format", "csv", "-m", "gpt-5", str(tree)], env)
+    rows = result.stdout.decode("utf-8", "replace")
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert "Skipping binary file" not in result.stderr.decode("utf-8", "replace")
+    assert "ascii.txt" in rows
+    assert "accented.txt" in rows
+
+
+def test_utf8_piped_to_stdin_survives_a_non_utf8_locale(tmp_path):
+    """Piped UTF-8 must count, whatever the locale is.
+
+    sys.stdin decodes with the locale's encoding and surrogateescape, and the
+    tokenizer then refuses the lone surrogates that leaves behind, so the run
+    fails on input it should have counted.
+    """
+    env = _non_utf8_env(tmp_path)
+    _skip_unless_the_locale_took(env)
+
+    result = _run_toko(["-m", "gpt-5"], env, stdin="h\u00e9llo w\u00f6rld".encode())
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert "surrogates not allowed" not in result.stderr.decode("utf-8", "replace")
+    assert result.stdout.decode("utf-8", "replace").strip().isdigit()

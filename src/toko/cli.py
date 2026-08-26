@@ -14,7 +14,7 @@ from toko import __version__
 from toko.cache import clear_cache as do_clear_cache
 from toko.config import Config, apply_api_keys, load_config
 from toko.cost import estimate_cost
-from toko.counter import count_tokens
+from toko.counter import count_tokens, preload_tokenizer
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
@@ -502,6 +502,14 @@ def _collect_file_counts(
     # Flattened so that one file counted against several API models parallelises too,
     # rather than only files being spread across workers.
     work = [(content, model_name) for _, content in files for model_name in models]
+
+    # Before any worker exists, and even when there will be none: a tokenizer built
+    # inside a pool worker is built under whatever descriptor pressure the run has
+    # accumulated by then, and tiktoken's registry does not survive being built with
+    # none left. Once resident it cannot be broken by a later shortage.
+    for model_name in models:
+        preload_tokenizer(model_name)
+
     workers = min(jobs, len(work))
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:

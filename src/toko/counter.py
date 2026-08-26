@@ -314,6 +314,44 @@ def _count_openai(text: str, model_info: ModelInfo) -> TokenCount:
     return _approximate(len(encoding.encode(text)), model_info, caveat)
 
 
+def preload_tokenizer(model: str) -> None:
+    """Build the local tokenizer for one model now, so no later count is the first build.
+
+    tiktoken builds its encoding registry on first use, and a build that happens while
+    the process is out of file descriptors leaves that registry permanently empty --
+    pkgutil swallows the OSError, so tiktoken's own reset never fires, and every later
+    lookup raises. Doing it here keeps the one fragile build in the caller's thread
+    before any worker pool exists, where nothing has had a chance to exhaust anything.
+
+    Only the OpenAI provider has a tokenizer to warm; the API-backed providers have
+    nothing local, and the HuggingFace and Mistral ones are already built once under a
+    lock and are far too large to load speculatively. A failure here is left alone so
+    that the count reports it exactly as it does today.
+    """
+    try:
+        model_info = get_model(model)
+    except ValueError:
+        return
+
+    if model_info.provider != "openai":
+        return
+
+    encoding = _get_tiktoken_encoding_for_model(model_info.name.lower())
+    if encoding is None:
+        encoding = _get_tiktoken_encoding_by_name(
+            model_info.encoding or OPENAI_FALLBACK_ENCODING
+        )
+    if encoding is None:
+        return
+
+    with contextlib.suppress(Exception):
+        # Constructing the encoding is not the whole of loading it: tiktoken defers
+        # `import regex` to the first encode (tiktoken/core.py), and an import needs a
+        # descriptor of its own. Without this the registry survives a shortage but the
+        # first real encode still dies on that import, inside a pool worker.
+        encoding.encode("")
+
+
 def _warn_if_retired(model_info: ModelInfo) -> None:
     notice = retirement_notice(model_info)
     if notice is not None:

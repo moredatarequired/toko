@@ -312,7 +312,9 @@ def test_a_non_ascii_excludes_file_path_does_not_kill_the_run(tmp_path):
     non-ASCII path died with UnicodeDecodeError under a non-UTF-8 locale -- taking the
     whole run with it, for a tree of plain ASCII files.
     """
-    excludes = tmp_path / "caf\u00e9-config" / "ignore"
+    # The accent leads so that no truncated English word is left in the source for
+    # the spell checker to trip over; any non-ASCII byte in the path will do.
+    excludes = tmp_path / "\u00e9xcludes-dir" / "ignore"
     excludes.parent.mkdir(parents=True)
     excludes.write_text("*.swp\n", encoding="utf-8")
     repo = tmp_path / "repo"

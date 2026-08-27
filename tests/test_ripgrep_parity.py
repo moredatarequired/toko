@@ -461,6 +461,50 @@ def test_a_gitignored_directory_is_one_ripgrep_refuses_to_descend_into(tmp_path)
     assert scanned == {"."}
 
 
+@pytest.mark.parametrize(
+    "rule", ["dir/", "dir/ ", "dir/  ", "dir/\t", "dir/ \t ", "dir "]
+)
+def test_trailing_whitespace_leaves_a_directory_rule_still_pruning(tmp_path, rule):
+    """Git and ripgrep both strip a rule's trailing whitespace; so must whatever reads it.
+
+    pathspec compiles `dir/ ` to the regex it compiles `dir/` to, so a reader that asks
+    the raw text whether the rule is directory-only calls this one a file rule, probes
+    `dir` where the regex wants `dir/`, matches nothing and descends -- handing the
+    contents of an excluded directory to a counter that sends them to a provider.
+    The whitespace spellings are invisible in an editor, which is what makes it quiet.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", f"{rule}\n")
+    write(tmp_path / "top.txt")
+    write(tmp_path / "dir" / "a.txt")
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+    # The tree proves something only because the rule has to bite for this to hold.
+    assert ripgrep_files(tmp_path) == {"top.txt"}
+
+
+def test_a_directory_rule_with_trailing_whitespace_is_never_descended_into(tmp_path):
+    """The listing can come out right while the pruning is lost; measure the walk itself.
+
+    A rule that stops pruning still filters each file it finds, so a tree whose every
+    ignored path is a plain file cannot tell the two apart. Watching which directories
+    are opened is what separates them.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "dir/ \n")
+    write(tmp_path / "top.txt")
+    for index in range(3):
+        write(tmp_path / "dir" / f"pkg{index}" / "index.js")
+
+    scanned = toko_scanned(tmp_path)
+    skipped = ripgrep_skipped_dirs(tmp_path)
+
+    assert "." in scanned, "the scandir spy recorded nothing, so it proves nothing"
+    assert "dir" in skipped
+    assert scanned.isdisjoint(skipped)
+    assert scanned == {"."}
+
+
 def test_a_root_rgignore_beats_a_deeper_ignore(tmp_path):
     """Rank comes before depth: the kinds are separate tiers, not one ordered list."""
     write(tmp_path / ".rgignore", "shadowed.txt\n")

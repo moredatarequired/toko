@@ -412,6 +412,39 @@ def test_a_bare_directory_exclude_leaves_a_later_negation_nothing_to_re_include(
     assert {path.name for path in found} == {"top.txt"}
 
 
+@pytest.mark.parametrize("rule", ["dir/", "dir/ ", "dir/\t", "dir/ \t "])
+def test_a_directory_exclude_with_trailing_whitespace_still_excludes(tmp_path, rule):
+    """Pathspec strips the rule before compiling it, so the reader has to strip it too.
+
+    `dir/ ` and `dir/` compile to one regex. Judging directory-only-ness from the raw
+    text instead calls the first a file rule, probes `dir` against a regex that wants
+    `dir/`, and lets the walk into a directory the user excluded.
+    """
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "top.txt").write_text("x")
+    (tmp_path / "dir" / "secret.txt").write_text("x")
+
+    found = find_files(tmp_path, exclude_patterns=[rule])
+
+    assert {path.name for path in found} == {"top.txt"}
+
+
+def test_an_escaped_trailing_space_is_not_stripped_into_a_directory_rule(tmp_path):
+    r"""The counterpart: `dir/\ ` names a file called " " and must stay a file rule.
+
+    pathspec strips both ends of a pattern unless it ends in a backslash-escaped
+    space, and stripping that one anyway would turn a rule about a file into a rule
+    that prunes a directory. So the stripping has to stop where pathspec's stops.
+    """
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "top.txt").write_text("x")
+    (tmp_path / "dir" / "keep.txt").write_text("x")
+
+    found = find_files(tmp_path, exclude_patterns=["dir/\\ "])
+
+    assert {path.name for path in found} == {"top.txt", "keep.txt"}
+
+
 @pytest.fixture
 def pathspec_without_the_descendant_mark(monkeypatch):
     """Stand in for a pathspec release that renames the private group toko reads.
@@ -456,6 +489,55 @@ def test_losing_the_pathspec_descendant_mark_silently_restores_pruning():
 @pytest.mark.usefixtures("pathspec_without_the_descendant_mark")
 def test_importing_fails_loudly_when_pathspec_drops_the_descendant_mark():
     """The same regression met at import: an exception naming what broke, not silence."""
+    with pytest.raises(RuntimeError, match="pathspec") as raised:
+        importlib.reload(toko.file_reader)
+
+    assert "ps_d" in str(raised.value)
+
+
+@pytest.fixture
+def pathspec_with_a_widened_descendant_mark(monkeypatch):
+    """Stand in for a pathspec release that keeps the group name but grows its reach.
+
+    The harder half of the same regression: a guard that only asks whether `ps_d`
+    exists still passes here, because it does exist. What breaks is how far it
+    reaches, which is the property `_matched_self` actually reads.
+    """
+    original = pathspec.patterns.gitwildmatch.GitWildMatchPattern.pattern_to_regex
+
+    def widened(pattern):
+        regex, include = original(pattern)
+        if regex is not None:
+            regex = regex.replace("(?P<ps_d>/)", "(?P<ps_d>/.*)")
+        return regex, include
+
+    monkeypatch.setattr(
+        pathspec.patterns.gitwildmatch.GitWildMatchPattern,
+        "pattern_to_regex",
+        staticmethod(widened),
+    )
+    yield
+    monkeypatch.undo()
+    importlib.reload(toko.file_reader)
+
+
+@pytest.mark.usefixtures("pathspec_with_a_widened_descendant_mark")
+def test_a_widened_descendant_mark_silently_restores_pruning():
+    """Why the name alone is not enough to check: the group is still there, still named."""
+    pattern = next(
+        iter(pathspec.PathSpec.from_lines("gitwildmatch", ["dir/"]).patterns)
+    )
+
+    assert pattern.regex.groupindex.get("ps_d") is not None
+    # Widened, the mark now reaches the end of every descendant path, so the test that
+    # tells a directory's own match apart -- how far the mark reaches -- reads True for
+    # something inside `dir` just as it does for `dir` itself.
+    assert _matched_self(pattern, "dir/below.txt") is True
+
+
+@pytest.mark.usefixtures("pathspec_with_a_widened_descendant_mark")
+def test_importing_fails_loudly_when_pathspec_widens_the_descendant_mark():
+    """The guard has to exercise the semantics, not just look the name up."""
     with pytest.raises(RuntimeError, match="pathspec") as raised:
         importlib.reload(toko.file_reader)
 

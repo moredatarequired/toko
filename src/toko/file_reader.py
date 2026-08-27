@@ -25,21 +25,15 @@ def _descendant_mark_is_live() -> bool:
         iter(pathspec.PathSpec.from_lines("gitwildmatch", ["dir/"]).patterns)
     )
     found = pattern.match_file("dir/below.txt")
+    if found is None or found.match.groupdict().get(_DESCENDANT_MARK) is None:
+        return False
+    # The group existing is not the whole requirement: `_matched_self` reads how far
+    # it reaches to tell a directory's own match from a match on something inside it,
+    # so a release that kept the name and widened the capture would pass a check on
+    # the name alone while making every descendant read as the directory itself.
     return (
-        found is not None and found.match.groupdict().get(_DESCENDANT_MARK) is not None
-    )
-
-
-# The mark is private to pathspec and the requirement carries no upper bound, so a
-# release that renames or drops it would not raise: `.get` would return None for every
-# descendant match, `_matched_self` would call each one the directory's own match, and
-# `dir/**` would quietly prune `dir` again -- undoing the re-inclusion below for an
-# installed user while the pinned lockfile keeps CI green. So say so at import instead.
-if not _descendant_mark_is_live():
-    raise RuntimeError(
-        f"pathspec no longer marks a match on a descendant with the "
-        f"{_DESCENDANT_MARK!r} capture group, which toko.file_reader needs to tell a "
-        f"directory's own match from a match on something inside it."
+        _matched_self(pattern, "dir/below.txt") is None
+        and _matched_self(pattern, "dir/") is True
     )
 
 
@@ -54,7 +48,11 @@ def _probe(relative: str, pattern: pathspec.Pattern, *, is_dir: bool) -> str:
     since pruning `dir` and excluding its contents otherwise list the same tree.
     """
     source = getattr(pattern, "pattern", None)
-    directory_only = isinstance(source, str) and source.endswith("/")
+    # pathspec compiles its regex from the stripped pattern, so `dir/ ` is the very
+    # same rule as `dir/`. Re-deriving directory-only-ness from the raw text has to
+    # strip it the same way, or a rule pathspec still reads as directory-only is
+    # probed as a plain name, matches nothing, and quietly stops pruning.
+    directory_only = isinstance(source, str) and source.rstrip().endswith("/")
     return f"{relative}/" if is_dir and directory_only else relative
 
 
@@ -82,6 +80,20 @@ def _matched_self(pattern: pathspec.Pattern, probe: str) -> bool | None:
     if found.match.end(_DESCENDANT_MARK) == len(probe):
         return pattern.include
     return None
+
+
+# The mark is private to pathspec and the requirement carries no upper bound, so a
+# release that renamed, dropped or widened it would not raise: `_matched_self` would
+# call every descendant match the directory's own, and `dir/**` would quietly prune
+# `dir` again -- undoing the re-inclusion below for an installed user while the pinned
+# lockfile keeps CI green. So say so at import instead. The check runs here rather than
+# beside the function because it exercises `_matched_self` itself.
+if not _descendant_mark_is_live():
+    raise RuntimeError(
+        f"pathspec no longer reports a match on a descendant through the "
+        f"{_DESCENDANT_MARK!r} capture group as toko.file_reader reads it, which it "
+        f"needs to tell a directory's own match from a match on something inside it."
+    )
 
 
 class _IgnoreLayer(NamedTuple):

@@ -390,6 +390,29 @@ def test_a_starred_directory_rule_leaves_a_later_negation_somewhere_to_match(
     assert "dir/keep.txt" in found
 
 
+def test_a_bare_directory_rule_leaves_a_later_negation_nothing_to_re_include(
+    starred_tree,
+):
+    """Ripgrep parity, deliberately: an excluded directory is pruned and never reopened.
+
+    The contrast with the starred test above is the whole point of keeping both. `dir/**`
+    matches only what is inside `dir`, so `dir` stays open and `!dir/keep.txt` lands;
+    `dir/` excludes the directory itself, so both walks prune it and the negation has
+    nothing left to reach. Neither ripgrep nor git can re-include a file under an
+    excluded directory, and toko losing `dir/keep.txt` here is that same rule, measured
+    against real ripgrep -- not an oversight, and not something to "fix" back.
+    """
+    write(starred_tree / ".gitignore", "dir/\n!dir/keep.txt\n")
+
+    found = toko_files(starred_tree, hidden=False)
+
+    assert found == ripgrep_files(starred_tree)
+    assert "dir/keep.txt" not in found
+    # And for the same reason in both: the directory is pruned, not filtered.
+    assert "dir" in ripgrep_skipped_dirs(starred_tree)
+    assert toko_scanned(starred_tree) == {".", "other"}
+
+
 def test_a_starred_rule_in_the_global_excludes_file_also_spares_the_negation(
     starred_tree, isolated_git_env, monkeypatch
 ):

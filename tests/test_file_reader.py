@@ -390,6 +390,28 @@ def test_a_starred_directory_exclude_still_lets_a_later_pattern_re_include(tmp_p
     assert {path.name for path in found} == {"top.txt", "keep.txt"}
 
 
+def test_a_bare_directory_exclude_leaves_a_later_negation_nothing_to_re_include(
+    tmp_path,
+):
+    """Deliberate parity with ripgrep and git, and the exact counterpart of the test above.
+
+    `dir/**` reaches only what is inside `dir`, so the walk still opens `dir` and the
+    negation lands. `dir/` excludes the directory itself, the walk prunes it, and the
+    negation has nothing left to reach -- neither ripgrep nor gitignore can re-include a
+    file whose parent directory is excluded. `keep.txt` going missing here is therefore
+    the intended outcome; restoring it would put toko back to pruning directories
+    ripgrep descends into. Change this expectation only by changing that decision.
+    """
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "top.txt").write_text("x")
+    (tmp_path / "dir" / "keep.txt").write_text("x")
+    (tmp_path / "dir" / "drop.txt").write_text("x")
+
+    found = find_files(tmp_path, exclude_patterns=["dir/", "!dir/keep.txt"])
+
+    assert {path.name for path in found} == {"top.txt"}
+
+
 @pytest.fixture
 def pathspec_without_the_descendant_mark(monkeypatch):
     """Stand in for a pathspec release that renames the private group toko reads.

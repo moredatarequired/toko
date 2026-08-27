@@ -224,9 +224,17 @@ def exclude_tree(tmp_path) -> Path:
 
     `dir` holds both a file and a subdirectory, so `dir/**` and `dir/` differ in what
     ripgrep opens even though they exclude the same files. `notes.md` keeps a pattern
-    as broad as `*.txt` from emptying the listing, which ripgrep exits 1 for.
+    as broad as `*.txt` from emptying the listing, which ripgrep exits 1 for. `other/dir`
+    is a plain file with a directory's name, the one path `dir/` and `dir` disagree on.
     """
-    for name in ("top.txt", "notes.md", "dir/a.txt", "dir/deep/b.txt", "other/c.txt"):
+    for name in (
+        "top.txt",
+        "notes.md",
+        "dir/a.txt",
+        "dir/deep/b.txt",
+        "other/c.txt",
+        "other/dir",
+    ):
         write(tmp_path / name)
     return tmp_path
 
@@ -291,6 +299,27 @@ def test_an_exclude_pattern_prunes_exactly_the_directories_ripgrep_prunes(exclud
         "dir",
         "other",
     }
+
+
+@pytest.mark.parametrize(
+    ("pattern", "keeps_the_file"), [("dir/", True), ("dir", False)]
+)
+def test_a_directory_only_exclude_spares_a_file_that_shares_the_name(
+    exclude_tree, pattern, keeps_the_file
+):
+    """`dir/` matches only directories; `dir` matches a file called `dir` as well.
+
+    The two prune the same directory and drop the same files under it, so `other/dir`
+    is the only path in the tree that tells them apart. Without it, dropping the
+    trailing separator from every exclude pattern leaves the whole suite green.
+    """
+    found = {
+        str(path.absolute().relative_to(exclude_tree.absolute()))
+        for path in find_files(exclude_tree, exclude_patterns=[pattern])
+    }
+
+    assert found == ripgrep_files(exclude_tree, "-g", f"!{pattern}")
+    assert ("other/dir" in found) is keeps_the_file
 
 
 @pytest.fixture

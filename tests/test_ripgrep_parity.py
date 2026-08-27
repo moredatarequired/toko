@@ -591,6 +591,103 @@ def test_a_walk_root_spelled_through_a_parent_is_matched_through_that_parent(
     assert found == {"keep.txt", "sub/keep.txt", "sub/x.txt"}
 
 
+@pytest.fixture
+def parent_spelled_tree(tmp_path) -> Path:
+    """Build a tree where the working directory's own ignore files must not govern.
+
+    `sub` is where both walks are run from, and it holds rules that reach in both
+    directions: `*.drop` excludes, `!*.log` re-includes. Neither may reach a walk that
+    starts anywhere but inside `sub` -- `sub` is a child of one walk root and a sibling
+    of the other, and the ignore files a walk answers to are the ones at or above its
+    root. `tmp_path/.ignore` is the genuine ancestor that both walks do answer to.
+    """
+    write(tmp_path / ".ignore", "*.log\n")
+    write(tmp_path / "a" / "sub" / ".ignore", "!*.log\n*.drop\n")
+    write(tmp_path / "a" / "sub" / "inner.txt")
+    write(tmp_path / "a" / "keep.txt")
+    write(tmp_path / "a" / "hidden-by-the-ancestor.log")
+    write(tmp_path / "other" / "kept.drop")
+    write(tmp_path / "other" / "kept.txt")
+    return tmp_path
+
+
+def test_the_working_directorys_ignore_files_govern_neither_a_parent_nor_a_sibling(
+    parent_spelled_tree,
+):
+    """Both directions of one defect, in one run, because a fix can restore either alone.
+
+    Deriving the ancestors from `Path.absolute()` left `..` in place, so `/w/sub/..`
+    reported its parents as `/w/sub` first -- the working directory, a *child* of the
+    root being walked. Its ignore files were then installed as parent layers over the
+    whole walk, and being the deepest they outranked the real ancestor's.
+
+    Walking `..` is the direction that reaches a provider: `!*.log` overrode the
+    ancestor's `*.log` and toko counted, read and sent a file ripgrep excludes. Walking
+    `../other` is the quieter one: `*.drop` matched a sibling tree it has no claim on
+    and a file ripgrep lists was dropped from the count in silence. Restoring one of
+    these while leaving the other is a plausible half-fix, so they are asserted
+    together rather than in two tests that could go green apart.
+    """
+    cwd = parent_spelled_tree / "a" / "sub"
+    parent = parent_spelled_tree / "a"
+    sibling = parent_spelled_tree / "other"
+
+    up = toko_files(parent, hidden=False, cwd=cwd)
+    across = toko_files(sibling, hidden=False, cwd=cwd)
+
+    assert up == ripgrep_files(parent, cwd=cwd)
+    assert across == ripgrep_files(sibling, cwd=cwd)
+    # The tree proves something only because each rule has to fail to reach.
+    assert up == {"keep.txt", "sub/inner.txt"}
+    assert across == {"kept.drop", "kept.txt"}
+
+
+@pytest.fixture
+def both_quantities_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
+    """Build one walk that needs the root spelled and the root resolved at once.
+
+    `*/x.txt` in the global excludes file is resolved against the working directory and
+    so has to bite *through* the `..`, which only the spelling carries. `*.log` in the
+    ancestor above the repository has to beat the `!*.log` in the working directory,
+    which only the resolved root gets right. One walk answers to both.
+    """
+    gitconfig = isolated_git_env / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    excludes = write(isolated_git_env / "segment-excludes", "*/x.txt\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
+
+    write(tmp_path / ".ignore", "*.log\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(repo, "init", "-q")
+    write(repo / "sub" / ".ignore", "!*.log\n")
+    for name in ("x.txt", "keep.txt", "drop.log", "sub/x.txt", "sub/keep.txt"):
+        write(repo / name)
+    return repo
+
+
+def test_the_root_as_spelled_and_the_root_resolved_are_both_live_in_one_walk(
+    both_quantities_tree,
+):
+    """The two uses of the walk root have opposite needs; neither may serve the other.
+
+    Normalise the root the excludes file is anchored against and `*/x.txt` stops
+    reaching `../x.txt`, which ripgrep drops. Leave the root un-normalised where the
+    ancestors are read from and the working directory's `!*.log` comes back as a parent
+    layer, and `drop.log` is counted, which ripgrep excludes. One value cannot be both,
+    so a fix that feeds one quantity to both uses fails here whichever way it leans.
+    """
+    cwd = both_quantities_tree / "sub"
+
+    found = toko_files(both_quantities_tree, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(both_quantities_tree, cwd=cwd)
+    # Each name is here because one of the two quantities decides it: x.txt needs the
+    # spelling, drop.log needs the resolution, and sub/x.txt holds the spelling honest
+    # by being the path the same rule must *not* reach.
+    assert found == {"keep.txt", "sub/keep.txt", "sub/x.txt"}
+
+
 def test_the_anchored_excludes_tree_reads_differently_from_different_directories(
     anchored_excludes_tree,
 ):

@@ -109,14 +109,32 @@ if not _pathspec_internals_are_live():
     )
 
 
+class _Anchor(NamedTuple):
+    """How a walked path is spelled for one ignore file: strip `prefix`, prepend `lead`.
+
+    For an ignore file in a directory the walk reached, `prefix` is that directory and
+    `lead` is empty -- every path the walk produces starts with it. A directory *above*
+    the walk root is not a prefix of anything the walk produces, because the walk
+    spells each path from the root as the caller named it and a root named `..` carries
+    the `..` into all of them. Those anchor at the walk root and lead with the root's
+    own name relative to the directory, which comes to the same relative path.
+    """
+
+    prefix: str  # absolute path of a directory, with a trailing separator
+    lead: str = ""
+
+    def spell(self, absolute_path: str) -> str:
+        return self.lead + absolute_path.removeprefix(self.prefix)
+
+
 class _IgnoreLayer(NamedTuple):
     """One ignore file's patterns, anchored at the directory they are relative to."""
 
-    anchor: str  # absolute path of that directory, with a trailing separator
+    anchor: _Anchor
     spec: pathspec.PathSpec
 
     def check(self, absolute_path: str, *, is_dir: bool) -> bool | None:
-        relative = absolute_path.removeprefix(self.anchor)
+        relative = self.anchor.spell(absolute_path)
         # Last match wins, the way pathspec and git both rank a file's patterns.
         verdict: bool | None = None
         for pattern in self.spec.patterns:
@@ -174,11 +192,11 @@ def read_gitignore(directory: Path) -> pathspec.PathSpec | None:
     return _read_spec(directory / ".gitignore")
 
 
-def _ignore_layer(anchor: Path, ignore_file: Path) -> _IgnoreLayer | None:
+def _ignore_layer(anchor: _Anchor, ignore_file: Path) -> _IgnoreLayer | None:
     spec = _read_spec(ignore_file)
     if spec is None:
         return None
-    return _IgnoreLayer(_dir_prefix(anchor), spec)
+    return _IgnoreLayer(anchor, spec)
 
 
 def _resolve_against(base: Path, target: str) -> Path:
@@ -236,18 +254,20 @@ def _is_within(directory: Path, root: Path | None) -> bool:
     return root is not None and (directory == root or root in directory.parents)
 
 
-def _git_layers(directory: Path, git_dir: Path | None) -> list[_IgnoreLayer]:
+def _git_layers(
+    directory: Path, git_dir: Path | None, anchor: _Anchor
+) -> list[_IgnoreLayer]:
     # Weakest first: .git/info/exclude loses to the .gitignore beside it, and both lose
     # to .ignore and .rgignore, which _IgnoreRules ranks above them at any depth.
     sources = [directory / ".gitignore"]
     if git_dir is not None:
         sources.insert(0, git_dir / "info" / "exclude")
-    layers = (_ignore_layer(directory, source) for source in sources)
+    layers = (_ignore_layer(anchor, source) for source in sources)
     return [layer for layer in layers if layer is not None]
 
 
-def _dot_layer(directory: Path, name: str) -> tuple[_IgnoreLayer, ...]:
-    layer = _ignore_layer(directory, directory / name)
+def _dot_layer(directory: Path, name: str, anchor: _Anchor) -> tuple[_IgnoreLayer, ...]:
+    layer = _ignore_layer(anchor, directory / name)
     return () if layer is None else (layer,)
 
 
@@ -402,7 +422,7 @@ def _global_layers(
     # left a `..` root anchored at nothing, and a rule reaching through the `..`
     # then bit for ripgrep and not for toko.
     anchor = "" if named.is_absolute() else working_directory
-    return (_IgnoreLayer(anchor, spec),)
+    return (_IgnoreLayer(_Anchor(anchor), spec),)
 
 
 class _WalkOptions(NamedTuple):
@@ -458,27 +478,47 @@ def _describe(path: str, error: OSError) -> str:
     return f"{path}: {error.strerror or error}"
 
 
-def _initial_frame(base_dir: Path, base_abs: Path, options: _WalkOptions) -> _Frame:
-    """Build the base frame: every ignore file above the base that still reaches it."""
-    repo_root = _find_repo_root(base_abs) if options.respect_gitignore else None
+def _lead_from(directory: Path, base_root: Path) -> str:
+    """Name the walk root relative to a directory at or above it, ready to prepend."""
+    relative = base_root.relative_to(directory)
+    return "" if relative == Path() else f"{relative}{os.sep}"
+
+
+def _initial_frame(base_dir: Path, options: _WalkOptions) -> _Frame:
+    """Build the base frame: every ignore file above the base that still reaches it.
+
+    Which directories lie above the walk root is a question about the directory, not
+    about the name it was reached by, so it is asked of the root resolved. The spelling
+    is still what the excludes file is matched against, and `options.base_prefix` still
+    carries it -- these are two uses of one path with opposite needs, and answering
+    either from the other's quantity is a bug in one direction or the other.
+    """
+    # `Path.absolute` leaves `..` where it is, so `/w/sub/..`.parents began at `/w/sub`
+    # -- the working directory, a *child* of the root being walked -- and every ignore
+    # file in it was installed as a parent layer governing the whole walk. `resolve`
+    # rather than `os.path.abspath` because a `..` reached through a symlink lands
+    # where the link points and not beside it, which is the directory ripgrep walks.
+    base_root = base_dir.resolve()
+    repo_root = _find_repo_root(base_root) if options.respect_gitignore else None
     git: list[_IgnoreLayer] = []
     ignore: list[_IgnoreLayer] = []
     rgignore: list[_IgnoreLayer] = []
     if options.respect_gitignore:
         if repo_root is not None:
             git.extend(options.global_layers)
-        for directory in (*reversed(base_abs.parents), base_abs):
+        for directory in (*reversed(base_root.parents), base_root):
+            anchor = _Anchor(options.base_prefix, _lead_from(directory, base_root))
             if _is_within(directory, repo_root):
-                git.extend(_git_layers(directory, _git_dir(directory)))
+                git.extend(_git_layers(directory, _git_dir(directory), anchor))
             # .ignore and .rgignore are ripgrep's own, not git's, so a repository
             # boundary does not stop them the way it stops the git files.
             if options.respect_dot_ignore:
-                ignore.extend(_dot_layer(directory, ".ignore"))
-                rgignore.extend(_dot_layer(directory, ".rgignore"))
+                ignore.extend(_dot_layer(directory, ".ignore", anchor))
+                rgignore.extend(_dot_layer(directory, ".rgignore", anchor))
     ancestors: tuple[tuple[tuple[int, int], Path], ...] = ()
     if options.follow_symlinks:
         try:
-            info = base_abs.stat()
+            info = base_dir.stat()
         except OSError:
             info = None
         if info is not None:
@@ -501,6 +541,7 @@ def _descend(parent: _Frame, name: str, options: _WalkOptions) -> _Frame:
     ignore = parent.rules.ignore
     rgignore = parent.rules.rgignore
     if options.respect_gitignore:
+        anchor = _Anchor(prefix)
         git_dir = _git_dir(directory)
         if git_dir is not None:
             # A checkout nested inside another one answers to its own git ignore files
@@ -509,10 +550,10 @@ def _descend(parent: _Frame, name: str, options: _WalkOptions) -> _Frame:
             repo_root = directory
             git = options.global_layers
         if repo_root is not None:
-            git = (*git, *_git_layers(directory, git_dir))
+            git = (*git, *_git_layers(directory, git_dir, anchor))
         if options.respect_dot_ignore:
-            ignore = (*ignore, *_dot_layer(directory, ".ignore"))
-            rgignore = (*rgignore, *_dot_layer(directory, ".rgignore"))
+            ignore = (*ignore, *_dot_layer(directory, ".ignore", anchor))
+            rgignore = (*rgignore, *_dot_layer(directory, ".rgignore", anchor))
     rules = _IgnoreRules(git, ignore, rgignore)
     return _Frame(parent.path / name, prefix, rules, repo_root)
 
@@ -552,7 +593,7 @@ def _looped_ancestor(frame: _Frame, ident: tuple[int, int] | None) -> Path | Non
 
 def _walk(base_dir: Path, options: _WalkOptions) -> list[Path]:
     discovered: list[Path] = []
-    stack = [_initial_frame(base_dir, base_dir.absolute(), options)]
+    stack = [_initial_frame(base_dir, options)]
     while stack:
         frame = stack.pop()
         try:

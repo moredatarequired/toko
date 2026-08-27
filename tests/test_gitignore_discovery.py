@@ -514,9 +514,10 @@ def test_the_global_excludes_file_still_applies_inside_a_nested_checkout(
     assert names(find_files(repo), repo) == {"vendor/inner.txt"}
 
 
-def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo):
+@pytest.mark.parametrize("dot_file", [".ignore", ".rgignore"])
+def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo, dot_file):
     """.ignore and .rgignore are ripgrep's, not git's, so no repository bounds them."""
-    write(repo / ".rgignore", "*.skip\n")
+    write(repo / dot_file, "*.skip\n")
     write(repo / "a.skip")
     nested = repo / "inner"
     nested.mkdir()
@@ -525,6 +526,34 @@ def test_dot_ignore_files_cross_a_nested_checkout_boundary(repo):
     write(nested / "b.txt")
 
     assert names(find_files(repo), repo) == {"inner/b.txt"}
+
+
+def test_a_dot_ignore_reaches_into_a_nested_checkout_where_a_gitignore_stops(tmp_path):
+    """The asymmetry the README's `.ignore` recipe rests on, asserted as one claim.
+
+    Each half is pinned a few tests above, but neither says they disagree, which is
+    the whole reason for adding a second file rather than renaming the first: the
+    same pattern in a `.gitignore` and in an `.ignore` gives different file sets.
+    """
+    found = {}
+    for ignore_file in (".gitignore", ".ignore"):
+        root = tmp_path / ignore_file.lstrip(".")
+        root.mkdir()
+        run_git(root, "init", "-q")
+        write(root / ignore_file, "*.skip\n")
+        write(root / "outer.skip")
+        write(root / "outer.txt")
+        nested = root / "inner"
+        nested.mkdir()
+        run_git(nested, "init", "-q")
+        write(nested / "inner.skip")
+        write(nested / "inner.txt")
+        found[ignore_file] = names(find_files(root), root)
+
+    assert found[".gitignore"] != found[".ignore"]
+    assert found[".gitignore"] - found[".ignore"] == {"inner/inner.skip"}
+    assert found[".gitignore"] == {"outer.txt", "inner/inner.skip", "inner/inner.txt"}
+    assert found[".ignore"] == {"outer.txt", "inner/inner.txt"}
 
 
 def test_info_exclude_is_found_through_a_linked_worktrees_gitdir_file(repo, tmp_path):

@@ -141,6 +141,21 @@ def test_a_deeper_gitignore_can_negate_info_exclude(repo):
     assert names(find_files(repo), repo) == {"keep/kept.log"}
 
 
+def test_the_gitignore_beside_info_exclude_can_negate_it_too(repo):
+    """The same-directory case, where depth cannot decide it and kind order alone does.
+
+    The test above puts the .gitignore deeper, so it wins whichever way the two are
+    ranked. Here they sit in one directory, which is the only arrangement that pins
+    .gitignore above .git/info/exclude -- as git and `rg --files` both rank them.
+    """
+    write(repo / ".git" / "info" / "exclude", "*.log\n")
+    write(repo / ".gitignore", "!kept.log\n")
+    write(repo / "kept.log")
+    write(repo / "dropped.log")
+
+    assert names(find_files(repo), repo) == {"kept.log"}
+
+
 def test_anchored_patterns_are_relative_to_their_own_gitignore(repo):
     write(repo / ".gitignore", "/build\n")
     write(repo / "build" / "out.o")

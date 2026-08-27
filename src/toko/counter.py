@@ -332,8 +332,9 @@ def preload_tokenizer(model: str) -> None:
     before any worker pool exists, where nothing has had a chance to exhaust anything.
 
     Only the OpenAI provider has a tokenizer to warm; the API-backed providers have
-    nothing local, and the HuggingFace and Mistral ones are already built once under a
-    lock and are far too large to load speculatively.
+    nothing local, and a HuggingFace or Mistral build starved of descriptors fails
+    transiently rather than permanently -- `_cached_tokenizer` stores only on success,
+    so the next call retries it -- and both are far too large to load speculatively.
 
     The whole body is suppressed, not just the encode: warming is an optimisation, and
     a run that would have succeeded without it must still succeed. Resolving an

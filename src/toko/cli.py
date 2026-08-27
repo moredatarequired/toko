@@ -304,13 +304,16 @@ def _prepare_prices(config: Config) -> None:
 
 
 def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
-    # Deduplicated once, here, so both input paths answer `-m gpt-5 -m gpt-5` the same
-    # way the file path already did: naming a model twice asks for it once, and it gets
-    # one row, one column and one count rather than two of each. Doing it before the
-    # counting also keeps a repeat from costing a second API call. Fenced by
+    # Deduplicated here, before the counting, so that naming a model twice asks for it
+    # once: no second API call, no second failure warning, and `-m gpt-5 -m gpt-5`
+    # answers the way `-m gpt-5` does on both input paths. Fenced by
     # test_a_model_named_twice_is_asked_for_once, on both paths, and by
-    # test_a_model_named_twice_is_counted_once, which is what pins it to here rather
-    # than to the formatters.
+    # test_a_model_named_twice_is_counted_once. format_output deduplicates too, for
+    # callers that reach the formatters directly, and it does not stand in for this:
+    # keep only the formatter's and the first of those tests still fails on the
+    # bare-number collapse in _handle_text_input, which reads len(models) before any
+    # formatter sees the list, and the second still fails on a stderr warning printed
+    # twice, which no formatter emits.
     if not cli_models:
         return [config.default_model]
     return list(dict.fromkeys(cli_models))

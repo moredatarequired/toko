@@ -325,6 +325,14 @@ def format_output(
     Raises:
         ValueError: If format is not supported
     """
+    # The dedupe `_collect_models` already does for the file path, so the two entry
+    # points answer a repeated `--model` alike. Neither shape can carry the repeat: a
+    # delimited row would name one model twice, and a JSON document with two entries
+    # keyed `model` cannot be read the way the README says to read it. The CLI never
+    # sends a repeat, `_resolve_models` having dropped it before the counting; this is
+    # for callers that reach a formatter directly.
+    if models is not None:
+        models = list(dict.fromkeys(models))
     if output_format == OutputFormat.TEXT:
         return format_text(
             results, models=models, show_costs=show_costs, include_header=include_header

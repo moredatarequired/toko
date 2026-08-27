@@ -322,6 +322,35 @@ def test_a_model_named_twice_takes_one_column():
     ]
 
 
+def test_a_model_named_twice_takes_one_delimited_row():
+    """format_output deduplicates too, so both entry points answer a repeat alike.
+
+    format_file_table already did (test_a_model_named_twice_takes_one_column); without
+    the same dedupe here the repeat printed a second row naming the same model.
+    """
+    rows = format_output(
+        {"gpt-5": _counted(4)}, output_format="csv", models=["gpt-5", "gpt-5"]
+    )
+
+    assert _csv_rows(rows) == [
+        ["model", "tokens", "approximate"],
+        ["gpt-5", "4", "false"],
+    ]
+
+
+def test_a_model_named_twice_takes_one_json_entry():
+    """In `results[].counts` and in `totals` both, which repeat one shape.
+
+    A document with two entries for one model cannot be read the way the README says
+    to read it, by matching on `model`.
+    """
+    document = format_output(
+        {"gpt-5": _counted(4)}, output_format="json", models=["gpt-5", "gpt-5"]
+    )
+
+    assert json.loads(document) == _text_envelope(_expected("gpt-5", 4))
+
+
 def test_a_model_no_file_could_be_counted_for_keeps_its_total_cells_empty():
     """_compute_totals has no entry for such a model; the TOTAL row still has cells."""
     output = format_file_table(

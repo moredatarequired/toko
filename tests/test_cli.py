@@ -771,6 +771,9 @@ def test_a_socket_in_a_scanned_directory_is_skipped_without_an_error(
     assert result.exit_code == 0
     assert "sample.txt,2" in result.stdout
     assert "sock" not in result.stdout
+    # "without an error" is a claim about stderr; the exit code only carries it by way
+    # of which exception open() happens to raise on an AF_UNIX socket.
+    assert result.stderr == ""
 
 
 def test_follow_counts_a_symlinked_file_that_is_skipped_by_default(

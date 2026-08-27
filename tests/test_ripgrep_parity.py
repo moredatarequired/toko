@@ -3,7 +3,7 @@
 import os
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -268,10 +268,43 @@ def ripgrep_skipped_dirs(root: Path, *args: str) -> set[str]:
     return {path for path in skipped if (root / path).is_dir()}
 
 
-@pytest.mark.parametrize(
-    "pattern",
-    ["dir", "dir/", "dir/*", "dir/**", "**/dir/**", "dir/deep", "dir/deep/**", "*.txt"],
-)
+def all_dirs(root: Path) -> set[str]:
+    return {".", *(str(p.relative_to(root)) for p in root.rglob("*") if p.is_dir())}
+
+
+def _lineage(directory: str) -> set[str]:
+    """Name a directory and every directory above it, up to the walk's root."""
+    path = PurePosixPath(directory)
+    return {str(path), *(str(parent) for parent in path.parents)}
+
+
+def ripgrep_descended_dirs(root: Path, *args: str) -> set[str]:
+    """Invert ripgrep's prune log into the set of directories it opened.
+
+    `--debug` names the directory a rule pruned and nothing under it, because nothing
+    under it is ever reached, so the complement has to drop a pruned directory's
+    descendants as well as the directory itself.
+    """
+    skipped = ripgrep_skipped_dirs(root, *args)
+    return {name for name in all_dirs(root) if not _lineage(name) & skipped}
+
+
+# Eight patterns; three distinct file listings between them. What separates the
+# eight is the directory each one opens, so the scan set is the observable that
+# earns the parametrization -- the file list is the same for most of them.
+EXCLUDE_PATTERN_SCANS = [
+    ("dir", {".", "other"}),
+    ("dir/", {".", "other"}),
+    ("dir/*", {".", "dir", "other"}),
+    ("dir/**", {".", "dir", "other"}),
+    ("**/dir/**", {".", "dir", "other"}),
+    ("dir/deep", {".", "dir", "other"}),
+    ("dir/deep/**", {".", "dir", "dir/deep", "other"}),
+    ("*.txt", {".", "dir", "dir/deep", "other"}),
+]
+
+
+@pytest.mark.parametrize("pattern", [pattern for pattern, _ in EXCLUDE_PATTERN_SCANS])
 def test_an_exclude_pattern_drops_what_a_negated_ripgrep_glob_drops(
     exclude_tree, pattern
 ):
@@ -283,22 +316,21 @@ def test_an_exclude_pattern_drops_what_a_negated_ripgrep_glob_drops(
     assert found == ripgrep_files(exclude_tree, "-g", f"!{pattern}")
 
 
-def test_an_exclude_pattern_prunes_exactly_the_directories_ripgrep_prunes(exclude_tree):
+@pytest.mark.parametrize(("pattern", "scanned"), EXCLUDE_PATTERN_SCANS)
+def test_an_exclude_pattern_prunes_exactly_the_directories_ripgrep_prunes(
+    exclude_tree, pattern, scanned
+):
     """`dir/` prunes `dir`; `dir/**` does not, because it only matches what is inside.
 
-    Both exclude the same files, so the file lists cannot tell them apart. What the
-    walk opens can, and it is the whole point of the flag: matching `dir/**` against
-    `dir/` would prune a directory ripgrep descends into.
+    The two exclude the same files, and so do most of the eight, so the file lists
+    cannot tell them apart -- which is why the sibling test above is not enough on its
+    own. What the walk opens can, and it is the whole point of the flag: matching
+    `dir/**` against `dir/` would prune a directory ripgrep descends into.
     """
-    assert ripgrep_skipped_dirs(exclude_tree, "-g", "!dir/") == {"dir"}
-    assert ripgrep_skipped_dirs(exclude_tree, "-g", "!dir/**") == {"dir/deep"}
+    opened = toko_scanned(exclude_tree, exclude_patterns=[pattern])
 
-    assert toko_scanned(exclude_tree, exclude_patterns=["dir/"]) == {".", "other"}
-    assert toko_scanned(exclude_tree, exclude_patterns=["dir/**"]) == {
-        ".",
-        "dir",
-        "other",
-    }
+    assert opened == scanned
+    assert opened == ripgrep_descended_dirs(exclude_tree, "-g", f"!{pattern}")
 
 
 @pytest.mark.parametrize(

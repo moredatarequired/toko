@@ -143,9 +143,14 @@ def test_find_files_gitignore_directories():
         assert files[0].name == "file.txt"
 
 
-@pytest.mark.parametrize("respect_gitignore", [True, False])
-def test_find_files_skips_dot_git(respect_gitignore):
-    """.git is the repo boundary, so no .gitignore setting can bring it back."""
+def test_dot_git_is_skipped_for_being_hidden():
+    """`.git` is hidden, not a boundary: `--hidden` walks it like any dotted path.
+
+    It used to be skipped by name, and the docstring here still said so long after
+    that went away. Nothing about `respect_gitignore` ever reached the hidden check,
+    so parametrizing over it ran one test twice; `include_hidden` is the axis that
+    tells a by-name skip apart from the dot-prefix rule.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
@@ -155,8 +160,14 @@ def test_find_files_skips_dot_git(respect_gitignore):
         (tmpdir_path / ".git" / "config").write_text("[core]")
         (git_dir / "abc").write_text("object")
 
-        files = find_files(tmpdir_path, respect_gitignore=respect_gitignore)
-        assert [f.name for f in files] == ["file.txt"]
+        assert [f.name for f in find_files(tmpdir_path)] == ["file.txt"]
+
+        found = find_files(tmpdir_path, include_hidden=True)
+        assert {str(f.relative_to(tmpdir_path)) for f in found} == {
+            "file.txt",
+            ".git/config",
+            ".git/objects/abc",
+        }
 
 
 def test_find_files_exclude_patterns():

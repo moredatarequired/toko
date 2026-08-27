@@ -200,8 +200,10 @@ def test_no_ignore_keeps_every_ignored_file(repo):
     write(repo / "top.log")
     write(repo / "README.md")
 
-    found = find_files(repo, respect_gitignore=False)
-    assert names(found, repo) == {
+    # The positive control belongs in this call, not a sibling test: without it the
+    # negative one is equally satisfied by a walk that never reads an ignore file.
+    assert names(find_files(repo), repo) == {"README.md"}
+    assert names(find_files(repo, respect_gitignore=False), repo) == {
         "README.md",
         "top.log",
         "loadout/node_modules/index.js",
@@ -262,16 +264,21 @@ def test_rgignore_applies_like_a_gitignore(repo):
 
 
 def test_dot_ignore_overrides_gitignore_in_both_directions(repo):
-    write(repo / "strict" / ".gitignore", "!keep.log\n*.log\n")
+    """A .ignore drops what the .gitignore beside it kept, and keeps what it dropped.
+
+    `strict/.gitignore` says keep and nothing else, so dropping `strict/keep.log` can
+    only be `.ignore` outranking it. Spelling that .gitignore as a negation followed
+    by `*.log` instead made the git side drop the file on its own, and the strict half
+    of "both directions" decided nothing.
+    """
+    write(repo / "strict" / ".gitignore", "!keep.log\n")
     write(repo / "strict" / ".ignore", "*.log\n")
     write(repo / "strict" / "keep.log")
     write(repo / "loose" / ".gitignore", "*.log\n")
     write(repo / "loose" / ".ignore", "!keep.log\n")
     write(repo / "loose" / "keep.log")
 
-    found = names(find_files(repo), repo)
-    assert "strict/keep.log" not in found
-    assert "loose/keep.log" in found
+    assert names(find_files(repo), repo) == {"loose/keep.log"}
 
 
 @pytest.mark.parametrize("dot_file", [".ignore", ".rgignore"])
@@ -307,9 +314,13 @@ def test_dot_ignore_above_the_repository_root_still_applies(repo, tmp_path):
 
 
 def test_gitignore_above_the_repository_root_does_not_apply(repo, tmp_path):
+    # `scratch.tmp` is the live rule: it proves this call reads .gitignore files at
+    # all, so `debug.log` surviving is the boundary and not an unread ignore stack.
     write(tmp_path / ".gitignore", "*.log\n")
+    write(repo / ".gitignore", "*.tmp\n")
     write(repo / "app.js")
     write(repo / "debug.log")
+    write(repo / "scratch.tmp")
 
     assert names(find_files(repo), repo) == {"app.js", "debug.log"}
 
@@ -321,23 +332,33 @@ def test_no_ignore_dot_keeps_files_only_dot_ignore_excluded(repo):
     write(repo / "debug.log")
     write(repo / "scratch.tmp")
 
-    found = names(find_files(repo, respect_dot_ignore=False), repo)
-    assert "debug.log" in found
-    assert "scratch.tmp" not in found
+    assert names(find_files(repo, respect_dot_ignore=False), repo) == {
+        "app.js",
+        "debug.log",
+    }
 
 
 def test_no_ignore_also_disables_dot_ignore(repo):
     write(repo / ".ignore", "*.log\n")
+    write(repo / "app.js")
     write(repo / "debug.log")
 
-    assert "debug.log" in names(find_files(repo, respect_gitignore=False), repo)
+    assert names(find_files(repo), repo) == {"app.js"}
+    assert names(find_files(repo, respect_gitignore=False), repo) == {
+        "app.js",
+        "debug.log",
+    }
 
 
 def test_gitignore_outside_a_repository_has_no_effect(tmp_path):
+    # `.ignore` is ripgrep's own and needs no repository, so `scratch.tmp` going
+    # missing is what proves ignore files are being read here at all.
     plain = tmp_path / "plain"
     write(plain / ".gitignore", "*.log\n")
+    write(plain / ".ignore", "*.tmp\n")
     write(plain / "app.js")
     write(plain / "debug.log")
+    write(plain / "scratch.tmp")
 
     assert names(find_files(plain), plain) == {"app.js", "debug.log"}
 
@@ -352,14 +373,22 @@ def test_dot_ignore_outside_a_repository_still_applies(tmp_path):
 
 
 def test_core_excludes_file_does_not_apply_outside_a_repository(
-    tmp_path, isolated_git_env
+    repo, tmp_path, isolated_git_env
 ):
+    """One excludes file, two walks: it bites inside a repository and not outside one.
+
+    Walking only the plain directory cannot tell "outside a repository" apart from
+    "the excludes file was never read", so the repository half runs in the same test.
+    """
     write(isolated_git_env / ".config" / "git" / "ignore", "*.swp\n")
     plain = tmp_path / "plain"
     write(plain / "notes.txt")
     write(plain / "notes.swp")
+    write(repo / "notes.txt")
+    write(repo / "notes.swp")
 
     assert names(find_files(plain), plain) == {"notes.txt", "notes.swp"}
+    assert names(find_files(repo), repo) == {"notes.txt"}
 
 
 def test_a_nested_repository_contributes_its_own_info_exclude(repo):
@@ -408,9 +437,19 @@ def test_hidden_brings_back_every_dotted_path_including_gitignore(repo):
 
 
 def test_the_git_directory_is_skipped_by_default_for_being_hidden(repo):
+    """`.git` goes by the dot-prefix rule, so `--hidden` brings it back like `.other`.
+
+    Asserting only the default listing cannot see the *for being hidden*: a walk that
+    skipped `.git` by name would pass it just as well. `.other` is the control on one
+    side and `include_hidden=True` is the control on the other.
+    """
     write(repo / "visible.txt")
+    write(repo / ".other" / "x.txt")
 
     assert names(find_files(repo), repo) == {"visible.txt"}
+
+    found = names(find_files(repo, include_hidden=True), repo)
+    assert {".git/HEAD", ".other/x.txt"} <= found
 
 
 def test_hidden_walks_the_git_directory_like_any_other_dotted_path(repo):
@@ -515,25 +554,46 @@ def test_a_non_utf8_gitignore_line_does_not_kill_the_walk(repo):
 
 
 def test_a_non_utf8_gitdir_pointer_does_not_kill_the_walk(tmp_path):
+    """And the rules that gitdir named are dropped, not resolved to it anyway.
+
+    The pointer names a real gitdir holding a real rule and then one undecodable byte,
+    so `excluded.txt` coming back is the whole claim: replacing the byte leaves a path
+    that cannot exist, where discarding it would land on the excludes file after all.
+    """
+    real = tmp_path / "realrepo" / ".git"
+    write(real / "info" / "exclude", "excluded.txt\n")
     worktree = tmp_path / "linked"
     worktree.mkdir()
-    (worktree / ".git").write_bytes(b"gitdir: /nonexistent/re\xffpo/.git/worktrees/w\n")
+    (worktree / ".git").write_bytes(b"gitdir: " + bytes(real) + b"\xff\n")
+    write(worktree / "excluded.txt")
     write(worktree / "kept.txt")
 
-    assert names(find_files(worktree), worktree) == {"kept.txt"}
+    assert names(find_files(worktree), worktree) == {"excluded.txt", "kept.txt"}
 
 
 def test_a_non_utf8_commondir_does_not_kill_the_walk(repo, tmp_path):
+    """And the common directory it named is dropped along with its exclude file.
+
+    Same fixture as the linked-worktree test above, where `excluded.txt` is dropped
+    through a working `commondir`; here the pointer gains one undecodable byte and
+    `excluded.txt` coming back is what tells "dropped" apart from "resolved anyway".
+    """
     write(repo / "seed.txt")
     run_git(repo, "add", "-A")
     run_git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "seed")
+    write(repo / ".git" / "info" / "exclude", "excluded.txt\n")
     worktree = tmp_path / "linked"
     run_git(repo, "worktree", "add", "-q", "--detach", str(worktree))
     commondir = repo / ".git" / "worktrees" / "linked" / "commondir"
-    commondir.write_bytes(b"/nonexistent/re\xffpo/.git\n")
+    commondir.write_bytes(bytes(repo / ".git") + b"\xff\n")
+    write(worktree / "excluded.txt")
     write(worktree / "kept.txt")
 
-    assert names(find_files(worktree), worktree) == {"kept.txt", "seed.txt"}
+    assert names(find_files(worktree), worktree) == {
+        "excluded.txt",
+        "kept.txt",
+        "seed.txt",
+    }
 
 
 def test_fifos_and_sockets_are_not_files_to_count(repo):
@@ -550,11 +610,19 @@ def test_fifos_and_sockets_are_not_files_to_count(repo):
     not Path("/dev/zero").exists(), reason="no character device to point at"
 )
 def test_a_symlinked_device_node_is_not_counted_even_when_following(repo):
-    """Reading /dev/zero returns bytes until the machine runs out of them."""
+    """Reading /dev/zero returns bytes until the machine runs out of them.
+
+    `goodlink.txt` has to come back, because a device node is equally absent from a
+    walk that never follows a symlink at all -- which is not what this rules out.
+    """
     write(repo / "real.txt")
+    (repo / "goodlink.txt").symlink_to(repo / "real.txt")
     (repo / "zerolink").symlink_to("/dev/zero")
 
-    assert names(find_files(repo, follow_symlinks=True), repo) == {"real.txt"}
+    assert names(find_files(repo, follow_symlinks=True), repo) == {
+        "real.txt",
+        "goodlink.txt",
+    }
 
 
 def test_a_fixture_repo_is_never_the_ambient_one(repo):

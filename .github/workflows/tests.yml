@@ -82,12 +82,13 @@ jobs:
           rm -f "$archive" rg
           rg --version
 
-      # Tests that need API keys skip cleanly, so no secrets are required.
-      # TOKO_REQUIRE_RG is not one of those: with ripgrep installed above, a skip
-      # of the parity suite would be a green build that checked nothing, so the
-      # tests raise instead of skipping when it is missing.
+      # Tests that need API keys skip cleanly, so no secrets are required. The two
+      # TOKO_REQUIRE_* variables are not those: ripgrep is installed above and this
+      # runner's locale does move off UTF-8, so a skip of either suite would be a
+      # green build that checked nothing. Both raise instead of skipping.
       - name: Run tests
         run: just test-all
         env:
           UV_NO_SYNC: "1"
           TOKO_REQUIRE_RG: "1"
+          TOKO_REQUIRE_NON_UTF8_LOCALE: "1"

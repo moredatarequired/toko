@@ -243,6 +243,13 @@ def _non_utf8_env(tmp_path: Path) -> dict[str, str]:
     }
 
 
+# The same guard the parity tests put on ripgrep, for the same reason: a skip reads as
+# a pass, so CI sets this and a locale that stops taking becomes a failure there. These
+# three tests cover a bug whose whole shape was counting less and exiting 0, which is
+# exactly what a test that quietly stops running looks like from the outside.
+REQUIRE_NON_UTF8_LOCALE = "TOKO_REQUIRE_NON_UTF8_LOCALE"
+
+
 def _skip_unless_the_locale_took(env: dict[str, str]) -> None:
     got = subprocess.run(  # noqa: S603
         [sys.executable, "-c", "import locale; print(locale.getpreferredencoding(0))"],
@@ -251,8 +258,14 @@ def _skip_unless_the_locale_took(env: dict[str, str]) -> None:
         text=True,
         check=True,
     ).stdout.strip()
-    if got.lower().replace("_", "-") in {"utf-8", "utf8"}:
-        pytest.skip(f"this interpreter stays on UTF-8 ({got}); nothing to prove")
+    if got.lower().replace("_", "-") not in {"utf-8", "utf8"}:
+        return
+    if os.environ.get(REQUIRE_NON_UTF8_LOCALE):
+        raise RuntimeError(
+            f"{REQUIRE_NON_UTF8_LOCALE} is set but this interpreter stays on UTF-8 "
+            f"({got}): the locale tests would have skipped silently, checking nothing."
+        )
+    pytest.skip(f"this interpreter stays on UTF-8 ({got}); nothing to prove")
 
 
 def _run_toko(args: list[str], env: dict[str, str], stdin: bytes | None = None):

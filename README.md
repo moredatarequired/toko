@@ -195,8 +195,10 @@ Two exceptions are worth knowing before you parse the output:
   with the number, rather than being stranded on stderr where the process on the other
   end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
   `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
-  read `tokens`, if a run of yours can hit an unreleased OpenAI name or an xAI model
-  without `XAI_API_KEY` — the two cases that produce an approximate count.
+  read `tokens`, if a run of yours can hit an OpenAI name Toko does not list — a dated
+  snapshot such as `gpt-4o-2024-08-06` counts as one — an xAI model without
+  `XAI_API_KEY`, or a Mistral name with no pinned tokenizer: the three cases that
+  produce an approximate count.
 
 ## Library usage
 
@@ -224,9 +226,13 @@ An unreachable tokenizer is usually an error, not a fallback: `count_tokens` rai
 provider can be detected from the name at all. Exactly three paths return an approximate
 count instead, so check `approximate` on those before treating a count as exact:
 
-- An OpenAI name Toko does not know yet — one that still reads as an OpenAI model, such
-  as `gpt-6` — is counted with `o200k_base`, the encoding every OpenAI model since
-  `gpt-4o` uses.
+- An OpenAI name neither Toko nor `tiktoken` lists — one that still reads as an OpenAI
+  model, such as `gpt-6` — is counted with the encoding `tiktoken` maps its family to
+  when the name starts with a family it knows (`gpt-4-1` gets `cl100k_base` through
+  `gpt-4-`), and otherwise with `o200k_base`, the encoding every OpenAI model since
+  `gpt-4o` uses. A family prefix is a good guess at the encoding but no evidence the
+  name exists, so either way the count is an estimate and `caveat` names the encoding
+  it came from.
 - An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
   unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
   the call raises instead.

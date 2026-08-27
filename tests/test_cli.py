@@ -16,6 +16,7 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
+from tests.git_runner import run_git
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
@@ -645,6 +646,46 @@ def test_google_bad_response_reports_error_without_traceback():
     assert result.exit_code == 1
     assert "Unexpected response from Google" in result.stderr
     assert "Error: All models failed to count tokens" in result.stderr
+
+
+# A counted file's contents leave the machine only as the body of a provider request,
+# so that is where the sentinel is looked for. The two halves need separate caches:
+# `count_tokens` returns before any provider call on a cache hit, so a shared one
+# would let the repository half pass on a replayed count rather than on exclusion.
+# The autouse `_cache_root` fixture gives each parametrised case its own `tmp_path`.
+_LEAK_SENTINEL = "toko-leak-sentinel-b7f3a1c2"
+
+
+@respx.mock
+@pytest.mark.parametrize("in_a_repository", [False, True])
+def test_gitignore_withholds_contents_from_the_provider_only_inside_a_repository(
+    tmp_path, in_a_repository
+):
+    respx.post(ANTHROPIC_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"input_tokens": 7})
+    )
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / ".gitignore").write_text("secret.txt\n")
+    (tree / "secret.txt").write_text(_LEAK_SENTINEL)
+    (tree / "notes.txt").write_text("ordinary contents")
+    if in_a_repository:
+        run_git(tree, "init", "-q")
+
+    result = _invoke_cli(
+        ["--model", "claude-sonnet-4-5", "--format", "csv", str(tree)],
+        {"ANTHROPIC_API_KEY": "test-key"},
+    )
+
+    assert result.exit_code == 0
+    assert {str(call.request.url) for call in respx.calls} == {ANTHROPIC_COUNT_URL}
+    bodies = [call.request.content.decode() for call in respx.calls]
+    assert sum(_LEAK_SENTINEL in body for body in bodies) == (
+        0 if in_a_repository else 1
+    )
+
+    assert "notes.txt" in result.stdout
+    assert ("secret.txt" in result.stdout) is not in_a_repository
 
 
 def test_option_after_positional_path(tmp_path):

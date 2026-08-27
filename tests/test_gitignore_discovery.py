@@ -11,6 +11,7 @@ import pytest
 from tests.conftest import GIT_LOCATION_VARS
 from tests.git_runner import fixture_git_env, run_git
 from tests.test_ripgrep_parity import toko_scanned
+from toko import file_reader
 from toko.file_reader import find_files
 
 
@@ -96,6 +97,56 @@ def test_core_excludes_file_is_honored(repo, tmp_path):
     write(repo / "notes.swp")
 
     assert names(find_files(repo), repo) == {"notes.txt"}
+
+
+def test_repointing_the_excludes_file_between_walks_is_noticed(repo, tmp_path):
+    """The `git config` answer is cached across walks, so the cache has to see this.
+
+    One CLI run resolves the setting once, so nothing here is reachable from the
+    command line; a library caller holding the process open is another matter, and an
+    answer resolved from a configuration that has since been rewritten is the kind of
+    wrong that never shows up in the run that caused it. The two excludes paths are
+    the same length so that the file's size cannot be what separates them.
+    """
+    first = write(tmp_path / "swp-excludes", "*.swp\n")
+    second = write(tmp_path / "tmp-excludes", "*.tmp\n")
+    run_git(repo, "config", "--global", "core.excludesFile", str(first))
+    write(repo / "notes.txt")
+    write(repo / "notes.swp")
+    write(repo / "notes.tmp")
+
+    assert names(find_files(repo), repo) == {"notes.txt", "notes.tmp"}
+
+    run_git(repo, "config", "--global", "core.excludesFile", str(second))
+
+    assert names(find_files(repo), repo) == {"notes.txt", "notes.swp"}
+
+
+def test_one_git_config_subprocess_answers_a_run_of_several_paths(repo, monkeypatch):
+    """Three path arguments, one `git config`: the cache is why the walk is not slower.
+
+    Measured on the subprocess, because that is the cost -- a per-path lookup was
+    three process spawns to be told the same thing three times.
+    """
+    calls: list[list[str]] = []
+    real = subprocess.run
+
+    def counted(command, *args, **kwargs):
+        calls.append(list(command))
+        return real(command, *args, **kwargs)
+
+    excludes = write(repo.parent / "excludes", "*.swp\n")
+    run_git(repo, "config", "--global", "core.excludesFile", str(excludes))
+    for name in ("one.txt", "two.txt", "three.txt"):
+        write(repo / name)
+    monkeypatch.setattr(file_reader.subprocess, "run", counted)
+
+    for _ in range(3):
+        find_files(repo)
+
+    assert [c for c in calls if c[:2] == ["git", "config"]] == [
+        ["git", "config", "--global", "--get", "core.excludesFile"]
+    ]
 
 
 def test_a_repository_local_core_excludes_file_is_passed_over(repo, tmp_path):

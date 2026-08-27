@@ -253,9 +253,10 @@ def _dot_layer(directory: Path, name: str) -> tuple[_IgnoreLayer, ...]:
 
 # Everything git resolves its global scope from: the file GIT_CONFIG_GLOBAL names, the
 # homes it falls back to when that is unset, and the GIT_CONFIG_* variables that carry
-# config in the environment rather than in a file. The cached lookup is keyed on them,
-# so a caller that repoints any of them asks git again instead of reading back an
-# answer resolved from a different environment.
+# config in the environment rather than in a file. The cached lookup is keyed on these
+# and on the state of the files themselves, so a caller that repoints any of them, or
+# rewrites the file they name, asks git again instead of reading back an answer
+# resolved from a configuration that no longer holds.
 _GIT_CONFIG_HOME_VARS = ("HOME", "XDG_CONFIG_HOME")
 
 
@@ -269,19 +270,62 @@ def _git_config_environment() -> tuple[tuple[str, str], ...]:
     )
 
 
+def _git_config_files() -> tuple[Path, ...]:
+    """List git's global scope: GIT_CONFIG_GLOBAL, or the two files in the homes."""
+    named = os.environ.get("GIT_CONFIG_GLOBAL")
+    if named:
+        return (Path(named),)
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    config_home = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+    return (config_home / "git" / "config", Path.home() / ".gitconfig")
+
+
+def _git_config_stamp() -> tuple[tuple[str, int, int, int], ...]:
+    """Stamp those files by inode, size and modification time, for the cache to key on.
+
+    The inode is in there because `git config --global` rewrites the file through a
+    lock file and a rename, which moves it whether or not the new contents are the
+    same length or the clock has ticked since the last write.
+
+    An `include.path` inside one of them is not followed, so a run that edits an
+    included file and not the file including it still reads back the cached answer.
+    """
+    try:
+        paths = _git_config_files()
+    except RuntimeError:  # no home directory to resolve the unset defaults against
+        return ()
+    stamps = []
+    for path in paths:
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        stamps.append((str(path), info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(stamps)
+
+
 def _global_config_value(key: str) -> str | None:
-    return _cached_global_config_value(key, _git_config_environment())
+    return _cached_global_config_value(
+        key, _git_config_environment(), _git_config_stamp()
+    )
 
 
-@functools.cache
+@functools.lru_cache(maxsize=8)
 def _cached_global_config_value(
-    key: str, _environment: tuple[tuple[str, str], ...]
+    key: str,
+    _environment: tuple[tuple[str, str], ...],
+    _stamp: tuple[tuple[str, int, int, int], ...],
 ) -> str | None:
     """Ask git for a config value from its global scope, treating a broken git as unset.
 
-    Cached because find_files runs this once per path argument and the answer cannot
-    change under a fixed environment mid-run, so `toko a b c` was paying for three
-    `git config` subprocesses to be told the same thing three times.
+    Cached because find_files runs this once per path argument, so `toko a b c` was
+    paying for three `git config` subprocesses to be told the same thing three times.
+    The key carries everything the answer is resolved from -- the environment that
+    selects the file, and the file's own size and modification time -- because the
+    cache outlives the process's configuration otherwise: a caller that rewrites its
+    global config between two walks was answered from the config before it. Bounded
+    rather than unbounded, since a key that moves with a file is a key that a
+    long-lived caller can go on minting.
 
     The only value read here is core.excludesFile, which is a path, so git's stdout is
     decoded with os.fsdecode -- exactly how Python decodes every other filesystem path.

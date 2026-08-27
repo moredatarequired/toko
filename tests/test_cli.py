@@ -16,6 +16,7 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
+from tests.cache_keys import cache_key
 from tests.git_runner import run_git
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
@@ -512,6 +513,28 @@ def test_piped_single_model_tsv_keeps_approximate_marker():
     assert result.exit_code == 0
     assert result.stdout.strip() == "gpt-6\t2\ttrue"
     assert "unknown OpenAI model 'gpt-6'" in result.stderr
+
+
+def test_piped_single_model_tsv_keeps_the_marker_for_a_prefix_matched_name():
+    # 'gpt-4-1' is a typo for gpt-4.1 that tiktoken resolves through its 'gpt-4-'
+    # prefix. It used to collapse to a bare number, which is the shape a caller reads
+    # as an exact count.
+    result = _invoke_cli(["--format", "tsv", "-m", "gpt-4-1", "--text", "hello world"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "gpt-4-1\t2\ttrue"
+    assert "unknown OpenAI model 'gpt-4-1'" in result.stderr
+
+
+def test_json_reports_a_prefix_matched_openai_name_as_approximate():
+    result = _invoke_cli(["--format", "json", "-m", "gpt-4-1", "--text", "hello world"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "gpt-4-1": {
+            "tokens": 2,
+            "approximate": True,
+            "caveat": "unknown OpenAI model 'gpt-4-1'; estimating with cl100k_base",
+        }
+    }
 
 
 def test_piped_single_model_tsv_stays_bare_when_exact():
@@ -1278,8 +1301,8 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         content = Path(path).read_text()
         # Every count the run reported is readable again under its own model, so no
         # write landed under another thread's key or was lost to a locked database.
-        assert get_cached_count(content, "gpt-4") == int(gpt_4)
-        assert get_cached_count(content, "gpt-5") == int(gpt_5)
+        assert get_cached_count(content, cache_key("gpt-4")) == int(gpt_4)
+        assert get_cached_count(content, cache_key("gpt-5")) == int(gpt_5)
 
 
 def test_jobs_below_one_is_rejected(tmp_path):

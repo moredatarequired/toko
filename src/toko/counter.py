@@ -6,7 +6,7 @@ import importlib.util
 import os
 import sys
 import threading
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import TYPE_CHECKING, Protocol, cast
 from urllib.parse import quote
 
@@ -16,6 +16,7 @@ os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 
 import httpx
 import tiktoken
+from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
 from toko.cache import cache_count, get_cached_count
 from toko.models import ModelInfo, get_model, retirement_notice
@@ -241,21 +242,13 @@ def _approximate(count: int, model_info: ModelInfo, caveat: str) -> TokenCount:
     )
 
 
-def _get_tiktoken_encoding_for_model(model_name: str) -> TokenizerProtocol | None:
-    """Return a tiktoken encoding for a specific model name, if available."""
-    cache_key = f"tiktoken:model:{model_name}"
-    cached = _TOKENIZER_CACHE.get(cache_key)
-    if cached is not None:
-        return cast("TokenizerProtocol", cached)
-
+@cache
+def _tiktoken_encoding_name_for_model(model_name: str) -> str | None:
+    """Return the encoding tiktoken maps a model name to, if any."""
     try:
-        encoding = tiktoken.encoding_for_model(model_name)
+        return tiktoken.encoding_for_model(model_name).name
     except (KeyError, ValueError):
         return None
-
-    tokenizer = cast("TokenizerProtocol", encoding)
-    _TOKENIZER_CACHE[cache_key] = tokenizer
-    return tokenizer
 
 
 def _get_tiktoken_encoding_by_name(encoding_name: str) -> TokenizerProtocol | None:
@@ -285,6 +278,15 @@ def _count_with_provider(text: str, model_info: ModelInfo) -> TokenCount:
     return handler(text, model_info)
 
 
+def _openai_exact_encoding(model_info: ModelInfo) -> str | None:
+    """Return the encoding a name is known outright to use, registry before tiktoken."""
+    # tiktoken's own table is lowercase, and so is the OPENAI_MODEL_ENCODINGS lookup
+    # in _build_openai_model; without matching here, 'GPT-5' would be called unknown.
+    return model_info.encoding or TIKTOKEN_MODEL_TO_ENCODING.get(
+        model_info.name.lower()
+    )
+
+
 def _warn_openai_estimate(model_name: str, encoding_name: str) -> str:
     caveat = f"unknown OpenAI model '{model_name}'; estimating with {encoding_name}"
     _warn_once("openai-estimate", model_name, caveat)
@@ -292,26 +294,32 @@ def _warn_openai_estimate(model_name: str, encoding_name: str) -> str:
 
 
 def _count_openai(text: str, model_info: ModelInfo) -> TokenCount:
-    # tiktoken's own table is lowercase, and so is the OPENAI_MODEL_ENCODINGS lookup
-    # in _build_openai_model; without matching here, 'GPT-5' would be called unknown.
-    encoding = _get_tiktoken_encoding_for_model(model_info.name.lower())
-    if encoding is not None:
-        return _exact(len(encoding.encode(text)), model_info)
+    encoding_name = _openai_exact_encoding(model_info)
+    is_exact = encoding_name is not None
+    if encoding_name is None:
+        # tiktoken also resolves a name through its prefix table, which answers for
+        # anything starting with a family name: 'gpt-4-zzzz' reaches cl100k_base through
+        # 'gpt-4-'. That encoding is the family's real one and the best guess available,
+        # but a prefix says nothing about whether the name exists, so the count is an
+        # estimate. Every OpenAI model since gpt-4o uses o200k_base, so a name no prefix
+        # claims either is still far better served by that than by refusing to count it.
+        encoding_name = (
+            _tiktoken_encoding_name_for_model(model_info.name.lower())
+            or OPENAI_FALLBACK_ENCODING
+        )
 
-    # Every OpenAI model since gpt-4o uses o200k_base, so an unreleased name is
-    # far better served by that than by refusing to count it.
-    encoding_name = model_info.encoding or OPENAI_FALLBACK_ENCODING
     encoding = _get_tiktoken_encoding_by_name(encoding_name)
     if encoding is None:
         raise ValueError(
             f"tiktoken could not load encoding '{encoding_name}' for model "
             f"'{model_info.name}'. Install the latest tiktoken or verify the model name."
         )
-    if model_info.encoding is not None:
-        return _exact(len(encoding.encode(text)), model_info)
+    count = len(encoding.encode(text))
+    if is_exact:
+        return _exact(count, model_info)
 
     caveat = _warn_openai_estimate(model_info.name, encoding_name)
-    return _approximate(len(encoding.encode(text)), model_info, caveat)
+    return _approximate(count, model_info, caveat)
 
 
 def _warn_if_retired(model_info: ModelInfo) -> None:
@@ -635,6 +643,18 @@ for provider in ("llama", "deepseek", "qwen"):
 _PROVIDER_HANDLERS["huggingface"] = _count_transformers
 
 
+def _cache_key(name: str, model_info: ModelInfo) -> str | None:
+    """Return the cache key a name's count is stored under, or None to skip the cache."""
+    if model_info.provider != "openai":
+        return name
+    # The encoding is part of what an OpenAI count means, so it belongs in the key: a
+    # name toko once counted through tiktoken's prefix table was stored as exact under
+    # the bare name, and replaying that would hand back the number this release stopped
+    # calling exact. No verified encoding means no key, and nothing to read or write.
+    encoding_name = _openai_exact_encoding(model_info)
+    return None if encoding_name is None else f"{name}@{encoding_name}"
+
+
 def count_tokens(text: str, model: str, *, use_cache: bool = True) -> TokenCount:
     """Count tokens in text for a given model.
 
@@ -654,8 +674,9 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> TokenCount
     model_info = get_model(model)
     _warn_if_retired(model_info)
 
-    if use_cache:
-        cached = get_cached_count(text, model)
+    cache_key = _cache_key(model, model_info)
+    if use_cache and cache_key is not None:
+        cached = get_cached_count(text, cache_key)
         if cached is not None:
             # Only exact counts are ever stored, so a hit needs no caveat.
             return _exact(cached, model_info)
@@ -665,9 +686,10 @@ def count_tokens(text: str, model: str, *, use_cache: bool = True) -> TokenCount
     # Approximate counts are deliberately not cached. A cache hit returns before any
     # provider runs, so a stored approximation would be replayed on later runs without
     # the stderr warning that says it is not exact.
-    if use_cache and not result.approximate:
-        cache_count(text, model, result.count)
-        if model_info.name != model:
-            cache_count(text, model_info.name, result.count)
+    if use_cache and cache_key is not None and not result.approximate:
+        cache_count(text, cache_key, result.count)
+        canonical_key = _cache_key(model_info.name, model_info)
+        if canonical_key is not None and canonical_key != cache_key:
+            cache_count(text, canonical_key, result.count)
 
     return result

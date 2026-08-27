@@ -318,7 +318,7 @@ CLAUDE_TOKENIZER_LEGACY = "claude-legacy"
 # tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
 # table only grows on release. An encoding in the registry marks that name as
 # verified, so counting stays exact and warning-free; anything absent is
-# estimated with o200k_base and says so on stderr.
+# estimated and says so on stderr.
 OPENAI_MODEL_ENCODINGS = {
     name: info.encoding for name, info in OPENAI_MODELS.items() if info.encoding
 }

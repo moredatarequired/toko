@@ -347,8 +347,10 @@ retired = "unknown"
 #
 # tiktoken cannot map dotted OpenAI names to a tokenizer at all, and its prefix
 # table only grows on release. Naming an encoding here marks it as verified, so
-# counting stays exact and warning-free; anything absent is estimated with
-# o200k_base and says so on stderr.
+# counting stays exact and warning-free; anything absent is estimated and says so
+# on stderr. Every entry needs one: tiktoken's prefix table would resolve
+# gpt-5-mini through "gpt-5-", but a prefix is a guess about a family, not
+# knowledge of a name, so toko no longer takes an exact count from it.
 #
 # `listed` controls whether --list-models advertises the model on top of
 # tiktoken's own table.
@@ -356,18 +358,22 @@ retired = "unknown"
 [[model]]
 name = "gpt-4.1-mini"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-4.1-nano"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5-mini"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5-nano"
 provider = "openai"
+encoding = "o200k_base"
 
 [[model]]
 name = "gpt-5.1"
@@ -387,6 +393,166 @@ encoding = "o200k_base"
 # Not listed: genai-prices has no entry for it, so toko cannot cost it.
 [[model]]
 name = "gpt-5.1-pro"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+# Names tiktoken resolves only through its prefix table: "gpt-4o-" reaches
+# o200k_base, so these counted exactly by accident until toko stopped taking an
+# exact count from a prefix. The encoding each one is declared with is the one its
+# family prefix resolves to, so every count below is unchanged -- what changes is
+# that it is no longer an accident. Enumerated from the genai-prices OpenAI price
+# data, so every name here prices; none is retired.
+#
+# All unlisted: declaring the encoding is what keeps these counting exactly and
+# silently, and that is the whole of the fix. Whether toko should advertise a
+# tts, transcribe or -preview model in its own catalogue is a separate call, so
+# --list-models is left exactly as it was.
+#
+# Dated snapshots are deliberately absent. That set is unbounded and grows with
+# every release, and a snapshot toko has no entry for really is a name toko does
+# not know, so gpt-4o-2024-08-06 is estimated and says so.
+
+[[model]]
+name = "gpt-3.5-turbo-16k"
+provider = "openai"
+encoding = "cl100k_base"
+listed = false
+
+[[model]]
+name = "gpt-3.5-turbo-instruct"
+provider = "openai"
+encoding = "cl100k_base"
+listed = false
+
+[[model]]
+name = "gpt-4-32k"
+provider = "openai"
+encoding = "cl100k_base"
+listed = false
+
+[[model]]
+name = "gpt-4-turbo"
+provider = "openai"
+encoding = "cl100k_base"
+listed = false
+
+[[model]]
+name = "gpt-4-vision-preview"
+provider = "openai"
+encoding = "cl100k_base"
+listed = false
+
+[[model]]
+name = "gpt-4.5-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-audio-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-mini"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-mini-audio-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-mini-realtime-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-mini-transcribe"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-mini-tts"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-realtime-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-search-preview"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-4o-transcribe"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-5-image"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-5-image-mini"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "gpt-5-pro"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o1-mini"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o1-pro"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o3-deep-research"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o3-mini"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o3-pro"
+provider = "openai"
+encoding = "o200k_base"
+listed = false
+
+[[model]]
+name = "o4-mini-deep-research"
 provider = "openai"
 encoding = "o200k_base"
 listed = false

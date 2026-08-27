@@ -505,18 +505,10 @@ def read_file(path: Path) -> str:
 
 
 def fetch_url(url: str, *, timeout: float = 30.0) -> str:
-    """Fetch content from a URL.
+    """Fetch the body of a URL as text.
 
-    Args:
-        url: URL to fetch
-        timeout: Request timeout in seconds
-
-    Returns:
-        Content as string
-
-    Raises:
-        httpx.HTTPError: If request fails
-        UnicodeDecodeError: If response is not valid UTF-8
+    httpx decodes with errors="replace", so a body that is not valid text comes back
+    with replacement characters instead of raising.
     """
     response = httpx.get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()

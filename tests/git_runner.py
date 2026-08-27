@@ -26,7 +26,7 @@ def run_git(target: Path, *args: str) -> str:
     relative path in `args` resolves against.
 
     The environment is scrubbed here as well as by `isolated_git_env`, so that the
-    guarantee belongs to the fourteen write sites that go through this function
+    guarantee belongs to every write site that goes through this function
     rather than to an autouse fixture in another file that they never mention.
     """
     result = subprocess.run(  # noqa: S603

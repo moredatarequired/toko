@@ -95,6 +95,41 @@ def test_dotted_openai_model_keeps_its_own_name_and_encoding():
     )
 
 
+# Verified encodings kept off --list-models on purpose, and why. Toko counts every
+# one of them exactly and silently; the list is only about what toko advertises.
+# gpt-5.1-pro: counts exactly but genai-prices cannot cost it.
+# The rest: names tiktoken resolved only through its prefix table, declared so they
+# keep counting exactly, but whose place in the advertised catalogue is a separate
+# call -- several are tts, transcribe or -preview models.
+DELIBERATELY_UNLISTED_OPENAI = {
+    "gpt-5.1-pro",
+    "gpt-3.5-turbo-16k",
+    "gpt-3.5-turbo-instruct",
+    "gpt-4-32k",
+    "gpt-4-turbo",
+    "gpt-4-vision-preview",
+    "gpt-4.5-preview",
+    "gpt-4o-audio-preview",
+    "gpt-4o-mini",
+    "gpt-4o-mini-audio-preview",
+    "gpt-4o-mini-realtime-preview",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-mini-tts",
+    "gpt-4o-realtime-preview",
+    "gpt-4o-search-preview",
+    "gpt-4o-transcribe",
+    "gpt-5-image",
+    "gpt-5-image-mini",
+    "gpt-5-pro",
+    "o1-mini",
+    "o1-pro",
+    "o3-deep-research",
+    "o3-mini",
+    "o3-pro",
+    "o4-mini-deep-research",
+}
+
+
 def test_every_priced_verified_encoding_is_advertised():
     """Only a deliberate `listed = false` may keep a verified model off the list."""
     advertised = set(models.list_models()["openai"])
@@ -102,8 +137,7 @@ def test_every_priced_verified_encoding_is_advertised():
     unlisted = {name for name, info in models.OPENAI_MODELS.items() if not info.listed}
 
     assert verified - advertised == unlisted
-    # gpt-5.1-pro counts exactly but genai-prices cannot cost it.
-    assert unlisted == {"gpt-5.1-pro"}
+    assert unlisted == DELIBERATELY_UNLISTED_OPENAI
     assert advertised >= {"gpt-4.1-mini", "gpt-4.1-nano", "gpt-5-mini", "gpt-5-nano"}
 
 

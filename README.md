@@ -375,9 +375,13 @@ An unreachable tokenizer is usually an error, not a fallback: `count_tokens` rai
 provider can be detected from the name at all. Exactly three paths return an approximate
 count instead, so check `approximate` on those before treating a count as exact:
 
-- An OpenAI name Toko does not know yet — one that still reads as an OpenAI model, such
-  as `gpt-6` — is counted with `o200k_base`, the encoding every OpenAI model since
-  `gpt-4o` uses.
+- An OpenAI name neither Toko nor `tiktoken` lists — one that still reads as an OpenAI
+  model, such as `gpt-6` — is counted with the encoding `tiktoken` maps its family to
+  when the name starts with a family it knows (`gpt-4-1` gets `cl100k_base` through
+  `gpt-4-`), and otherwise with `o200k_base`, the encoding every OpenAI model since
+  `gpt-4o` uses. A family prefix is a good guess at the encoding but no evidence the
+  name exists, so either way the count is an estimate and the `Caveat` it carries names
+  the encoding the count came from.
 - An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
   unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
   the call raises instead.

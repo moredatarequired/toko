@@ -15,6 +15,7 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
+from tests.cache_keys import cache_key
 from tests.hf_hub import skip_if_rate_limited
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
 from toko.cache import cache_count, get_cache_db_path, get_cached_count
@@ -452,15 +453,17 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
     where the encodings disagree, bare babbage-002 counts 12 and bare gpt2 counts 23,
     while both spellings here count 8.
 
-    Which of those two outcomes a prefixed name gets turns on the prefix's opening
+    Which encoding a prefixed name is guessed with turns on the prefix's opening
     characters, not on its being a prefix. tiktoken.model.MODEL_PREFIX_TO_ENCODING holds
     17 entries and is matched with startswith, and only 5 of them are the ft: ones; a
     name whose owner begins with one of the other 12 -- o1-, o3-, o4-mini-, gpt-5-,
     gpt-4.5-, gpt-4.1-, chatgpt-4o-, gpt-4o-, gpt-4-, gpt-3.5-turbo-, gpt-35-turbo- or
-    gpt-oss- -- resolves exactly and silently to that entry's encoding instead of
-    falling back. "openai-community/" and "openai/" begin with none of the 12, which is
-    why these two warn; gpt-4-lab/ does begin with one, and that case is fenced by
-    test_an_owner_prefix_tiktoken_matches_picks_its_encoding_silently.
+    gpt-oss- -- is counted with that entry's encoding instead of the fallback.
+    "openai-community/" and "openai/" begin with none of the 12, which is why these two
+    name o200k_base in their warning. Either way the count is an estimate and warns,
+    because a prefix says nothing about whether the name exists; gpt-4-lab/ begins with
+    one of the 12, and that case is fenced by
+    test_an_owner_prefix_tiktoken_matches_picks_its_encoding_but_still_estimates.
     """
     result = _invoke_cli(["-m", requested, "--text", "hello world"])
 
@@ -473,44 +476,49 @@ def test_a_prefixed_name_that_is_not_retired_still_counts(requested):
 
 
 @pytest.mark.parametrize(
-    ("requested", "expected_tokens"),
+    ("requested", "expected_tokens", "expected_encoding"),
     [
         # gpt-4- -> cl100k_base, which counts this text differently from the o200k_base
         # fallback (12 against 8), so the number alone shows which one was used.
-        ("gpt-4-lab/gpt2", 12),
+        ("gpt-4-lab/gpt2", 12, "cl100k_base"),
         # gpt-oss- -> o200k_harmony, which agrees with the fallback at 8 here, so only
-        # the silence and the exact flag separate the two paths.
-        ("gpt-oss-lab/gpt2", 8),
-        # o1- -> o200k_base. The gate read o1-labs/ as a repo owner and left the retired
-        # tail unread, so a shut-down engine gets counted exactly under an encoding it
-        # never used.
-        ("o1-labs/text-davinci-003", 8),
+        # the named encoding separates the two paths.
+        ("gpt-oss-lab/gpt2", 8, "o200k_harmony"),
+        # o1- -> o200k_base. The gate reads o1-labs/ as a repo owner and leaves the
+        # retired tail unread, so this shut-down engine is counted at all -- but under
+        # an encoding it never used, which is why the number is only an estimate.
+        ("o1-labs/text-davinci-003", 8, "o200k_base"),
     ],
 )
-def test_an_owner_prefix_tiktoken_matches_picks_its_encoding_silently(
-    requested, expected_tokens
+def test_an_owner_prefix_tiktoken_matches_picks_its_encoding_but_still_estimates(
+    requested, expected_tokens, expected_encoding
 ):
-    """A prefix tiktoken matches costs an encoding, not a warning.
+    """A prefix tiktoken matches chooses the encoding; it does not vouch for the name.
 
     _count_openai lowercases the requested name and alters nothing else about it -- all
     three names below are already lowercase, so what tiktoken sees is what was typed --
-    and MODEL_PREFIX_TO_ENCODING is matched with startswith, so an owner whose text opens
-    with one of tiktoken's 12 non-ft: model prefixes selects that entry's encoding with
-    approximate=False and nothing on stderr. None of these names is an OpenAI model, and
-    none of the encodings picked is the one the tail would have used: bare gpt2 counts 23
-    under its own encoding rather than 12 or 8, and bare text-davinci-003 does not count
-    at all because the retirement gate rejects it.
+    and MODEL_PREFIX_TO_ENCODING is matched with startswith, so an owner whose text
+    opens with one of tiktoken's 12 non-ft: model prefixes selects that entry's encoding
+    rather than the o200k_base fallback. What the prefix cannot do is establish that the
+    name exists, so the count is approximate and the encoding it came from is named on
+    stderr. None of these names is an OpenAI model, and none of the encodings picked is
+    the one the tail would have used: bare gpt2 counts 23 under its own encoding rather
+    than 12 or 8, and bare text-davinci-003 does not count at all because the retirement
+    gate rejects it.
     """
     result = _invoke_cli(
         ["-m", requested, "--format", "json", "--text", "Привет, мир! Как дела?"]
     )
 
     assert result.exit_code == 0
-    assert "Warning" not in result.stderr
+    assert (
+        f"Warning: unknown OpenAI model '{requested}'; "
+        f"estimating with {expected_encoding}" in result.stderr
+    )
     assert "retired" not in result.stderr
     count = json.loads(result.stdout)["totals"][0]
     assert count["tokens"] == expected_tokens
-    assert count["approximate"] is False
+    assert count["approximate"] is True
 
 
 @pytest.mark.parametrize(
@@ -1565,6 +1573,42 @@ def test_piped_single_model_tsv_collapses_even_when_the_count_is_approximate():
     assert with_header.stdout.strip() == ("model\ttokens\tapproximate\ngpt-6\t2\ttrue")
 
 
+def test_piped_single_model_tsv_collapses_for_a_prefix_matched_name():
+    """A prefix-matched name is not a third shape.
+
+    'gpt-4-1' is a typo for gpt-4.1 that tiktoken resolves through its 'gpt-4-' prefix,
+    so the count is an estimate rather than the exact number it used to be. The shape
+    is still the one the test above pins: a single model named and a non-TTY
+    stdout is a bare number whatever the counting turned out to be, and `--header` is
+    what puts the marker on stdout.
+    """
+    result = _invoke_cli(["--format", "tsv", "-m", "gpt-4-1", "--text", "hello world"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "2"
+    assert "unknown OpenAI model 'gpt-4-1'" in result.stderr
+
+    with_header = _invoke_cli(
+        ["--header", "--format", "tsv", "-m", "gpt-4-1", "--text", "hello world"]
+    )
+    assert with_header.stdout.strip() == "model\ttokens\tapproximate\ngpt-4-1\t2\ttrue"
+
+
+def test_json_reports_a_prefix_matched_openai_name_as_approximate():
+    result = _invoke_cli(["--format", "json", "-m", "gpt-4-1", "--text", "hello world"])
+    assert result.exit_code == 0
+    count = _only_count(result)
+    assert count["tokens"] == 2
+    assert count["approximate"] is True
+    assert _caveat_of(count) == {
+        "kind": "openai_encoding_guess",
+        "model": "gpt-4-1",
+        "message": "unknown OpenAI model 'gpt-4-1'; estimating with cl100k_base",
+        "encoding": "cl100k_base",
+        "tokenizer": None,
+        "reason": None,
+    }
+
+
 def test_piped_single_model_tsv_stays_bare_when_exact():
     result = _invoke_cli(
         ["--format", "tsv", "--model", "gpt-5", "--text", "hello world"]
@@ -2393,8 +2437,8 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         content = Path(path).read_text()
         # Every count the run reported is readable again under its own model, so no
         # write landed under another thread's key or was lost to a locked database.
-        assert get_cached_count(content, "gpt-4") == int(gpt_4)
-        assert get_cached_count(content, "gpt-5") == int(gpt_5)
+        assert get_cached_count(content, cache_key("gpt-4")) == int(gpt_4)
+        assert get_cached_count(content, cache_key("gpt-5")) == int(gpt_5)
 
 
 def _tree_failing_the_first_file(tmp_path: Path, monkeypatch) -> Path:

@@ -181,6 +181,44 @@ def test_a_dangling_link_and_a_loop_are_reported_rather_than_raised(parity_tree)
 
 
 @pytest.fixture
+def ignored_loop_tree(tmp_path) -> Path:
+    """Build a tree whose symlink loop sits on an entry an ignore rule prunes.
+
+    The parity tree's cycle is somewhere no ignore rule reaches, so it cannot tell
+    whether loop detection runs before or after the ignore check. `kept/loop` is a
+    real directory the same rule prunes, so a listing that drops it proves the rule
+    is live -- otherwise a loop reported here would only mean the rule never applied.
+    """
+    write(tmp_path / "kept" / "a.txt")
+    write(tmp_path / "kept" / "loop" / "c.txt")
+    write(tmp_path / "pruned" / "b.txt")
+    (tmp_path / "pruned" / "loop").symlink_to(tmp_path)
+    write(tmp_path / ".ignore", "loop\n")
+    return tmp_path
+
+
+def test_a_loop_through_an_ignored_directory_is_reported_the_way_ripgrep_reports_it(
+    ignored_loop_tree,
+):
+    """Ripgrep reports a loop it has no intention of descending; toko exited 0."""
+    result = run_ripgrep(ignored_loop_tree, "--follow")
+    problems: list[str] = []
+
+    found = find_files(
+        ignored_loop_tree, follow_symlinks=True, on_error=problems.append
+    )
+
+    assert "File system loop found" in result.stderr
+    assert result.returncode == 2
+    assert any(problem.startswith("File system loop found") for problem in problems)
+    listed = {
+        str(path.absolute().relative_to(ignored_loop_tree.absolute())) for path in found
+    }
+    assert listed == ripgrep_files(ignored_loop_tree, "--follow")
+    assert "kept/loop/c.txt" not in listed
+
+
+@pytest.fixture
 def exclude_tree(tmp_path) -> Path:
     """Build a tree that tells a pruning pattern apart from a filtering one.
 

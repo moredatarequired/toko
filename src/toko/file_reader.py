@@ -377,16 +377,21 @@ def _walk(base_dir: Path, options: _WalkOptions) -> list[Path]:
                 continue
             absolute = frame.prefix + entry.name
             if found.is_dir:
-                if not options.recursive or _should_skip(
-                    absolute, frame, options, is_dir=True
-                ):
-                    continue
+                # Ahead of both the recursion and the ignore checks, because ripgrep
+                # reports a loop it has no intention of descending: through a
+                # directory an ignore rule prunes, and at a depth it stops at. Judging
+                # those first left the run silent and exiting 0 on a tree rg calls
+                # broken. _inspect has already paid for `ident`, so this costs no stat.
                 ancestor = _looped_ancestor(frame, found.ident)
                 if ancestor is not None:
                     options.report(
                         f"File system loop found: {entry.path} points to an "
                         f"ancestor {ancestor}"
                     )
+                    continue
+                if not options.recursive or _should_skip(
+                    absolute, frame, options, is_dir=True
+                ):
                     continue
                 child = _descend(frame, entry.name, options)
                 if found.ident is not None:

@@ -429,20 +429,24 @@ def test_a_directory_exclude_with_trailing_whitespace_still_excludes(tmp_path, r
     assert {path.name for path in found} == {"top.txt"}
 
 
-def test_an_escaped_trailing_space_is_not_stripped_into_a_directory_rule(tmp_path):
-    r"""The counterpart: `dir/\ ` names a file called " " and must stay a file rule.
+def test_pathspec_keeps_an_escaped_trailing_space_and_strips_a_bare_one():
+    r"""The assumption `_probe`'s stripping is built on, pinned where it is observable.
 
-    pathspec strips both ends of a pattern unless it ends in a backslash-escaped
-    space, and stripping that one anyway would turn a rule about a file into a rule
-    that prunes a directory. So the stripping has to stop where pathspec's stops.
+    `_probe` cannot tell the two spellings apart: `dir/\ ` compiles to a regex wanting
+    a literal space exactly where a directory probe ends, so `dir` and `dir/` both miss
+    however over-eagerly the raw text was stripped. Only pathspec's own normalisation
+    separates them, which is why this sits at that level rather than on `find_files`.
     """
-    (tmp_path / "dir").mkdir()
-    (tmp_path / "top.txt").write_text("x")
-    (tmp_path / "dir" / "keep.txt").write_text("x")
+    escaped, bare = (
+        next(iter(pathspec.PathSpec.from_lines("gitwildmatch", [rule]).patterns))
+        for rule in (r"dir/\ ", "dir/ ")
+    )
 
-    found = find_files(tmp_path, exclude_patterns=["dir/\\ "])
-
-    assert {path.name for path in found} == {"top.txt", "keep.txt"}
+    # Kept, so the rule still names the entry `dir/ ` and reaches nothing below `dir`.
+    assert escaped.match_file("dir/ ") is not None
+    assert escaped.match_file("dir/below.txt") is None
+    # Stripped, so the rule is the very same one as `dir/`, which does reach below it.
+    assert bare.match_file("dir/below.txt") is not None
 
 
 @pytest.fixture

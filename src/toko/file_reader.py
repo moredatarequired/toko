@@ -339,11 +339,12 @@ def _global_layers(
 
     ripgrep judges each path the way it spells it -- the walk root as the caller named
     it, with the rest of the tree hung off that -- against a matcher rooted at the
-    working directory. A name that is absolute, or that climbs out of the working
-    directory, strips against nothing, so no anchored or multi-segment rule reaches
-    any of that walk, not even the part of it that does lie inside. The empty anchor
-    is that same verdict: it leaves the path absolute, where `/x.txt` and `sub/y.txt`
-    match nothing and a bare `*.swp` still matches on the name alone.
+    working directory. A relative name strips against that directory and is matched
+    with whatever spelling is left, `..` segments and all: walking `..` is judged as
+    `../x.txt`, which an anchored `/x.txt` misses and a `*/x.txt` still matches, both
+    of them exactly as ripgrep has it. An absolute name strips against nothing, and
+    the empty anchor is that verdict: it leaves the path absolute, where `/x.txt` and
+    `sub/y.txt` match nothing and a bare `*.swp` still matches on the name alone.
 
     Read once per walk rather than per directory, so that one answer covers all of it,
     nested checkouts included.
@@ -351,12 +352,13 @@ def _global_layers(
     if spec is None:
         return ()
     working_directory = _dir_prefix(Path.cwd())
-    # abspath rather than Path.absolute, which leaves a `..` in place: `sub/..` is
-    # the parent, and would otherwise read as a directory inside `sub`.
-    resolvable = not named.is_absolute() and _dir_prefix(
-        Path(os.path.abspath(named))  # noqa: PTH100
-    ).startswith(working_directory)
-    return (_IgnoreLayer(working_directory if resolvable else "", spec),)
+    # The walk spells every path it finds as `named.absolute()` with what it found
+    # hung off that, so a relative name always strips: `..` becomes `../x.txt` here,
+    # which is the spelling ripgrep matches too. Normalising the name first instead
+    # left a `..` root anchored at nothing, and a rule reaching through the `..`
+    # then bit for ripgrep and not for toko.
+    anchor = "" if named.is_absolute() else working_directory
+    return (_IgnoreLayer(anchor, spec),)
 
 
 class _WalkOptions(NamedTuple):

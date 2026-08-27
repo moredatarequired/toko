@@ -522,6 +522,47 @@ def test_the_global_excludes_file_is_anchored_at_the_working_directory(
     assert toko_files(root, hidden=False, cwd=cwd) == ripgrep_files(root, cwd=cwd)
 
 
+@pytest.fixture
+def segment_excludes_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
+    """Build a tree whose global rule bites one segment below the walk root.
+
+    `*/x.txt` is the shortest rule that can tell a walk root spelled `..` from the
+    same directory named any other way: as ripgrep spells that walk, the root's own
+    `x.txt` is `../x.txt` and matches, while `sub/x.txt` is `../sub/x.txt` and does
+    not.
+    """
+    gitconfig = isolated_git_env / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    excludes = write(isolated_git_env / "segment-excludes", "*/x.txt\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
+
+    run_git(tmp_path, "init", "-q")
+    for name in ("x.txt", "keep.txt", "sub/x.txt", "sub/keep.txt"):
+        write(tmp_path / name)
+    return tmp_path
+
+
+def test_a_walk_root_spelled_through_a_parent_is_matched_through_that_parent(
+    segment_excludes_tree,
+):
+    """A `..` in the walk root stays in every path judged, the way ripgrep keeps it.
+
+    Normalising the root before deciding what it strips against reads `..` as a
+    directory outside the working directory, drops the anchor for the whole walk, and
+    leaves this rule matching nothing -- while ripgrep, matching the path as spelled,
+    drops the file.
+    """
+    found = toko_files(
+        segment_excludes_tree, hidden=False, cwd=segment_excludes_tree / "sub"
+    )
+
+    assert found == ripgrep_files(
+        segment_excludes_tree, cwd=segment_excludes_tree / "sub"
+    )
+    # The tree proves something only because the rule has to bite through the `..`.
+    assert found == {"keep.txt", "sub/keep.txt", "sub/x.txt"}
+
+
 def test_the_anchored_excludes_tree_reads_differently_from_different_directories(
     anchored_excludes_tree,
 ):

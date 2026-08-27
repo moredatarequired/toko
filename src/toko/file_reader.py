@@ -671,7 +671,12 @@ def find_files(
     The spelling does still move one answer, and only one: `core.excludesFile`, which
     ripgrep anchors at the working directory and matches each path against as the caller
     wrote it. A rule of `*/x.txt` there drops `sub/x.txt` and leaves the same file named
-    absolutely alone. toko is held to ripgrep's answer on both counts.
+    absolutely alone. toko is held to ripgrep's answer on both counts, with one shape
+    excepted: an anchored rule spanning more than one segment in an ignore file *above*
+    the walk root disagrees with ripgrep, and in both directions. Walking `root` with
+    `/root/sub/deep.bb` in the parent's ignore file, toko drops a file ripgrep lists;
+    with `/root/*.bb` there, toko lists a `root/sub/deep.bb` that ripgrep drops.
+    See https://github.com/moredatarequired/toko/issues/134.
 
     `on_error` receives the links and directories the walk could not resolve. They are
     reported rather than raised so that one of them cannot cost the caller the counts

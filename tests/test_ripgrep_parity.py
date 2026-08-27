@@ -688,6 +688,103 @@ def test_the_root_as_spelled_and_the_root_resolved_are_both_live_in_one_walk(
     assert found == {"keep.txt", "sub/keep.txt", "sub/x.txt"}
 
 
+@pytest.fixture
+def symlinked_root_tree(tmp_path) -> Path:
+    """Build a walk root that is a link into a tree other ignore files govern.
+
+    `A/link` and `B/real` name one directory by two paths, and what sits above each
+    of them disagrees: `A/.ignore` drops `*.aa`, `B/.ignore` drops `*.bb`, and the
+    repository at `B` drops `*.gg`. ripgrep answers to the directory the link lands
+    in, so the walk is held to `B`'s ignore file and to `B`'s repository -- neither of
+    which any spelling of the root names. `f.aa` is the file that survives only
+    because `A`'s rule does *not* reach, so the two directions are separable.
+    """
+    write(tmp_path / "A" / ".ignore", "*.aa\n")
+    write(tmp_path / "B" / ".ignore", "*.bb\n")
+    write(tmp_path / "B" / ".gitignore", "*.gg\n")
+    run_git(tmp_path / "B", "init", "-q")
+    for name in ("f.aa", "f.bb", "f.gg", "keep.txt"):
+        write(tmp_path / "B" / "real" / name)
+    (tmp_path / "A" / "link").symlink_to(tmp_path / "B" / "real")
+    return tmp_path
+
+
+def test_a_symlinked_walk_root_answers_to_the_ignore_files_over_its_target(
+    symlinked_root_tree,
+):
+    """`Path.resolve`, not `os.path.abspath`: a link lands where it points.
+
+    Both spell `A/link` absolutely and only `resolve` follows it, so `abspath` reads
+    the ancestors as `A` and drops `f.aa` while keeping the `f.bb` that `B`'s own
+    ignore file excludes -- an answer ripgrep never gives, and the exact substitution
+    a later simplification of this line would make.
+    """
+    root = symlinked_root_tree / "A" / "link"
+    cwd = symlinked_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(root, cwd=cwd)
+    # `f.aa` survives because `A`'s rule must not reach and `f.bb` is gone because
+    # `B`'s must: reading the ancestors from the unresolved root swaps the pair.
+    assert found == {"f.aa", "keep.txt"}
+
+
+def test_the_repository_over_a_symlinked_walk_root_is_found_through_the_link(
+    symlinked_root_tree,
+):
+    """The repository a walk sits in is looked for from the root resolved.
+
+    Asking `_find_repo_root` about the root as named searches `A/link`, `A` and the
+    directories above them, finds no `.git`, and takes the walk for one outside any
+    repository -- which switches off every git ignore file, `B/.gitignore` with them,
+    and leaks a file ripgrep excludes. The listing above cannot be split from this on
+    its own, so `f.gg` is asserted by name.
+    """
+    root = symlinked_root_tree / "A" / "link"
+    cwd = symlinked_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert "f.gg" not in found
+    assert found == ripgrep_files(root, cwd=cwd)
+
+
+@pytest.fixture
+def anchored_ancestor_tree(tmp_path) -> Path:
+    """Build an anchored ignore rule over a walk root spelled through a parent.
+
+    `/keep.txt` is anchored at the directory holding the ignore file, so it reaches
+    that directory's own `keep.txt` and leaves `sub/keep.txt` alone. Walking from
+    `sub` names the root `..`, which every path judged then carries.
+    """
+    write(tmp_path / ".ignore", "/keep.txt\n")
+    for name in ("keep.txt", "other.txt", "sub/keep.txt", "sub/other.txt"):
+        write(tmp_path / name)
+    return tmp_path
+
+
+def test_an_anchored_rule_over_a_root_spelled_through_a_parent_still_reaches_it(
+    anchored_ancestor_tree,
+):
+    """The layers built over the walk root strip the root as spelled, not resolved.
+
+    `keep.txt` is judged as `/w/sub/../keep.txt`, so an anchor at the resolved root
+    strips `/w/` and leaves `sub/../keep.txt` for `/keep.txt` to miss. Nothing
+    complains: `str.removeprefix` hands back a prefix it did not find, so the wrong
+    anchor reads as a path that simply does not match, and the file ripgrep drops is
+    counted, read and sent instead.
+    """
+    cwd = anchored_ancestor_tree / "sub"
+
+    found = toko_files(anchored_ancestor_tree, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(anchored_ancestor_tree, cwd=cwd)
+    # `sub/keep.txt` is the path the same rule must not reach, which is what keeps
+    # the anchor honest rather than merely present.
+    assert found == {"other.txt", "sub/keep.txt", "sub/other.txt"}
+
+
 def test_the_anchored_excludes_tree_reads_differently_from_different_directories(
     anchored_excludes_tree,
 ):

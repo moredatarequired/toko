@@ -785,6 +785,133 @@ def test_an_anchored_rule_over_a_root_spelled_through_a_parent_still_reaches_it(
     assert found == {"other.txt", "sub/keep.txt", "sub/other.txt"}
 
 
+@pytest.fixture
+def rule_above_the_root_tree(tmp_path) -> Path:
+    """Build a tree whose rule sits one directory above the walk root.
+
+    Every walk here starts at `root` and the rule under test is written into
+    `tmp_path/.gitignore`, so it is read as an ancestor's rather than as the walk
+    root's own -- the two are matched differently, and the same rule gives opposite
+    answers from the two places. `a.bb` and `sub/deep.bb` share a suffix at two
+    different depths and `keep.txt` and `sub/keep.txt` share a name, so a rule can
+    reach one depth, both, or neither, and the listing says which.
+
+    The repository is at `tmp_path` and not at `root`, because a `.gitignore` above
+    the walk root is only read at all while the walk is inside the repository holding
+    it -- which is also the condition ripgrep puts on reading it.
+    """
+    run_git(tmp_path, "init", "-q")
+    for name in ("a.bb", "keep.txt", "sub/deep.bb", "sub/keep.txt"):
+        write(tmp_path / "root" / name)
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("rule", "kept"),
+    [
+        # The rule that names the file's real path, and reaches nothing: the entry is
+        # put to it as `root/deep.bb`, which has no `sub` in it to match.
+        ("/root/sub/deep.bb", {"a.bb", "keep.txt", "sub/deep.bb", "sub/keep.txt"}),
+        # The same rule one segment shorter, reaching both depths at once. `*` does
+        # not cross a separator, but there is no separator left to cross once the
+        # directory between the walk root and the entry has been dropped.
+        ("/root/*.bb", {"keep.txt", "sub/keep.txt"}),
+        # Spelled without the leading slash, which changes nothing: a rule carrying a
+        # separator is anchored either way.
+        ("root/*.bb", {"keep.txt", "sub/keep.txt"}),
+        # A name rather than a glob, so the reach cannot be read as loose matching:
+        # one rule takes both `keep.txt` files, because both are put to it as
+        # `root/keep.txt`.
+        ("/root/keep.txt", {"a.bb", "sub/deep.bb"}),
+        # And a rule naming the intervening directory reaches nothing at all, which is
+        # what stops the whole shape reading as "an anchored rule up there is skipped".
+        ("/root/sub/*.bb", {"a.bb", "keep.txt", "sub/deep.bb", "sub/keep.txt"}),
+    ],
+)
+def test_a_rule_above_the_walk_root_reaches_what_ripgrep_has_it_reaching(
+    rule_above_the_root_tree, rule, kept
+):
+    """An ignore file above the walk root is matched against names, not against paths.
+
+    ripgrep joins the walk root onto each entry's own name for these layers and drops
+    whatever lies between, so `root/sub/deep.bb` is judged as `root/deep.bb`. Spelling
+    them the way git does -- the entry's whole path below the root -- misses in both
+    directions at once, and the two rules at the top of this table are one file apiece:
+    `/root/sub/deep.bb` then drops a file ripgrep lists, and `/root/*.bb` then keeps a
+    file ripgrep drops. They are parametrized rather than asserted together because the
+    single spelling decides both, so neither can go green without the other.
+    """
+    write(rule_above_the_root_tree / ".gitignore", f"{rule}\n")
+    root = rule_above_the_root_tree / "root"
+    cwd = rule_above_the_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(root, cwd=cwd)
+    assert found == kept
+
+
+def test_the_walk_roots_own_ignore_file_still_matches_whole_paths(
+    rule_above_the_root_tree,
+):
+    """The other half of the asymmetry: only a file *above* the root is name-matched.
+
+    `/*.bb` in the walk root's own `.gitignore` is the counterpart of `/root/*.bb` in
+    the parent's, and ripgrep answers the two differently -- it takes `a.bb` alone here
+    and both `.bb` files there. Matching every layer against names would take both
+    here too, and there is nothing else in the suite that would notice.
+    """
+    write(rule_above_the_root_tree / "root" / ".gitignore", "/*.bb\n")
+    root = rule_above_the_root_tree / "root"
+    cwd = rule_above_the_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(root, cwd=cwd)
+    assert found == {"keep.txt", "sub/deep.bb", "sub/keep.txt"}
+
+
+def test_a_negation_above_the_walk_root_follows_the_same_spelling(
+    rule_above_the_root_tree,
+):
+    """The re-include is matched the same way the exclusion was, or it cannot bite.
+
+    `/root/**/*.bb` reaches both depths whichever spelling is used, so the exclusion
+    is not what this turns on: `!/root/deep.bb` is, and it names no path in the tree,
+    since `deep.bb` lives in `sub`. ripgrep re-includes the file anyway, because a
+    name is exactly what the rules are put the file under. Match these layers against
+    whole paths and the negation finds nothing to re-include, and the file goes.
+    """
+    write(rule_above_the_root_tree / ".gitignore", "/root/**/*.bb\n!/root/deep.bb\n")
+    root = rule_above_the_root_tree / "root"
+    cwd = rule_above_the_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(root, cwd=cwd)
+    assert found == {"keep.txt", "sub/deep.bb", "sub/keep.txt"}
+
+
+def test_a_directory_rule_above_the_walk_root_prunes_by_name(rule_above_the_root_tree):
+    """A directory is put to those rules under its name too, and pruned on it.
+
+    `sub/nested` is two directories below the walk root and `/root/nested/` names it
+    at one, so the rule reaches it only if the directory between them is dropped the
+    way a file's is -- and ripgrep prunes it. The trailing separator is the other half:
+    a spelling that took the name of `root/sub/nested/` rather than of `root/sub/nested`
+    would come away with an empty string and prune nothing at all.
+    """
+    write(rule_above_the_root_tree / "root" / "sub" / "nested" / "inner.txt")
+    write(rule_above_the_root_tree / ".gitignore", "/root/nested/\n")
+    root = rule_above_the_root_tree / "root"
+    cwd = rule_above_the_root_tree
+
+    found = toko_files(root, hidden=False, cwd=cwd)
+
+    assert found == ripgrep_files(root, cwd=cwd)
+    assert found == {"a.bb", "keep.txt", "sub/deep.bb", "sub/keep.txt"}
+
+
 def test_the_anchored_excludes_tree_reads_differently_from_different_directories(
     anchored_excludes_tree,
 ):

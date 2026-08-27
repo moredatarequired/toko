@@ -110,21 +110,36 @@ if not _pathspec_internals_are_live():
 
 
 class _Anchor(NamedTuple):
-    """How a walked path is spelled for one ignore file: strip `prefix`, prepend `lead`.
+    """How a walked path is spelled for one ignore file: strip `prefix`, or lead a name.
 
     For an ignore file in a directory the walk reached, `prefix` is that directory and
-    `lead` is empty -- every path the walk produces starts with it. A directory *above*
-    the walk root is not a prefix of anything the walk produces, because the walk
-    spells each path from the root as the caller named it and a root named `..` carries
-    the `..` into all of them. Those anchor at the walk root and lead with the root's
-    own name relative to the directory, which comes to the same relative path.
+    `lead` is empty -- every path the walk produces starts with it, so stripping the
+    prefix leaves the path the rules are written against.
+
+    An ignore file *above* the walk root is spelled for differently, and not the way
+    git would spell it. ripgrep holds one path for such a file -- the walk root,
+    resolved, named relative to the directory holding it -- and puts each entry to
+    those rules as that path joined with the entry's own *name*, dropping whatever
+    directories lie between the two. Walking `root`, `root/sub/deep.bb` is judged as
+    `root/deep.bb`: `/root/*.bb` up there drops it and `/root/sub/deep.bb` up there
+    leaves it alone, which is the reverse of git's answer and the reverse of what the
+    same two rules do from the walk root's own ignore file. Spelling those layers the
+    way git spells them costs parity in both directions at once -- a file ripgrep lists
+    dropped from the count, and a file ripgrep ignores counted, read and sent on.
+
+    `lead` carries that path and is set for no other kind of layer, so a non-empty
+    `lead` is what marks one as coming from above; `prefix` goes unread there, a name
+    having nothing to strip.
     """
 
     prefix: str  # absolute path of a directory, with a trailing separator
-    lead: str = ""
+    lead: str = ""  # the walk root resolved, named relative to a directory above it
 
     def spell(self, absolute_path: str) -> str:
-        return self.lead + absolute_path.removeprefix(self.prefix)
+        if self.lead:
+            _, _, name = absolute_path.rpartition(os.sep)
+            return self.lead + name
+        return absolute_path.removeprefix(self.prefix)
 
 
 class _IgnoreLayer(NamedTuple):
@@ -671,12 +686,11 @@ def find_files(
     The spelling does still move one answer, and only one: `core.excludesFile`, which
     ripgrep anchors at the working directory and matches each path against as the caller
     wrote it. A rule of `*/x.txt` there drops `sub/x.txt` and leaves the same file named
-    absolutely alone. toko is held to ripgrep's answer on both counts, with one shape
-    excepted: an anchored rule spanning more than one segment in an ignore file *above*
-    the walk root disagrees with ripgrep, and in both directions. Walking `root` with
-    `/root/sub/deep.bb` in the parent's ignore file, toko drops a file ripgrep lists;
-    with `/root/*.bb` there, toko lists a `root/sub/deep.bb` that ripgrep drops.
-    See https://github.com/moredatarequired/toko/issues/134.
+    absolutely alone. toko is held to ripgrep's answer on both counts, and holding it
+    there means departing from git for an ignore file *above* the walk root: ripgrep
+    puts each entry to those rules under the walk root joined with the entry's own
+    name, so walking `root`, `/root/*.bb` in the parent's ignore file drops
+    `root/sub/deep.bb` while `/root/sub/deep.bb` there leaves it alone. See `_Anchor`.
 
     `on_error` receives the links and directories the walk could not resolve. They are
     reported rather than raised so that one of them cannot cost the caller the counts

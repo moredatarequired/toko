@@ -171,7 +171,14 @@ def main(
         typer.Option("--exclude", "-e", help="Glob patterns to exclude"),
     ] = None,
     no_ignore: Annotated[
-        bool, typer.Option("--no-ignore", help="Don't respect any ignore files")
+        bool,
+        typer.Option(
+            "--no-ignore",
+            help=(
+                "Don't respect .gitignore, .git/info/exclude, core.excludesFile, "
+                ".ignore or .rgignore"
+            ),
+        ),
     ] = False,
     no_ignore_dot: Annotated[
         bool,

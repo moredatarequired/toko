@@ -110,7 +110,14 @@ def _git_dir(directory: Path) -> Path | None:
         return None
     gitdir = _resolve_against(directory, pointer.removeprefix("gitdir:").strip())
     try:
-        shared = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+        # Undecodable bytes are replaced rather than round-tripped through os.fsdecode
+        # the way _global_config_value does: the path that leaves cannot exist, so the
+        # rules it names are dropped, which is what ripgrep does with a gitdir it
+        # cannot decode. Decoding strictly instead raised out of a walk ripgrep
+        # finishes, costing the caller every count in the tree.
+        shared = (
+            (gitdir / "commondir").read_text(encoding="utf-8", errors="replace").strip()
+        )
     except OSError:
         return gitdir
     return _resolve_against(gitdir, shared) if shared else gitdir

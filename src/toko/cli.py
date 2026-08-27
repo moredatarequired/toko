@@ -302,14 +302,17 @@ class InputSelection:
     had_failures: bool = False
 
 
-def _read_stdin() -> str:
-    """Read piped input as UTF-8 whatever the locale says.
+def _read_stdin() -> str | None:
+    """Read piped input as UTF-8 whatever the locale says, or None if it is binary.
 
     sys.stdin decodes with the locale's encoding and surrogateescape, so under a
     non-UTF-8 locale a piped UTF-8 file arrives as lone surrogates that the tokenizers
     then refuse to encode -- the run fails on input it should have counted.
     """
-    return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    try:
+        return sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _load_runtime_config() -> Config:
@@ -385,7 +388,14 @@ def _collect_inputs(
         return InputSelection(text=None, files=files, had_failures=had_failures)
 
     if not is_stdin_empty():
-        return InputSelection(text=_read_stdin(), files=[])
+        text = _read_stdin()
+        if text is None:
+            # The same UnicodeDecodeError that drops a binary file from the table.
+            # Replacing the undecodable bytes instead counted the replacements and
+            # printed a confident number for input toko had not read.
+            typer.echo("Warning: Skipping binary file <stdin>", err=True)
+            raise typer.Exit(1)
+        return InputSelection(text=text, files=[])
 
     typer.echo(
         "Error: No input provided. Use --text, provide paths, or pipe to stdin.",

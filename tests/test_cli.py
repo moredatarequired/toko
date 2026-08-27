@@ -54,7 +54,7 @@ def _isolated_config_home(tmp_path, monkeypatch):
 def _invoke_cli(
     args: list[str],
     env_overrides: dict[str, str] | None = None,
-    stdin: str | None = None,
+    stdin: str | bytes | None = None,
 ):
     """Invoke the CLI against the per-test config home."""
     return runner.invoke(app, args, env=env_overrides, input=stdin)
@@ -339,6 +339,20 @@ def test_count_from_stdin():
     result = _invoke_cli(["--header", "--format", "tsv"], stdin="hello world")
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
+
+
+def test_binary_stdin_is_refused_the_way_a_binary_file_is():
+    """A confident count for bytes toko never decoded is its worst failure mode.
+
+    A binary file on disk leaves the table with a warning and, when it was the only
+    input, a non-zero exit. Piped binary used to be decoded with replacement
+    characters and counted anyway, so the wrong number came back at exit 0.
+    """
+    result = _invoke_cli([], stdin=b"hello\x00\x80\x81world\n")
+
+    assert result.exit_code == 1
+    assert "Skipping binary file <stdin>" in result.stderr
+    assert not result.stdout.strip()
 
 
 def test_count_with_multiple_models():

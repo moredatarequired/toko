@@ -502,6 +502,40 @@ def test_info_exclude_is_found_through_a_linked_worktrees_gitdir_file(repo, tmp_
     assert names(find_files(worktree), worktree) == {"kept.txt", "seed.txt"}
 
 
+# Every file git points toko at is read the same way: undecodable bytes are replaced
+# and the walk goes on without whatever rules that file named. ripgrep reports each of
+# these on stderr and still lists the tree; decoding any of them strictly instead ends
+# the run, so the caller loses every count over one byte in one metadata file.
+def test_a_non_utf8_gitignore_line_does_not_kill_the_walk(repo):
+    (repo / ".gitignore").write_bytes(b"ignored.txt\nbad\xff\xfename.txt\n")
+    write(repo / "ignored.txt")
+    write(repo / "kept.txt")
+
+    assert names(find_files(repo), repo) == {"kept.txt"}
+
+
+def test_a_non_utf8_gitdir_pointer_does_not_kill_the_walk(tmp_path):
+    worktree = tmp_path / "linked"
+    worktree.mkdir()
+    (worktree / ".git").write_bytes(b"gitdir: /nonexistent/re\xffpo/.git/worktrees/w\n")
+    write(worktree / "kept.txt")
+
+    assert names(find_files(worktree), worktree) == {"kept.txt"}
+
+
+def test_a_non_utf8_commondir_does_not_kill_the_walk(repo, tmp_path):
+    write(repo / "seed.txt")
+    run_git(repo, "add", "-A")
+    run_git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "seed")
+    worktree = tmp_path / "linked"
+    run_git(repo, "worktree", "add", "-q", "--detach", str(worktree))
+    commondir = repo / ".git" / "worktrees" / "linked" / "commondir"
+    commondir.write_bytes(b"/nonexistent/re\xffpo/.git\n")
+    write(worktree / "kept.txt")
+
+    assert names(find_files(worktree), worktree) == {"kept.txt", "seed.txt"}
+
+
 def test_fifos_and_sockets_are_not_files_to_count(repo):
     """`rg --files` lists none of these, and read_text() on a FIFO never returns."""
     write(repo / "real.txt")

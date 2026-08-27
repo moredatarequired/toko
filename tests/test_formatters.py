@@ -9,7 +9,12 @@ import re
 import pytest
 
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
-from toko.formatters import SCHEMA_VERSION, format_file_table, format_output
+from toko.formatters import (
+    NO_REASON_RECORDED,
+    SCHEMA_VERSION,
+    format_file_table,
+    format_output,
+)
 from toko.result import Caveat, CaveatKind, Retirement, TokenCount
 
 
@@ -31,8 +36,12 @@ def _expected(model: str, tokens: int | None, **overrides):
     return count | overrides
 
 
-def _uncounted(model: str, reason: str | None = None):
-    """Build the same keys for a model the run could not count: no count, and why."""
+def _uncounted(model: str, reason: str = NO_REASON_RECORDED):
+    """Build the same keys for a model the run could not count: no count, and why.
+
+    The default is what a count with no error recorded against it says, since `reason`
+    is never null where `tokens` is.
+    """
     return _expected(model, None, approximate=None, reason=reason)
 
 
@@ -295,6 +304,24 @@ def test_a_requested_model_no_file_could_be_counted_for_keeps_its_column():
     assert [row[3:5] for row in rows[1:]] == [["", ""], ["", ""]]
 
 
+def test_a_model_named_twice_takes_one_column():
+    """The requested order is deduplicated, so a repeat cannot double a column.
+
+    `--model` is repeatable and nothing stops the same name being given twice; a header
+    with two `gpt-5_tokens` columns in it is not a header a consumer can key by name.
+    """
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}},
+        output_format="csv",
+        models=["gpt-5", "gpt-5"],
+    )
+
+    assert _csv_rows(output) == [
+        ["file", "gpt-5_tokens", "gpt-5_approximate"],
+        ["a.txt", "4", "false"],
+    ]
+
+
 def test_a_model_no_file_could_be_counted_for_keeps_its_total_cells_empty():
     """_compute_totals has no entry for such a model; the TOTAL row still has cells."""
     output = format_file_table(
@@ -305,6 +332,147 @@ def test_a_model_no_file_could_be_counted_for_keeps_its_total_cells_empty():
     )
 
     assert _csv_rows(output)[1] == ["TOTAL", "4", "false", "", ""]
+
+
+def test_the_model_table_keeps_a_row_for_a_model_that_could_not_be_counted():
+    """A model named but not counted stays on the page as N/A rather than vanishing.
+
+    The delimited formats leave the cell empty because a column read as numbers has to
+    hold numbers and blanks; the text table is read by a person, and a row that is not
+    there leaves them to notice for themselves that a model they asked for is missing.
+    """
+    output = format_output({"gpt-5": _counted(1234)}, models=["gpt-5", "gpt-6"])
+
+    assert _plain_lines(output) == ["Model  Tokens", "gpt-5   1,234", "gpt-6     N/A"]
+
+
+def test_the_model_table_says_na_in_the_cost_column_of_a_model_it_could_not_count():
+    """No count is no cost, and the cell says so with the same word the tokens cell uses."""
+    output = format_output(
+        {"gpt-5": _counted(1234, cost=0.0002)},
+        models=["gpt-5", "gpt-6"],
+        show_costs=True,
+    )
+
+    assert _plain_lines(output) == [
+        "Model  Tokens     Cost",
+        "gpt-5   1,234  $0.0002",
+        "gpt-6     N/A      N/A",
+    ]
+
+
+def test_the_file_table_says_na_for_a_model_no_file_could_be_counted_for():
+    """Every cell of that column, the TOTAL included, rather than a blank under a header.
+
+    The TOTAL is the one _compute_totals has no entry for at all, so it is the cell most
+    easily left empty -- and an empty cell under a column of N/A reads as a zero total.
+    """
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}, "b.txt": {"gpt-5": _counted(9)}},
+        models=["gpt-5", "gpt-6"],
+    )
+
+    assert _plain_lines(output) == [
+        "File   gpt-5  gpt-6",
+        "a.txt      4    N/A",
+        "b.txt      9    N/A",
+        "TOTAL     13    N/A",
+    ]
+
+
+def test_the_file_table_says_na_in_the_cost_cells_it_has_no_count_for():
+    output = format_file_table(
+        {
+            "a.txt": {"gpt-5": _counted(4, cost=0.0002)},
+            "b.txt": {"gpt-5": _counted(9, cost=0.0003)},
+        },
+        models=["gpt-5", "gpt-6"],
+        show_costs=True,
+    )
+
+    assert _plain_lines(output)[-3:] == [
+        "a.txt       4  $0.0002     N/A    N/A",
+        "b.txt       9  $0.0003     N/A    N/A",
+        "TOTAL      13  $0.0005     N/A    N/A",
+    ]
+
+
+def _two_files_that_failed_differently() -> dict[str, dict[str, str]]:
+    return {
+        "second.txt": {"gpt-5": "second.txt could not be counted"},
+        "first.txt": {"gpt-5": "first.txt could not be counted"},
+    }
+
+
+def test_the_total_names_the_first_failure_in_file_order_not_in_errors_order():
+    """Which failure a total names is read off the inputs, not off the errors mapping.
+
+    The two files failed differently and the mapping lists them in the opposite order,
+    so a total read from the mapping -- or read from the files backwards -- names the
+    second file, and two callers holding the same failures disagree about which came
+    first.
+    """
+    payload = json.loads(
+        format_file_table(
+            {"first.txt": {}, "second.txt": {}},
+            output_format="json",
+            models=["gpt-5"],
+            errors=_two_files_that_failed_differently(),
+        )
+    )
+
+    assert payload["totals"] == [_uncounted("gpt-5", "first.txt could not be counted")]
+
+
+def test_sorting_the_rows_does_not_change_which_failure_the_total_names():
+    """--sort decides the order rows print in, and nothing else.
+
+    Reading the reasons after the sort would make the total name whichever failure the
+    ordering floated to the top, so `--sort path` and `--sort input` over one set of
+    inputs would report different reasons for the same missing total.
+    """
+    errors = {
+        "z_named_first.txt": {"gpt-5": "z_named_first.txt could not be counted"},
+        "a_sorts_first.txt": {"gpt-5": "a_sorts_first.txt could not be counted"},
+    }
+    payload = json.loads(
+        format_file_table(
+            {"z_named_first.txt": {}, "a_sorts_first.txt": {}},
+            output_format="json",
+            models=["gpt-5"],
+            errors=errors,
+            sort_order="path",
+        )
+    )
+
+    # The sort did land, so the total below is outliving a reordering and not a no-op.
+    assert [source["source"]["name"] for source in payload["results"]] == [
+        "a_sorts_first.txt",
+        "z_named_first.txt",
+    ]
+    assert payload["totals"] == [
+        _uncounted("gpt-5", "z_named_first.txt could not be counted")
+    ]
+
+
+def test_a_count_with_no_error_recorded_still_says_why_it_has_none():
+    """A null `tokens` beside a null `reason` is the one count shape the document forbids.
+
+    The CLI records an error beside every missing count, so this is unreachable through
+    it; a library caller naming a model in `models=` with nothing in `errors=` for it
+    reaches it directly, and the invariant the JSON section states has to hold there too.
+    """
+    payload = json.loads(
+        format_file_table(
+            {"a.txt": {}}, output_format="json", models=["gpt-5"], errors={}
+        )
+    )
+
+    assert payload["results"][0]["counts"] == [_uncounted("gpt-5")]
+    assert payload["totals"] == [_uncounted("gpt-5")]
+    # The same holds of a text run, which reaches the count objects by another route.
+    text_payload = json.loads(format_output({}, output_format="json", models=["gpt-5"]))
+    assert text_payload == _text_envelope(_uncounted("gpt-5"))
 
 
 def _approximate(count: int, *, model: str) -> TokenCount:

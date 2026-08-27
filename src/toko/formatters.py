@@ -75,7 +75,11 @@ def format_table(
         counted = results.get(model)
         # A model that could not be counted keeps its row and says N/A, the same way
         # the per-file table already says it: a row missing outright would leave the
-        # reader to notice that a model they named is not on the page.
+        # reader to notice that a model they named is not on the page. Fenced by
+        # test_the_model_table_keeps_a_row_for_a_model_that_could_not_be_counted, by
+        # test_the_model_table_says_na_in_the_cost_column_of_a_model_it_could_not_count
+        # and, through a real terminal, by
+        # test_the_terminal_table_keeps_a_row_for_a_model_it_could_not_count.
         if counted is None:
             row = [model, "N/A"]
             if show_costs:
@@ -132,6 +136,15 @@ def _retirement_payload(retirement: Retirement | None) -> dict[str, object] | No
     }
 
 
+# What a count with no recorded reason says instead of saying nothing. `tokens` is
+# null exactly when `reason` says why, and that has to hold by construction rather
+# than by every caller remembering to pass a matching `errors` -- a library caller
+# who passes `models=` for a model it has no count and no error for still gets a
+# document the documented invariant is true of. Fenced by
+# test_a_count_with_no_error_recorded_still_says_why_it_has_none.
+NO_REASON_RECORDED = "No count was recorded for this model, and no reason was given."
+
+
 def _count_payload(
     model: str, counted: TokenCount | None, reason: str | None
 ) -> dict[str, object]:
@@ -150,7 +163,7 @@ def _count_payload(
             "cost": None,
             "caveats": [],
             "retirement": None,
-            "reason": reason,
+            "reason": NO_REASON_RECORDED if reason is None else reason,
         }
     return {
         "model": model,
@@ -361,6 +374,9 @@ def _model_reasons(
 
     Read in ``file_results`` order rather than in ``errors`` order, and called before
     the rows are sorted, so ``--sort`` cannot change which failure a total names.
+    Fenced by test_the_total_names_the_first_failure_in_file_order_not_in_errors_order
+    and by test_sorting_the_rows_does_not_change_which_failure_the_total_names, which
+    give the two files failures that can be told apart.
     """
     reasons: dict[str, str] = {}
     for filename in file_results:
@@ -386,6 +402,8 @@ def _collect_models(
     # for: it takes a column of empty cells rather than vanishing, because a user who
     # named a model is owed the news that it failed, and because a column set that
     # depends on what the counting produced cannot be parsed without reading it first.
+    # Deduplicated, since `--model` is repeatable and two columns of one name cannot be
+    # keyed apart: test_a_model_named_twice_takes_one_column.
     return list(dict.fromkeys(requested))
 
 
@@ -480,7 +498,9 @@ def _format_file_table_text(
         total_row: list[str] = ["TOTAL"]
         for model in models:
             # .get: a model no file could be counted for has no total, and says so the
-            # same way its rows do.
+            # same way its rows do. This row and the ones above it are fenced by
+            # test_the_file_table_says_na_for_a_model_no_file_could_be_counted_for and
+            # test_the_file_table_says_na_in_the_cost_cells_it_has_no_count_for.
             total = totals.get(model)
             total_row.append("N/A" if total is None else f"{total.count:,}")
             if show_costs:

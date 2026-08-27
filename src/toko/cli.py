@@ -304,7 +304,16 @@ def _prepare_prices(config: Config) -> None:
 
 
 def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
-    return cli_models or [config.default_model]
+    # Deduplicated once, here, so both input paths answer `-m gpt-5 -m gpt-5` the same
+    # way the file path already did: naming a model twice asks for it once, and it gets
+    # one row, one column and one count rather than two of each. Doing it before the
+    # counting also keeps a repeat from costing a second API call. Fenced by
+    # test_a_model_named_twice_is_asked_for_once, on both paths, and by
+    # test_a_model_named_twice_is_counted_once, which is what pins it to here rather
+    # than to the formatters.
+    if not cli_models:
+        return [config.default_model]
+    return list(dict.fromkeys(cli_models))
 
 
 def _resolve_output_format(config: Config, requested: OutputFormat) -> OutputFormat:

@@ -1245,7 +1245,13 @@ def test_json_says_why_a_model_has_no_count(monkeypatch):
 
 
 def test_json_says_why_one_file_of_several_has_no_count(tmp_path, monkeypatch):
-    """The reason is per source: the total names the first failure, not every file."""
+    """The reason is per source, and the total carries one of them rather than all.
+
+    Both files fail the same way here, so this pins the shape and not the choice. Which
+    failure the total names when the files fail differently is pinned by
+    test_the_total_names_the_first_failure_in_file_order_not_in_errors_order, in
+    tests/test_formatters.py, where the two failures can be told apart.
+    """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert not os.environ.get("ANTHROPIC_API_KEY")
     args = _two_file_args(tmp_path)
@@ -1258,6 +1264,8 @@ def test_json_says_why_one_file_of_several_has_no_count(tmp_path, monkeypatch):
     assert len(reasons) == 2
     assert all("ANTHROPIC_API_KEY" in reason for reason in reasons)
     assert payload["totals"][0]["tokens"] is None
+    # Identical, which is what keeps the line below from pinning first over second.
+    assert reasons[0] == reasons[1]
     assert payload["totals"][0]["reason"] == reasons[0]
 
 
@@ -1825,6 +1833,34 @@ def test_redirected_empty_stdin_is_input_and_counts_to_zero():
 
 
 @pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
+def test_the_terminal_table_keeps_a_row_for_a_model_it_could_not_count(tmp_path):
+    """A model that failed says N/A on the page rather than being left off it.
+
+    Only a terminal reaches this table -- off a tty the same command emits TSV -- so the
+    row a person actually sees is unfenced unless the check comes from a real pty.
+    """
+    script = tmp_path / "failed_model_table_driver.py"
+    script.write_text(
+        "from toko.cli import app\n\n"
+        "try:\n"
+        "    app(['-m', 'gpt-5', '-m', 'claude-sonnet-4-5', '--text', 'hello world'])\n"
+        "except SystemExit:\n"
+        "    pass\n"
+    )
+    env = dict(os.environ, TERM="dumb")
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("LINES", None)
+    env.pop("COLUMNS", None)
+
+    output = run_under_pty(str(script), env)
+
+    rows = [line.split() for line in _strip_ansi(output).splitlines()]
+    assert ["Model", "Tokens"] in rows
+    assert ["gpt-5", "2"] in rows
+    assert ["claude-sonnet-4-5", "N/A"] in rows
+
+
+@pytest.mark.skipif(not HAS_PTY, reason=PTY_SKIP_REASON)
 def test_the_no_input_error_needs_a_terminal_on_stdin(tmp_path):
     """The other half of the pair above, which only a real tty can reach.
 
@@ -1887,6 +1923,51 @@ def _two_file_args(tmp_path: Path) -> list[str]:
     second = tmp_path / "second.txt"
     second.write_text("goodbye world friend")
     return [str(first), str(second)]
+
+
+def test_a_model_named_twice_is_asked_for_once(tmp_path):
+    """`-m gpt-5 -m gpt-5` emits what `-m gpt-5` emits, on both input paths.
+
+    The two used to disagree: a run over paths deduplicated the models it was given and
+    a `--text` run passed them through, so one command printed its row twice and the
+    other printed it once.
+    """
+    once = _invoke_cli(["-m", "gpt-5", "--text", "hello world"])
+    twice = _invoke_cli(["-m", "gpt-5", "-m", "gpt-5", "--text", "hello world"])
+    assert (twice.exit_code, twice.stdout) == (once.exit_code, once.stdout)
+    # Spelled out, so the pair above cannot agree on the wrong shape: one model named
+    # is a bare number, and naming it twice still names one model.
+    assert twice.stdout == "2\n"
+
+    args = _two_file_args(tmp_path)
+    paths_once = _invoke_cli(["--header", "-m", "gpt-5", *args])
+    paths_twice = _invoke_cli(["--header", "-m", "gpt-5", "-m", "gpt-5", *args])
+    assert (paths_twice.exit_code, paths_twice.stdout) == (
+        paths_once.exit_code,
+        paths_once.stdout,
+    )
+    assert paths_twice.stdout.splitlines()[0] == (
+        "file\tgpt-5_tokens\tgpt-5_approximate"
+    )
+
+
+def test_a_model_named_twice_is_counted_once(monkeypatch):
+    """Deduplicated before the counting, not on the way out.
+
+    A repeat that reached the counting would cost a second API call and report the one
+    failure twice, whatever the printed table then did about the duplicate column.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert not os.environ.get("ANTHROPIC_API_KEY")
+
+    result = _invoke_cli(
+        ["-m", "claude-sonnet-4-5", "-m", "claude-sonnet-4-5", "--text", "hello world"]
+    )
+
+    warnings = [
+        line for line in result.stderr.splitlines() if "Failed to count tokens" in line
+    ]
+    assert len(warnings) == 1
 
 
 def test_total_only_csv(tmp_path):

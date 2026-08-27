@@ -241,16 +241,17 @@ Use `--format tsv` to force TSV even when running interactively.
 CSV and TSV have one shape per command, and you can work it out before you run it. A
 `--text` or stdin run is model-major: a `model` column, a `tokens` column, a `cost`
 column if and only if you passed `--cost`, and an `approximate` column, then one row per
-`--model` you named. A run over paths is file-major: a `file` column, then
-`<model>_tokens`, `<model>_cost` (with `--cost`) and `<model>_approximate` for each
-`--model` in the order you named them, then one row per source — or, with
-`--total-only`, one `TOTAL` row in place of them. Nothing in that depends on what the
-counting produced: a model that failed everywhere keeps its columns, and a run in which
-every count failed prints the same header and the same rows with the cells empty.
-`--no-header` removes the header row and nothing else. The one command that emits
-something other than the two shapes above is a headerless single-model TSV `--text` or
-stdin run, which collapses to a bare number — and that too is decided by the command
-rather than by the counting, as the next section describes.
+model you named. A run over paths is file-major: a `file` column, then `<model>_tokens`,
+`<model>_cost` (with `--cost`) and `<model>_approximate` for each model in the order you
+named them, then one row per source — or, with `--total-only`, one `TOTAL` row in place
+of them. A model named twice is asked for once on either shape, so `-m gpt-5 -m gpt-5`
+emits what `-m gpt-5` emits. Nothing in that depends on what the counting produced: a
+model that failed everywhere keeps its columns, and a run in which every count failed
+prints the same header and the same rows with the cells empty. `--no-header` removes the
+header row and nothing else. The one command that emits something other than the two
+shapes above is a headerless single-model TSV `--text` or stdin run, which collapses to
+a bare number — and that too is decided by the command rather than by the counting, as
+the next section describes.
 
 The text table is the one written for people, and it keeps the `$`; CSV and TSV write
 the `cost` column for a program instead:
@@ -284,13 +285,15 @@ to a bare number, which is what makes the usual scripting shape work:
 n=$(toko -m gpt-5 --text "hello world")   # 2
 ```
 
-What decides that shape is the command, never the counting: one `--model` and a
+What decides that shape is the command, never the counting: one model named and a
 non-TTY stdout is a bare number whatever comes back, including nothing — a model that
 failed prints an empty line, and the run exits `1`. Two things are worth knowing before
 you parse the output:
 
 - The collapse to a bare number is for `--text` and stdin only. Give `toko` a path and
-  you get a `file<TAB>tokens` row per file, because the filename has to go somewhere.
+  you get the file-major shape above, a `file<TAB>tokens<TAB>approximate` row per file:
+  the filename has to go somewhere, and a run over paths keeps the columns its shape
+  always has rather than dropping them for having only one model to describe.
 - A bare number has nowhere to say that a count is **approximate**, and the marker is
   on stderr, which the process at the other end of the pipe is not reading. Ask for a
   shape that has somewhere to put it if a run of yours can hit any of the three paths

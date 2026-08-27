@@ -660,10 +660,18 @@ def find_files(
 ) -> list[Path]:
     """Find files under a path, optionally recursing and applying skip rules.
 
-    The ignore rules read `path` as it is spelled rather than as it resolves, so the
-    same directory named `Path("sub")`, `Path.cwd() / "sub"` and `Path("../here/sub")`
-    can come back with three different listings. That is deliberate: ripgrep matches
-    each path the way the caller wrote it, and toko is held to ripgrep's answer.
+    Which ignore files apply is a question about the directory `path` names and not
+    about the name: `Path("sub")`, `Path.cwd() / "sub"` and `Path("../here/sub")` all
+    answer to one set of `.gitignore`, `.ignore` and `.rgignore` files, the ones at and
+    above that directory. The earlier claim here, that the three could come back with
+    three different listings, described a bug rather than a decision -- a walk root
+    spelled through `..` reported the working directory among its own ancestors and was
+    governed by ignore files sitting *below* it.
+
+    The spelling does still move one answer, and only one: `core.excludesFile`, which
+    ripgrep anchors at the working directory and matches each path against as the caller
+    wrote it. A rule of `*/x.txt` there drops `sub/x.txt` and leaves the same file named
+    absolutely alone. toko is held to ripgrep's answer on both counts.
 
     `on_error` receives the links and directories the walk could not resolve. They are
     reported rather than raised so that one of them cannot cost the caller the counts

@@ -80,10 +80,12 @@ def get_cached_count(text: str, model: str) -> int | None:
 
     try:
         # closing() around connect(), not just `with connect(...)`: the connection's own
-        # context manager ends the transaction but leaves the handle open, and a
+        # context manager commits or rolls back but never closes the handle, and a
         # sqlite3.Connection sits in a reference cycle, so only the cyclic collector
         # reclaims it. That collector does not run in pool worker threads, so without
-        # this the descriptors grow one per counted file until the process runs out.
+        # this the descriptors grow one per counted file until the process runs out. The
+        # nested `with conn:` is kept as belt and braces but does nothing here: a bare
+        # SELECT opens no transaction for it to end.
         with (
             closing(sqlite3.connect(cache_path, timeout=_BUSY_TIMEOUT_SECONDS)) as conn,
             conn,
@@ -108,6 +110,10 @@ def cache_count(text: str, model: str, count: int) -> None:
     message_hash = _hash_message(text)
 
     try:
+        # closing() for the same reason as above. The nested `with conn:` is not what
+        # makes the upsert atomic either: it issues nothing on entry, the INSERT's own
+        # implicit BEGIN and the explicit commit() below are the transaction, and it is
+        # SQLite's file locking that holds off other processes.
         with (
             closing(sqlite3.connect(cache_path, timeout=_BUSY_TIMEOUT_SECONDS)) as conn,
             conn,

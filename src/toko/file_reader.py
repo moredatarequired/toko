@@ -43,7 +43,28 @@ def _pathspec_internals_are_live() -> bool:
     # it away into the regex. A release that stopped carrying the raw text would
     # leave every `dir/` rule probed as a plain name, matching nothing and pruning
     # nothing, with no other symptom.
-    return _probe("dir", pattern, is_dir=True) == "dir/"
+    if _probe("dir", pattern, is_dir=True) != "dir/":
+        return False
+    # `_keep_leading_whitespace` reads a third behaviour: that a backslash before a
+    # whitespace character both survives the strip and is read back as that literal
+    # character. A release that stopped escaping whitespace this way would leave every
+    # leading-whitespace rule matching the wrong name -- and where the rule is a
+    # negation, matching nothing re-includes a file whose contents then reach a
+    # provider. Both a space and a tab, since they take different paths through the
+    # translation, and the negative half so that a widened escape is caught too.
+    for whitespace in (" ", "\t"):
+        escaped = next(
+            iter(
+                pathspec.PathSpec.from_lines(
+                    "gitwildmatch", [f"\\{whitespace}{whitespace}x.txt"]
+                ).patterns
+            )
+        )
+        if escaped.match_file(f"{whitespace}{whitespace}x.txt") is None:
+            return False
+        if escaped.match_file("x.txt") is not None:
+            return False
+    return True
 
 
 def _probe(relative: str, pattern: pathspec.Pattern, *, is_dir: bool) -> str:
@@ -105,7 +126,8 @@ if not _pathspec_internals_are_live():
         f"descendant through the {_DESCENDANT_MARK!r} capture group, which tells a "
         f"directory's own match from a match on something inside it, and the raw "
         f"pattern text on Pattern.pattern, which is where the trailing separator "
-        f"marking a rule directory-only survives."
+        f"marking a rule directory-only survives, and a backslash escape holding a "
+        f"leading whitespace character through the strip that would otherwise take it."
     )
 
 
@@ -188,10 +210,29 @@ def _dir_prefix(directory: Path) -> str:
     return str(directory).rstrip(os.sep) + os.sep
 
 
+def _keep_leading_whitespace(pattern: str) -> str:
+    r"""Spell a rule so pathspec keeps the leading whitespace git and ripgrep keep.
+
+    `GitWildMatchPattern.pattern_to_regex` strips *both* ends of a rule; git and
+    ripgrep strip only the trailing end, and leading whitespace is part of the name.
+    So `  x.txt` reaches pathspec as `x.txt`, which drops the file ripgrep lists and
+    keeps the one it ignores -- an under-exclusion that sends an excluded file's
+    contents to a provider, from the same line as the over-exclusion. Escaping the
+    first character defeats the strip, since it no longer starts with whitespace, and
+    pathspec reads `\ ` and `\t` back as the literal character. A rule that is only
+    whitespace has to be left alone: git reads it as a blank line, and a lone
+    backslash is a pattern pathspec rejects outright.
+    """
+    if not pattern.strip() or not pattern[:1].isspace():
+        return pattern
+    return "\\" + pattern
+
+
 def _build_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
     if not patterns:
         return None
-    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+    spelled = [_keep_leading_whitespace(pattern) for pattern in patterns]
+    return pathspec.PathSpec.from_lines("gitwildmatch", spelled)
 
 
 def _read_spec(path: Path) -> pathspec.PathSpec | None:

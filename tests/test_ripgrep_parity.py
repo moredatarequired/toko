@@ -1212,3 +1212,116 @@ def test_gitignored_subdirectories_of_the_named_directory_are_still_pruned(
 
     assert found == listed_by_ripgrep(nested_ignored_tree, "outer")
     assert found == {"outer/top.txt", "outer/kept/c.txt"}
+
+
+# The rule vocabulary these tests sweep. `pathspec` strips both ends of a rule; git and
+# ripgrep strip only the trailing end, so every shape below is one the previous
+# vocabulary -- trailing whitespace only -- had no way to write, which is why a
+# both-directions divergence sat in the ignore-rule pipeline unmeasured.
+LEADING_WHITESPACE_RULES = [
+    "  x.txt",
+    "\tx.txt",
+    " /x.txt",
+    "  *",
+    "  *.log",
+    "  build/",
+    "  # note",
+    "  !x.txt",
+    "  x.txt  ",
+    "  x.txt\\ ",
+    "   ",
+    "",
+]
+
+# Each rule shape has to meet both spellings of every name it could be read as, or a
+# rule matching the wrong file looks the same as a rule matching nothing.
+WHITESPACE_NAMES = [
+    "keep.txt",
+    "x.txt",
+    "  x.txt",
+    "\tx.txt",
+    "  x.txt ",
+    "a.log",
+    "  a.log",
+    "  # note",
+    "  !x.txt",
+    "build/f.txt",
+    "  build/f.txt",
+    "sub/x.txt",
+    "sub/  x.txt",
+]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("rule", LEADING_WHITESPACE_RULES)
+def test_a_rules_leading_whitespace_is_part_of_the_name_it_writes(
+    tmp_path, rule, newline
+):
+    r"""Leading whitespace is literal for git and ripgrep; only the trailing end strips.
+
+    A reader that strips both ends diverges twice from one line: the file the rule
+    actually names is counted, and its contents go to whatever provider is counting,
+    while a file sharing the stripped name is dropped from the count instead. Neither
+    half is visible in an editor. CRLF is swept alongside because a `\r` reaches the
+    strip as trailing whitespace and could plausibly be what removes the leading run.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(f"{rule}{newline}".encode())
+    for name in WHITESPACE_NAMES:
+        write(tmp_path / name)
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+
+
+def test_a_leading_space_drops_the_name_it_writes_and_spares_the_bare_one(tmp_path):
+    """The two directions of the divergence, pinned as an exact set rather than parity.
+
+    The parity sweep above passes if toko and ripgrep are wrong together, which is the
+    one way a differential test can go quiet. This says which files survive.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "  x.txt\n")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "  x.txt")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt", "x.txt"}
+
+
+def test_an_indented_star_is_not_a_rule_that_ignores_the_whole_tree(tmp_path):
+    """The severe shape, and an ordinary one to write: somebody indents a block.
+
+    Stripped to `*` the rule matches every file, so the walk finds nothing at all and
+    the run reports no files rather than a wrong number.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "  *\n")
+    write(tmp_path / "README.md")
+    write(tmp_path / "src" / "a.py")
+    write(tmp_path / "src" / "b.py")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"README.md", "src/a.py", "src/b.py"}
+
+
+def test_a_whitespace_only_rule_stays_the_no_operation_git_reads_it_as(tmp_path):
+    """Trailing whitespace still strips, and a rule that is only whitespace is blank.
+
+    The escape that holds leading whitespace cannot be applied here: git reads the line
+    as blank once its trailing whitespace is gone, and a rule that is a lone backslash
+    is one `pathspec` rejects outright.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"   \n\t\n")
+    write(tmp_path / "keep.txt")
+    write(tmp_path / "   ")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt", "   "}

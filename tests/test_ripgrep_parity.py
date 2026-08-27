@@ -30,23 +30,30 @@ def write(path: Path, text: str = "x") -> Path:
     return path
 
 
-def spelled_from(root: Path, cwd: Path) -> str:
-    """How the walk root is named on a command line run from `cwd`."""
-    return os.path.relpath(root, cwd)
+def spelled_from(root: Path, cwd: Path, *, absolute: bool = False) -> str:
+    """How the walk root is named on a command line run from `cwd`.
+
+    Absolute is a spelling of its own and not a detail of the harness: ripgrep matches
+    each path as the caller wrote it, so an absolutely named root strips against the
+    working directory nowhere and no anchored rule reaches the walk.
+    """
+    return str(root.absolute()) if absolute else os.path.relpath(root, cwd)
 
 
 def run_ripgrep(
-    root: Path, *args: str, cwd: Path | None = None
+    root: Path, *args: str, cwd: Path | None = None, absolute: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """List `root` with ripgrep, from `cwd` when the walk is not started inside it.
 
-    Until this took a `cwd`, every fixture in this file ran ripgrep with its working
-    directory equal to the walk root, so the suite was structurally blind to every
-    rule ripgrep resolves against the working directory rather than against the tree
-    -- core.excludesFile is one. That was a property of the harness, not of any one
-    test: no fixture could have caught it, however many were added.
+    What this helper can express is what the parity suite can cover, and twice now the
+    gap has been here rather than in any one test. It used to run ripgrep with its
+    working directory always equal to the walk root, which made the shapes that expose
+    a rule anchored at the working directory -- core.excludesFile is one -- inexpressible;
+    and it spelled the walk root relatively always, which made an absolutely named root
+    inexpressible even after `cwd` arrived. Fixtures cannot close a hole in the shapes
+    the helper can produce, so widen this before adding one.
     """
-    target = [] if cwd is None else ["--", spelled_from(root, cwd)]
+    target = [] if cwd is None else ["--", spelled_from(root, cwd, absolute=absolute)]
     result = subprocess.run(  # noqa: S603
         [RIPGREP, "--files", *args, *target],
         cwd=root if cwd is None else cwd,
@@ -60,18 +67,28 @@ def run_ripgrep(
     return result
 
 
-def ripgrep_files(root: Path, *args: str, cwd: Path | None = None) -> set[str]:
-    listed = set(run_ripgrep(root, *args, cwd=cwd).stdout.split("\n")) - {""}
+def ripgrep_files(
+    root: Path, *args: str, cwd: Path | None = None, absolute: bool = False
+) -> set[str]:
+    listed = set(
+        run_ripgrep(root, *args, cwd=cwd, absolute=absolute).stdout.split("\n")
+    ) - {""}
     if cwd is None:
         return listed
-    # ripgrep echoes the path it was given, so its listing is relative to `cwd`; the
-    # comparison is against toko's, which is relative to the walk root.
-    prefix = f"{spelled_from(root, cwd)}/"
+    # ripgrep echoes the path it was given, so its listing carries whatever spelling
+    # the root was named with; the comparison is against toko's, which is relative to
+    # the walk root.
+    prefix = f"{spelled_from(root, cwd, absolute=absolute)}/"
     return {name.removeprefix(prefix) for name in listed}
 
 
 def toko_files(
-    root: Path, *, hidden: bool, follow: bool = False, cwd: Path | None = None
+    root: Path,
+    *,
+    hidden: bool,
+    follow: bool = False,
+    cwd: Path | None = None,
+    absolute: bool = False,
 ) -> set[str]:
     """Walk with toko from the same working directory ripgrep was given.
 
@@ -87,7 +104,7 @@ def toko_files(
         # handing toko an absolute root while ripgrep gets a relative one compares two
         # walks that were asked different questions.
         found = find_files(
-            Path(spelled_from(root, workdir)),
+            Path(spelled_from(root, workdir, absolute=absolute)),
             include_hidden=hidden,
             follow_symlinks=follow,
         )
@@ -500,26 +517,37 @@ def anchored_excludes_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
     return tmp_path
 
 
+@pytest.mark.parametrize("spelling", ["relative", "absolute"])
 @pytest.mark.parametrize("workdir", ["", "sub", "outside"])
 @pytest.mark.parametrize("walk", ["", "sub"])
 def test_the_global_excludes_file_is_anchored_at_the_working_directory(
-    anchored_excludes_tree, tmp_path_factory, walk, workdir
+    anchored_excludes_tree, tmp_path_factory, walk, workdir, spelling
 ):
-    """Every combination of where the walk starts and where the process is standing.
+    """Every combination of walk start, working directory, and spelling of the root.
 
     `workdir="sub"` is the one that reads the same excludes file to a different answer
     -- `/x.txt` then names `sub/x.txt` and `sub/y.txt` names nothing -- and `outside`
     is the case where nothing anchored can be resolved at all. git would answer all
     three from the repository root; ripgrep answers them from the working directory,
     and so does toko -- deliberately, and recorded as issue 133.
+
+    `spelling="absolute"` is the only shape here that holds the empty anchor in place:
+    an absolutely named root strips against the working directory nowhere, so ripgrep
+    drops nothing anchored from it, and anchoring it at the working directory anyway
+    loses the `x.txt` ripgrep lists. The relative shapes, `outside` included, all pass
+    with the empty anchor removed -- a path that climbs out still carries its `..`
+    into the match, where an anchored rule misses it either way.
     """
     root = anchored_excludes_tree / walk if walk else anchored_excludes_tree
     if workdir == "outside":
         cwd = tmp_path_factory.mktemp("elsewhere")
     else:
         cwd = anchored_excludes_tree / workdir if workdir else anchored_excludes_tree
+    absolute = spelling == "absolute"
 
-    assert toko_files(root, hidden=False, cwd=cwd) == ripgrep_files(root, cwd=cwd)
+    assert toko_files(root, hidden=False, cwd=cwd, absolute=absolute) == ripgrep_files(
+        root, cwd=cwd, absolute=absolute
+    )
 
 
 @pytest.fixture

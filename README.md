@@ -114,22 +114,22 @@ toko --exclude '**/__pycache__/*' src/
 File                                   gpt-5
 src/toko/__init__.py                     378
 src/toko/cache.py                        863
-src/toko/cli.py                        5,605
+src/toko/cli.py                        5,731
 src/toko/config.py                     1,374
 src/toko/cost.py                       3,435
-src/toko/counter.py                    6,521
+src/toko/counter.py                    6,836
 src/toko/data/__init__.py                  8
-src/toko/data/models.toml              2,952
+src/toko/data/models.toml              4,031
 src/toko/data/openrouter_models.json     359
-src/toko/file_reader.py                3,675
+src/toko/file_reader.py                5,472
 src/toko/formatters.py                 4,109
-src/toko/models.py                     7,502
+src/toko/models.py                     7,497
 src/toko/output_format.py                 53
-src/toko/price_update.py               1,414
+src/toko/price_update.py               1,420
 src/toko/py.typed                          0
 src/toko/result.py                       107
 src/toko/sort_order.py                    50
-TOTAL                                 38,405
+TOTAL                                 41,723
 ```
 
 - Directories are processed recursively by default and skip what `rg --files` skips: the ignore files ripgrep honors (`.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`), hidden files and directories, symlinks, and anything that is not a regular file, such as a FIFO, a socket or a device node.

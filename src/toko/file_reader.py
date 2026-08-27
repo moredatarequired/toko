@@ -29,18 +29,19 @@ class _IgnoreLayer(NamedTuple):
 class _IgnoreRules(NamedTuple):
     """The ignore files reaching one directory, kept apart by the kind they came from.
 
-    ripgrep ranks them in two dimensions at once: `.ignore` and `.rgignore` outrank
-    `.gitignore` and `.git/info/exclude` however deep either one sits, and only within a
-    single kind does the deeper file win. One list ordered by depth can express the
-    second rule but not the first, so a root `.rgignore` would lose to a nested
-    `.gitignore` that ripgrep has it beating.
+    ripgrep ranks them in two dimensions at once: a stronger kind outranks a weaker one
+    however deep either file sits, and only within a single kind does the deeper file
+    win. `.rgignore` beats `.ignore`, which beats `.gitignore` and `.git/info/exclude`.
+    One list ordered by depth can express the second rule but not the first, so a root
+    `.rgignore` would lose to a nested `.ignore` that ripgrep has it beating.
     """
 
     git: tuple[_IgnoreLayer, ...] = ()
-    dot: tuple[_IgnoreLayer, ...] = ()
+    ignore: tuple[_IgnoreLayer, ...] = ()
+    rgignore: tuple[_IgnoreLayer, ...] = ()
 
     def matches(self, absolute_path: str, *, is_dir: bool = False) -> bool:
-        for group in (self.dot, self.git):
+        for group in (self.rgignore, self.ignore, self.git):
             for layer in reversed(group):
                 matched = layer.check(absolute_path, is_dir=is_dir)
                 if matched is not None:
@@ -126,12 +127,9 @@ def _is_within(directory: Path, root: Path | None) -> bool:
     return root is not None and (directory == root or root in directory.parents)
 
 
-# Weakest first: .git/info/exclude loses to the .gitignore beside it, and both lose to
-# .ignore/.rgignore, which _IgnoreRules ranks above them whatever depth each sits at.
-DOT_IGNORE_FILES = (".ignore", ".rgignore")
-
-
 def _git_layers(directory: Path, git_dir: Path | None) -> list[_IgnoreLayer]:
+    # Weakest first: .git/info/exclude loses to the .gitignore beside it, and both lose
+    # to .ignore and .rgignore, which _IgnoreRules ranks above them at any depth.
     sources = [directory / ".gitignore"]
     if git_dir is not None:
         sources.insert(0, git_dir / "info" / "exclude")
@@ -139,13 +137,13 @@ def _git_layers(directory: Path, git_dir: Path | None) -> list[_IgnoreLayer]:
     return [layer for layer in layers if layer is not None]
 
 
-def _dot_layers(directory: Path) -> list[_IgnoreLayer]:
-    layers = (_ignore_layer(directory, directory / name) for name in DOT_IGNORE_FILES)
-    return [layer for layer in layers if layer is not None]
+def _dot_layer(directory: Path, name: str) -> tuple[_IgnoreLayer, ...]:
+    layer = _ignore_layer(directory, directory / name)
+    return () if layer is None else (layer,)
 
 
-def _git_config_value(key: str, *, cwd: Path) -> str | None:
-    """Ask git for a config value, treating a missing or broken git as unset.
+def _global_config_value(key: str) -> str | None:
+    """Ask git for a config value from its global scope, treating a broken git as unset.
 
     The only value read here is core.excludesFile, which is a path, so git's stdout is
     decoded with os.fsdecode -- exactly how Python decodes every other filesystem path.
@@ -158,8 +156,7 @@ def _git_config_value(key: str, *, cwd: Path) -> str | None:
     """
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", "config", "--get", key],  # noqa: S607
-            cwd=cwd,
+            ["git", "config", "--global", "--get", key],  # noqa: S607
             capture_output=True,
             timeout=5,
             check=False,
@@ -171,9 +168,19 @@ def _git_config_value(key: str, *, cwd: Path) -> str | None:
     return os.fsdecode(result.stdout).strip() or None
 
 
-def _global_excludes_spec(start: Path) -> pathspec.PathSpec | None:
-    """core.excludesFile, read once and re-anchored at each repository it applies to."""
-    configured = _git_config_value("core.excludesFile", cwd=start)
+def _global_excludes_spec() -> pathspec.PathSpec | None:
+    """core.excludesFile, read once and re-anchored at each repository it applies to.
+
+    Only git's global scope is read. ripgrep parses $HOME/.gitconfig and
+    $XDG_CONFIG_HOME/git/config itself and never opens a repository's own config, so a
+    repo-local core.excludesFile moves what `git status` hides without moving what `rg`
+    lists. Reading it here diverged from ripgrep in both directions at once: a local
+    file was applied that ripgrep ignores, and a local setting naming a path that does
+    not exist suppressed the global file, which for git it does and for ripgrep it
+    does not. A configured path that is missing is still not fallen back from, which is
+    what both git and ripgrep do.
+    """
+    configured = _global_config_value("core.excludesFile")
     if configured:
         return _read_spec(Path(configured).expanduser())
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
@@ -211,11 +218,38 @@ class _Frame(NamedTuple):
     ancestors: tuple[tuple[tuple[int, int], Path], ...] = ()
 
 
-def _should_skip(absolute_path: str, frame: _Frame, options: _WalkOptions) -> bool:
-    if frame.rules.matches(absolute_path):
+def _dir_only(pattern: pathspec.Pattern) -> bool:
+    source = getattr(pattern, "pattern", None)
+    return isinstance(source, str) and source.endswith("/")
+
+
+def _excluded(spec: pathspec.PathSpec, relative: str, *, is_dir: bool) -> bool:
+    if not is_dir:
+        return spec.match_file(relative)
+    # ripgrep judges a directory on its plain path, letting only a `dir/`-shaped pattern
+    # see a trailing separator, so `dir/**` prunes what is inside `dir` and not `dir`
+    # itself. Handing pathspec `dir/` for every directory instead would prune the
+    # directory ripgrep descends into, and with it whatever a later pattern re-includes
+    # underneath. Patterns are walked in order because the last match is the one to win.
+    excluded = False
+    for pattern in spec.patterns:
+        if pattern.include is None:
+            continue
+        probe = f"{relative}/" if _dir_only(pattern) else relative
+        if pattern.match_file(probe) is not None:
+            excluded = pattern.include
+    return excluded
+
+
+def _should_skip(
+    absolute_path: str, frame: _Frame, options: _WalkOptions, *, is_dir: bool = False
+) -> bool:
+    if frame.rules.matches(absolute_path, is_dir=is_dir):
         return True
+    if options.exclude_spec is None:
+        return False
     relative = absolute_path.removeprefix(options.base_prefix)
-    return bool(options.exclude_spec and options.exclude_spec.match_file(relative))
+    return _excluded(options.exclude_spec, relative, is_dir=is_dir)
 
 
 def _describe(path: str, error: OSError) -> str:
@@ -226,7 +260,8 @@ def _initial_frame(base_dir: Path, base_abs: Path, options: _WalkOptions) -> _Fr
     """Build the base frame: every ignore file above the base that still reaches it."""
     repo_root = _find_repo_root(base_abs) if options.respect_gitignore else None
     git: list[_IgnoreLayer] = []
-    dot: list[_IgnoreLayer] = []
+    ignore: list[_IgnoreLayer] = []
+    rgignore: list[_IgnoreLayer] = []
     if options.respect_gitignore:
         if repo_root is not None:
             git.extend(_global_layers(repo_root, options.global_spec))
@@ -236,7 +271,8 @@ def _initial_frame(base_dir: Path, base_abs: Path, options: _WalkOptions) -> _Fr
             # .ignore and .rgignore are ripgrep's own, not git's, so a repository
             # boundary does not stop them the way it stops the git files.
             if options.respect_dot_ignore:
-                dot.extend(_dot_layers(directory))
+                ignore.extend(_dot_layer(directory, ".ignore"))
+                rgignore.extend(_dot_layer(directory, ".rgignore"))
     ancestors: tuple[tuple[tuple[int, int], Path], ...] = ()
     if options.follow_symlinks:
         try:
@@ -248,7 +284,7 @@ def _initial_frame(base_dir: Path, base_abs: Path, options: _WalkOptions) -> _Fr
     return _Frame(
         base_dir,
         options.base_prefix,
-        _IgnoreRules(tuple(git), tuple(dot)),
+        _IgnoreRules(tuple(git), tuple(ignore), tuple(rgignore)),
         repo_root,
         ancestors,
     )
@@ -260,7 +296,8 @@ def _descend(parent: _Frame, name: str, options: _WalkOptions) -> _Frame:
     directory = Path(prefix.rstrip(os.sep))
     repo_root = parent.repo_root
     git = parent.rules.git
-    dot = parent.rules.dot
+    ignore = parent.rules.ignore
+    rgignore = parent.rules.rgignore
     if options.respect_gitignore:
         git_dir = _git_dir(directory)
         if git_dir is not None:
@@ -272,8 +309,10 @@ def _descend(parent: _Frame, name: str, options: _WalkOptions) -> _Frame:
         if repo_root is not None:
             git = (*git, *_git_layers(directory, git_dir))
         if options.respect_dot_ignore:
-            dot = (*dot, *_dot_layers(directory))
-    return _Frame(parent.path / name, prefix, _IgnoreRules(git, dot), repo_root)
+            ignore = (*ignore, *_dot_layer(directory, ".ignore"))
+            rgignore = (*rgignore, *_dot_layer(directory, ".rgignore"))
+    rules = _IgnoreRules(git, ignore, rgignore)
+    return _Frame(parent.path / name, prefix, rules, repo_root)
 
 
 class _Entry(NamedTuple):
@@ -331,7 +370,9 @@ def _walk(base_dir: Path, options: _WalkOptions) -> list[Path]:
                 continue
             absolute = frame.prefix + entry.name
             if found.is_dir:
-                if not options.recursive or frame.rules.matches(absolute, is_dir=True):
+                if not options.recursive or _should_skip(
+                    absolute, frame, options, is_dir=True
+                ):
                     continue
                 ancestor = _looped_ancestor(frame, found.ident)
                 if ancestor is not None:
@@ -390,7 +431,7 @@ def find_files(
         include_hidden=include_hidden,
         follow_symlinks=follow_symlinks,
         exclude_spec=_build_spec(exclude_patterns),
-        global_spec=_global_excludes_spec(path) if respect_gitignore else None,
+        global_spec=_global_excludes_spec() if respect_gitignore else None,
         report=on_error if on_error is not None else lambda _message: None,
     )
     return sorted(_walk(path, options))

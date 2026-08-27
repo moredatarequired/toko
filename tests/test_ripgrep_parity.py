@@ -3,7 +3,7 @@
 import os
 import shutil
 import subprocess
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import pytest
 
@@ -178,3 +178,163 @@ def test_a_dangling_link_and_a_loop_are_reported_rather_than_raised(parity_tree)
     )
     # The rest of the tree is still counted: a bad link costs its own path, not the run.
     assert "keep.txt" in {path.name for path in found}
+
+
+@pytest.fixture
+def exclude_tree(tmp_path) -> Path:
+    """Build a tree that tells a pruning pattern apart from a filtering one.
+
+    `dir` holds both a file and a subdirectory, so `dir/**` and `dir/` differ in what
+    ripgrep opens even though they exclude the same files. `notes.md` keeps a pattern
+    as broad as `*.txt` from emptying the listing, which ripgrep exits 1 for.
+    """
+    for name in ("top.txt", "notes.md", "dir/a.txt", "dir/deep/b.txt", "other/c.txt"):
+        write(tmp_path / name)
+    return tmp_path
+
+
+def toko_scanned(root: Path, **kwargs) -> set[str]:
+    """Collect the directories a walk actually opened, relative to its root."""
+    opened: list[Path] = []
+    real_scandir = os.scandir
+
+    def spy(path):
+        opened.append(Path(path).absolute())
+        return real_scandir(path)
+
+    patch = pytest.MonkeyPatch()
+    try:
+        patch.setattr(os, "scandir", spy)
+        find_files(root, **kwargs)
+    finally:
+        patch.undo()
+    return {str(path.relative_to(root.absolute())) for path in opened}
+
+
+def ripgrep_skipped_dirs(root: Path, *args: str) -> set[str]:
+    """Read off the directories ripgrep's debug log says it refused to descend into."""
+    stderr = run_ripgrep(root, "--debug", *args).stderr
+    skipped = (
+        line.split("ignoring ", 1)[1].split(":", 1)[0].removeprefix("./")
+        for line in stderr.splitlines()
+        if "ignoring " in line
+    )
+    return {path for path in skipped if (root / path).is_dir()}
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["dir", "dir/", "dir/*", "dir/**", "**/dir/**", "dir/deep", "dir/deep/**", "*.txt"],
+)
+def test_an_exclude_pattern_drops_what_a_negated_ripgrep_glob_drops(
+    exclude_tree, pattern
+):
+    found = {
+        str(path.absolute().relative_to(exclude_tree.absolute()))
+        for path in find_files(exclude_tree, exclude_patterns=[pattern])
+    }
+
+    assert found == ripgrep_files(exclude_tree, "-g", f"!{pattern}")
+
+
+def test_an_exclude_pattern_prunes_exactly_the_directories_ripgrep_prunes(exclude_tree):
+    """`dir/` prunes `dir`; `dir/**` does not, because it only matches what is inside.
+
+    Both exclude the same files, so the file lists cannot tell them apart. What the
+    walk opens can, and it is the whole point of the flag: matching `dir/**` against
+    `dir/` would prune a directory ripgrep descends into.
+    """
+    assert ripgrep_skipped_dirs(exclude_tree, "-g", "!dir/") == {"dir"}
+    assert ripgrep_skipped_dirs(exclude_tree, "-g", "!dir/**") == {"dir/deep"}
+
+    assert toko_scanned(exclude_tree, exclude_patterns=["dir/"]) == {".", "other"}
+    assert toko_scanned(exclude_tree, exclude_patterns=["dir/**"]) == {
+        ".",
+        "dir",
+        "other",
+    }
+
+
+def test_a_root_rgignore_beats_a_deeper_ignore(tmp_path):
+    """Rank comes before depth: the kinds are separate tiers, not one ordered list."""
+    write(tmp_path / ".rgignore", "shadowed.txt\n")
+    write(tmp_path / "sub" / ".ignore", "!shadowed.txt\n")
+    write(tmp_path / "sub" / "shadowed.txt")
+    write(tmp_path / "sub" / "kept.txt")
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+    # The tree proves something only because the two files disagree about this path.
+    assert ripgrep_files(tmp_path) == {"sub/kept.txt"}
+
+
+def test_a_deeper_rgignore_still_beats_a_root_ignore(tmp_path):
+    """The same ranking read the other way, so neither order alone can pass both."""
+    write(tmp_path / ".ignore", "shadowed.txt\n")
+    write(tmp_path / "sub" / ".rgignore", "!shadowed.txt\n")
+    write(tmp_path / "sub" / "shadowed.txt")
+    write(tmp_path / "shadowed.txt")
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+    assert ripgrep_files(tmp_path) == {"sub/shadowed.txt"}
+
+
+@pytest.fixture
+def excludes_file_repo(tmp_path, isolated_git_env, monkeypatch) -> Path:
+    """Build a repository whose own core.excludesFile disagrees with the global one."""
+    gitconfig = isolated_git_env / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    global_excludes = write(isolated_git_env / "global-excludes", "*.dropped\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {global_excludes}\n")
+    write(isolated_git_env / "repo-excludes", "*.kept\n")
+
+    repo = tmp_path / "fx"
+    repo.mkdir()
+    run_git(repo, "init", "-q")
+    for name in ("keep.txt", "one.dropped", "two.kept"):
+        write(repo / name)
+    return repo
+
+
+def test_a_repository_local_excludes_file_is_passed_over_as_ripgrep_passes_it_over(
+    excludes_file_repo, isolated_git_env
+):
+    """Ripgrep parses the global git config itself and never opens a repository's own.
+
+    `git status` in this repository hides the opposite file, so reading the setting
+    with a plain `git config --get` -- which answers from the repository first --
+    excluded a file ripgrep lists and listed one ripgrep excludes.
+    """
+    run_git(
+        excludes_file_repo,
+        "config",
+        "--local",
+        "core.excludesFile",
+        str(isolated_git_env / "repo-excludes"),
+    )
+
+    assert toko_files(excludes_file_repo, hidden=False) == ripgrep_files(
+        excludes_file_repo
+    )
+    assert ripgrep_files(excludes_file_repo) == {"keep.txt", "two.kept"}
+
+
+def test_a_repository_local_excludes_file_naming_nothing_leaves_the_global_one_alone(
+    excludes_file_repo,
+):
+    """Point the local setting at nothing, and ripgrep still applies the global file.
+
+    For git, a local setting naming a path that does not exist suppresses the global
+    one and the excluded paths come back. ripgrep never reads the setting at all.
+    """
+    run_git(
+        excludes_file_repo,
+        "config",
+        "--local",
+        "core.excludesFile",
+        str(excludes_file_repo / "no-such-file"),
+    )
+
+    assert toko_files(excludes_file_repo, hidden=False) == ripgrep_files(
+        excludes_file_repo
+    )
+    assert ripgrep_files(excludes_file_repo) == {"keep.txt", "two.kept"}

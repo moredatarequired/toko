@@ -321,7 +321,7 @@ def test_a_non_ascii_excludes_file_path_does_not_kill_the_run(tmp_path):
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)  # noqa: S607
     subprocess.run(  # noqa: S603
-        ["git", "config", "core.excludesFile", str(excludes)],  # noqa: S607
+        ["git", "config", "--global", "core.excludesFile", str(excludes)],  # noqa: S607
         cwd=repo,
         check=True,
     )
@@ -338,3 +338,19 @@ def test_a_non_ascii_excludes_file_path_does_not_kill_the_run(tmp_path):
     assert "a.txt" in result.stdout.decode("utf-8", "replace")
     # The excludes file was not merely survived, it was applied.
     assert "notes.swp" not in result.stdout.decode("utf-8", "replace")
+
+
+def test_a_starred_directory_exclude_still_lets_a_later_pattern_re_include(tmp_path):
+    """Pruning must not swallow the directory a `dir/**` pattern only reaches inside.
+
+    ripgrep opens `dir` for `!dir/**` and prunes what is under it, so `dir` is not
+    excluded and a following `!dir/keep.txt` still has somewhere to match.
+    """
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "top.txt").write_text("x")
+    (tmp_path / "dir" / "keep.txt").write_text("x")
+    (tmp_path / "dir" / "drop.txt").write_text("x")
+
+    found = find_files(tmp_path, exclude_patterns=["dir/**", "!dir/keep.txt"])
+
+    assert {path.name for path in found} == {"top.txt", "keep.txt"}

@@ -91,11 +91,27 @@ def test_info_exclude_is_honored(repo):
 
 def test_core_excludes_file_is_honored(repo, tmp_path):
     excludes = write(tmp_path / "my-excludes", "*.swp\n")
-    run_git(repo, "config", "--local", "core.excludesFile", str(excludes))
+    run_git(repo, "config", "--global", "core.excludesFile", str(excludes))
     write(repo / "notes.txt")
     write(repo / "notes.swp")
 
     assert names(find_files(repo), repo) == {"notes.txt"}
+
+
+def test_a_repository_local_core_excludes_file_is_passed_over(repo, tmp_path):
+    """Ripgrep parses only git's global config, so a repository's own is passed over.
+
+    tests/test_ripgrep_parity.py holds the differential that establishes this.
+    """
+    globally = write(tmp_path / "global-excludes", "*.swp\n")
+    locally = write(tmp_path / "repo-excludes", "*.tmp\n")
+    run_git(repo, "config", "--global", "core.excludesFile", str(globally))
+    run_git(repo, "config", "--local", "core.excludesFile", str(locally))
+    write(repo / "notes.txt")
+    write(repo / "notes.swp")
+    write(repo / "notes.tmp")
+
+    assert names(find_files(repo), repo) == {"notes.txt", "notes.tmp"}
 
 
 def test_xdg_git_ignore_is_the_default_excludes_file(repo, isolated_git_env):

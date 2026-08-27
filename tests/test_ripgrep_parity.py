@@ -1518,3 +1518,53 @@ def test_an_undecodable_line_truncates_every_kind_of_ignore_file(tmp_path, ignor
 
     assert toko_files(tmp_path, hidden=False) == listed
     assert listed == {"keep.txt"}
+
+
+def test_a_gitignore_directly_above_the_repository_root_reaches_nothing_inside_it(
+    tmp_path,
+):
+    """Where the ancestor search stops, measured one level out rather than at infinity.
+
+    Ancestor `.gitignore` layers apply only within the repository the walk root belongs
+    to. The realistic wrong version of that is not a missing boundary but one sitting a
+    level too high, and a fixture whose ignore file is far above the root cannot tell
+    the two apart -- both wrong versions pass it. This puts the file exactly one level
+    above the boundary, where an off-by-one is the whole difference. The rule governs
+    whether a file's contents leave the machine, so it is worth more than one assertion.
+    """
+    outside = tmp_path / "outside"
+    repo = outside / "repo"
+    repo.mkdir(parents=True)
+    run_git(repo, "init", "-q")
+    write(outside / ".gitignore", "secret.txt\n")
+    write(repo / "secret.txt")
+    write(repo / "keep.txt")
+
+    listed = ripgrep_files(repo)
+
+    assert toko_files(repo, hidden=False) == listed
+    assert listed == {"keep.txt", "secret.txt"}
+
+
+def test_a_gitignore_with_no_repository_anywhere_reaches_nothing(tmp_path):
+    """The other angle on the same boundary: no repository, so no git layer at all.
+
+    A boundary that is merely too generous still refuses this tree, because there is no
+    repository root to be generous about. Only a boundary that is gone entirely reads
+    the file -- which is the divergence that hands an excluded file to a provider on a
+    directory that was never a checkout.
+    """
+    write(tmp_path / ".gitignore", "secret.txt\n")
+    write(tmp_path / "secret.txt")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt", "secret.txt"}
+
+
+# Shapes the rule vocabulary had no way to write before, each measured against ripgrep
+# rather than reasoned about. The escaped forms matter because the fix now spells rules
+# with a backslash of its own: an escape the *user* wrote has to go on meaning what it
+# meant. Spelled with explicit escapes because several differ only in bytes on screen.

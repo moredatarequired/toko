@@ -1127,7 +1127,7 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         assert get_cached_count(content, cache_key("gpt-5")) == int(gpt_5)
 
 
-def test_a_fully_cached_run_still_loads_the_tokenizer_up_front(tmp_path):
+def test_a_fully_cached_run_still_loads_the_tokenizer_up_front(tmp_path, monkeypatch):
     """A run builds the tokenizers it might need before it dispatches any counting.
 
     Demonstrated on a run that needs none: every count is already cached, so nothing in
@@ -1142,7 +1142,7 @@ def test_a_fully_cached_run_still_loads_the_tokenizer_up_front(tmp_path):
     warming = _invoke_cli(args)
     assert warming.exit_code == 0
 
-    counter._TOKENIZER_CACHE.clear()  # noqa: SLF001
+    monkeypatch.setattr(counter, "_TOKENIZER_CACHE", {})
     cached = _invoke_cli(args)
 
     assert cached.exit_code == 0

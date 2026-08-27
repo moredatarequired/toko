@@ -1,5 +1,6 @@
 """File and directory reading utilities."""
 
+import functools
 import os
 import stat
 import subprocess
@@ -250,8 +251,37 @@ def _dot_layer(directory: Path, name: str) -> tuple[_IgnoreLayer, ...]:
     return () if layer is None else (layer,)
 
 
+# Everything git resolves its global scope from: the file GIT_CONFIG_GLOBAL names, the
+# homes it falls back to when that is unset, and the GIT_CONFIG_* variables that carry
+# config in the environment rather than in a file. The cached lookup is keyed on them,
+# so a caller that repoints any of them asks git again instead of reading back an
+# answer resolved from a different environment.
+_GIT_CONFIG_HOME_VARS = ("HOME", "XDG_CONFIG_HOME")
+
+
+def _git_config_environment() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        sorted(
+            (name, value)
+            for name, value in os.environ.items()
+            if name.startswith("GIT_CONFIG") or name in _GIT_CONFIG_HOME_VARS
+        )
+    )
+
+
 def _global_config_value(key: str) -> str | None:
+    return _cached_global_config_value(key, _git_config_environment())
+
+
+@functools.cache
+def _cached_global_config_value(
+    key: str, _environment: tuple[tuple[str, str], ...]
+) -> str | None:
     """Ask git for a config value from its global scope, treating a broken git as unset.
+
+    Cached because find_files runs this once per path argument and the answer cannot
+    change under a fixed environment mid-run, so `toko a b c` was paying for three
+    `git config` subprocesses to be told the same thing three times.
 
     The only value read here is core.excludesFile, which is a path, so git's stdout is
     decoded with os.fsdecode -- exactly how Python decodes every other filesystem path.

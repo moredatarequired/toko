@@ -20,6 +20,21 @@ ErrorReporter = Callable[[str], None]
 _DESCENDANT_MARK = "ps_d"
 
 
+def _probe(relative: str, pattern: pathspec.Pattern, *, is_dir: bool) -> str:
+    """How one entry is spelled for one rule: only a `dir/` rule sees the separator.
+
+    ripgrep judges every entry on its own path and leaves containment to the walk,
+    so a directory is `dir` to `dir/**`, which matches only what is inside it, and
+    `dir/` to `dir/`, which is the rule that prunes it. Showing the separator to every
+    rule instead prunes the directory ripgrep descends into, and with it whatever a
+    later negation re-includes underneath -- files dropped from the count in silence,
+    since pruning `dir` and excluding its contents otherwise list the same tree.
+    """
+    source = getattr(pattern, "pattern", None)
+    directory_only = isinstance(source, str) and source.endswith("/")
+    return f"{relative}/" if is_dir and directory_only else relative
+
+
 def _matched_self(pattern: pathspec.Pattern, probe: str) -> bool | None:
     """One pattern's verdict on the entry `probe` names, never on what lies beneath it.
 
@@ -54,13 +69,12 @@ class _IgnoreLayer(NamedTuple):
 
     def check(self, absolute_path: str, *, is_dir: bool) -> bool | None:
         relative = absolute_path.removeprefix(self.anchor)
-        probe = f"{relative}/" if is_dir else relative
         # Last match wins, the way pathspec and git both rank a file's patterns.
         verdict: bool | None = None
         for pattern in self.spec.patterns:
             if pattern.include is None:
                 continue
-            matched = _matched_self(pattern, probe)
+            matched = _matched_self(pattern, _probe(relative, pattern, is_dir=is_dir))
             if matched is not None:
                 verdict = matched
         return verdict
@@ -265,25 +279,16 @@ class _Frame(NamedTuple):
     ancestors: tuple[tuple[tuple[int, int], Path], ...] = ()
 
 
-def _dir_only(pattern: pathspec.Pattern) -> bool:
-    source = getattr(pattern, "pattern", None)
-    return isinstance(source, str) and source.endswith("/")
-
-
 def _excluded(spec: pathspec.PathSpec, relative: str, *, is_dir: bool) -> bool:
     if not is_dir:
         return spec.match_file(relative)
-    # ripgrep judges a directory on its plain path, letting only a `dir/`-shaped pattern
-    # see a trailing separator, so `dir/**` prunes what is inside `dir` and not `dir`
-    # itself. Handing pathspec `dir/` for every directory instead would prune the
-    # directory ripgrep descends into, and with it whatever a later pattern re-includes
-    # underneath. Patterns are walked in order because the last match is the one to win.
+    # Patterns are walked in order because the last match is the one to win, and each
+    # is shown the spelling _probe picks for it rather than one spelling for all.
     excluded = False
     for pattern in spec.patterns:
         if pattern.include is None:
             continue
-        probe = f"{relative}/" if _dir_only(pattern) else relative
-        if pattern.match_file(probe) is not None:
+        if pattern.match_file(_probe(relative, pattern, is_dir=True)) is not None:
             excluded = pattern.include
     return excluded
 

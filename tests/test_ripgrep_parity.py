@@ -293,6 +293,68 @@ def test_an_exclude_pattern_prunes_exactly_the_directories_ripgrep_prunes(exclud
     }
 
 
+@pytest.fixture
+def starred_tree(tmp_path) -> Path:
+    """Build the one tree where pruning `dir` and filtering inside it disagree.
+
+    `dir/**` reaches only what is under `dir`, so ripgrep opens `dir` and a following
+    `!dir/keep.txt` still has somewhere to match. Prune `dir` instead and the listings
+    stay identical except for that single file, which is why probing every rule with a
+    trailing separator dropped it from the count without anything looking wrong.
+    """
+    run_git(tmp_path, "init", "-q")
+    for name in (
+        "top.txt",
+        "dir/keep.txt",
+        "dir/drop.txt",
+        "dir/deep/b.txt",
+        "other/c.txt",
+    ):
+        write(tmp_path / name)
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "source", [".gitignore", ".ignore", ".rgignore", ".git/info/exclude"]
+)
+def test_a_starred_directory_rule_leaves_a_later_negation_somewhere_to_match(
+    starred_tree, source
+):
+    """Each ignore file is a separate source reaching one probe; none may prune `dir`."""
+    write(starred_tree / source, "dir/**\n!dir/keep.txt\n")
+
+    found = toko_files(starred_tree, hidden=False)
+
+    assert found == ripgrep_files(starred_tree)
+    assert "dir/keep.txt" in found
+
+
+def test_a_starred_rule_in_the_global_excludes_file_also_spares_the_negation(
+    starred_tree, isolated_git_env, monkeypatch
+):
+    """The one ignore source that is not a file in the tree, held to the same rule."""
+    gitconfig = isolated_git_env / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    excludes = write(isolated_git_env / "global-excludes", "dir/**\n!dir/keep.txt\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
+
+    found = toko_files(starred_tree, hidden=False)
+
+    assert found == ripgrep_files(starred_tree)
+    assert "dir/keep.txt" in found
+
+
+def test_an_ignore_file_prunes_exactly_the_directories_ripgrep_prunes(starred_tree):
+    """The mechanism under the re-include: `dir` is opened, `dir/deep` is not."""
+    write(starred_tree / ".gitignore", "dir/**\n!dir/keep.txt\n")
+    skipped = ripgrep_skipped_dirs(starred_tree)
+
+    assert "dir/deep" in skipped
+    assert "dir" not in skipped
+
+    assert toko_scanned(starred_tree) == {".", "dir", "other"}
+
+
 def test_a_root_rgignore_beats_a_deeper_ignore(tmp_path):
     """Rank comes before depth: the kinds are separate tiers, not one ordered list."""
     write(tmp_path / ".rgignore", "shadowed.txt\n")

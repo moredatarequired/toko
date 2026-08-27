@@ -20,7 +20,7 @@ ErrorReporter = Callable[[str], None]
 _DESCENDANT_MARK = "ps_d"
 
 
-def _descendant_mark_is_live() -> bool:
+def _pathspec_internals_are_live() -> bool:
     pattern = next(
         iter(pathspec.PathSpec.from_lines("gitwildmatch", ["dir/"]).patterns)
     )
@@ -31,10 +31,18 @@ def _descendant_mark_is_live() -> bool:
     # it reaches to tell a directory's own match from a match on something inside it,
     # so a release that kept the name and widened the capture would pass a check on
     # the name alone while making every descendant read as the directory itself.
-    return (
-        _matched_self(pattern, "dir/below.txt") is None
-        and _matched_self(pattern, "dir/") is True
-    )
+    if (
+        _matched_self(pattern, "dir/below.txt") is not None
+        or _matched_self(pattern, "dir/") is not True
+    ):
+        return False
+    # `_probe` reads a second internal, and one the group check cannot stand in for:
+    # `Pattern.pattern` holds the raw source text, which is the only place the
+    # trailing separator marking a rule directory-only survives -- pathspec compiles
+    # it away into the regex. A release that stopped carrying the raw text would
+    # leave every `dir/` rule probed as a plain name, matching nothing and pruning
+    # nothing, with no other symptom.
+    return _probe("dir", pattern, is_dir=True) == "dir/"
 
 
 def _probe(relative: str, pattern: pathspec.Pattern, *, is_dir: bool) -> str:
@@ -82,17 +90,21 @@ def _matched_self(pattern: pathspec.Pattern, probe: str) -> bool | None:
     return None
 
 
-# The mark is private to pathspec and the requirement carries no upper bound, so a
-# release that renamed, dropped or widened it would not raise: `_matched_self` would
-# call every descendant match the directory's own, and `dir/**` would quietly prune
-# `dir` again -- undoing the re-inclusion below for an installed user while the pinned
-# lockfile keeps CI green. So say so at import instead. The check runs here rather than
-# beside the function because it exercises `_matched_self` itself.
-if not _descendant_mark_is_live():
+# Both internals are private to pathspec and the requirement carries no upper bound,
+# so a release that moved either would not raise. Renaming, dropping or widening the
+# mark would have `_matched_self` call every descendant match the directory's own, and
+# `dir/**` would quietly prune `dir` again; dropping the raw source text would have
+# `_probe` spell every directory without its separator, and every `dir/` rule would
+# quietly stop pruning. Either one undoes the walk below for an installed user while
+# the pinned lockfile keeps CI green, so say so at import instead. The check runs here
+# rather than beside the function because it exercises `_matched_self` and `_probe`.
+if not _pathspec_internals_are_live():
     raise RuntimeError(
-        f"pathspec no longer reports a match on a descendant through the "
-        f"{_DESCENDANT_MARK!r} capture group as toko.file_reader reads it, which it "
-        f"needs to tell a directory's own match from a match on something inside it."
+        f"pathspec no longer exposes what toko.file_reader reads of it: a match on a "
+        f"descendant through the {_DESCENDANT_MARK!r} capture group, which tells a "
+        f"directory's own match from a match on something inside it, and the raw "
+        f"pattern text on Pattern.pattern, which is where the trailing separator "
+        f"marking a rule directory-only survives."
     )
 
 

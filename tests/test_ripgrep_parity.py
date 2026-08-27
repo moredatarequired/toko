@@ -376,3 +376,124 @@ def test_a_repository_local_excludes_file_naming_nothing_leaves_the_global_one_a
         excludes_file_repo
     )
     assert ripgrep_files(excludes_file_repo) == {"keep.txt", "two.kept"}
+
+
+def listed_by_toko(root: Path, argument: str) -> set[str]:
+    """List what toko finds for one named argument, spelled relative to `root`."""
+    return {
+        str(path.absolute().relative_to(root.absolute()))
+        for path in find_files(root / argument)
+    }
+
+
+def listed_by_ripgrep(root: Path, argument: str) -> set[str]:
+    """Ask ripgrep for the same listing, re-spelled so the two are comparable.
+
+    ripgrep echoes each argument's own spelling back in its output, so a bare, a
+    dot-relative and an absolute argument produce three different sets of strings
+    for one set of files.
+    """
+    return {
+        str((root / line).absolute().relative_to(root.absolute()))
+        for line in ripgrep_files(root, argument)
+    }
+
+
+@pytest.fixture
+def named_ignored_tree(tmp_path) -> Path:
+    """Build a repository whose `.gitignore` excludes a directory and a file in it."""
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "igndir/\n*.log\n")
+    write(tmp_path / "igndir" / "x.txt")
+    write(tmp_path / "igndir" / "y.log")
+    write(tmp_path / "igndir" / "sub" / "deep.txt")
+    write(tmp_path / "keep.txt")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        pytest.param(lambda _root: "igndir", id="bare"),
+        pytest.param(lambda _root: "./igndir", id="dot-relative"),
+        pytest.param(lambda root: str(root / "igndir"), id="absolute"),
+    ],
+)
+def test_naming_a_gitignored_directory_searches_it(named_ignored_tree, spelling):
+    """Ignore rules govern discovery, not arguments: a named path is searched.
+
+    Every spelling is the same argument, and the rule that excludes it is the same
+    rule; toko answered `No files found matching criteria` and exited 1 for all three,
+    which is not a missing answer but a wrong one stated out loud.
+    """
+    argument = spelling(named_ignored_tree)
+
+    found = listed_by_toko(named_ignored_tree, argument)
+
+    assert found == listed_by_ripgrep(named_ignored_tree, argument)
+    assert found == {"igndir/sub/deep.txt", "igndir/x.txt"}
+
+
+def test_a_rule_matching_inside_the_named_directory_still_applies(named_ignored_tree):
+    """`*.log` reaches `igndir/y.log` even though `igndir/` no longer reaches it.
+
+    This is the half that separates exempting the argument from switching the ignore
+    rules off underneath it: both list `x.txt`, and only the first drops `y.log`.
+    """
+    found = listed_by_toko(named_ignored_tree, "igndir")
+
+    assert found == listed_by_ripgrep(named_ignored_tree, "igndir")
+    assert "igndir/x.txt" in found
+    assert "igndir/y.log" not in found
+
+
+def test_walking_the_parent_still_excludes_the_ignored_directory(named_ignored_tree):
+    """Leave the directory nobody named exactly where it was.
+
+    It is discovered, so it is judged, so it is pruned with everything under it.
+    """
+    found = listed_by_toko(named_ignored_tree, ".")
+
+    assert found == listed_by_ripgrep(named_ignored_tree, ".")
+    assert found == {"keep.txt"}
+
+
+@pytest.mark.parametrize("argument", ["igndir/x.txt", "igndir/y.log", "keep.txt"])
+def test_naming_a_file_directly_lists_it_however_it_is_ignored(
+    named_ignored_tree, argument
+):
+    """A named file is an argument too -- under a pruned directory, or excluded itself.
+
+    This already held, and it depends on the same boundary the directory case moves,
+    so it is pinned rather than left to be noticed later.
+    """
+    assert listed_by_toko(named_ignored_tree, argument) == {argument}
+    assert listed_by_ripgrep(named_ignored_tree, argument) == {argument}
+
+
+@pytest.fixture
+def nested_ignored_tree(tmp_path) -> Path:
+    """Build an ignored directory holding two more, barred from above and from within.
+
+    `blocked/` is named in the root `.gitignore`, the same file that excludes `outer`
+    itself, so the exemption has to reach one of that file's rules without reaching
+    the other. `own/` comes from `outer`'s own `.gitignore`, which is only read
+    because the walk starts here.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "outer/\nouter/blocked/\n")
+    write(tmp_path / "outer" / ".gitignore", "own/\n")
+    write(tmp_path / "outer" / "top.txt")
+    write(tmp_path / "outer" / "blocked" / "a.txt")
+    write(tmp_path / "outer" / "own" / "b.txt")
+    write(tmp_path / "outer" / "kept" / "c.txt")
+    return tmp_path
+
+
+def test_gitignored_subdirectories_of_the_named_directory_are_still_pruned(
+    nested_ignored_tree,
+):
+    found = listed_by_toko(nested_ignored_tree, "outer")
+
+    assert found == listed_by_ripgrep(nested_ignored_tree, "outer")
+    assert found == {"outer/top.txt", "outer/kept/c.txt"}

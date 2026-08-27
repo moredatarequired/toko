@@ -15,6 +15,37 @@ import pathspec
 ErrorReporter = Callable[[str], None]
 
 
+# pathspec's own name for the separator that opened a match on something *below* a
+# pattern; it reads the same group in GitIgnoreSpec to rank a directory match.
+_DESCENDANT_MARK = "ps_d"
+
+
+def _matched_self(pattern: pathspec.Pattern, probe: str) -> bool | None:
+    """One pattern's verdict on the entry `probe` names, never on what lies beneath it.
+
+    Ignore rules govern discovery, not arguments: a path the caller names is searched,
+    and the rules still apply to what is found underneath it. ripgrep gets both halves
+    from matching each entry against the rule on its own and leaving containment to the
+    walk, which prunes a matched directory and so never reaches its children. pathspec
+    instead expands `dir/` to match every descendant, standing in for that pruning --
+    which is redundant wherever the walk did the pruning itself, and wrong at the one
+    directory it never judged, the one the caller named. Reading `dir/x.txt` as a match
+    for `dir/` there emptied the walk of a named ignored directory. So the expansion is
+    dropped and the walk is left to prune; a rule matching something *within* the tree,
+    `*.log` against `dir/y.log`, is the entry's own match and still bites.
+    """
+    found = pattern.match_file(probe)
+    if found is None:
+        return None
+    if found.match.groupdict().get(_DESCENDANT_MARK) is None:
+        return pattern.include
+    # A directory is probed with a trailing separator, so a pattern that consumed
+    # exactly that one matched the directory itself rather than something inside it.
+    if found.match.end(_DESCENDANT_MARK) == len(probe):
+        return pattern.include
+    return None
+
+
 class _IgnoreLayer(NamedTuple):
     """One ignore file's patterns, anchored at the directory they are relative to."""
 
@@ -23,7 +54,16 @@ class _IgnoreLayer(NamedTuple):
 
     def check(self, absolute_path: str, *, is_dir: bool) -> bool | None:
         relative = absolute_path.removeprefix(self.anchor)
-        return self.spec.check_file(f"{relative}/" if is_dir else relative).include
+        probe = f"{relative}/" if is_dir else relative
+        # Last match wins, the way pathspec and git both rank a file's patterns.
+        verdict: bool | None = None
+        for pattern in self.spec.patterns:
+            if pattern.include is None:
+                continue
+            matched = _matched_self(pattern, probe)
+            if matched is not None:
+                verdict = matched
+        return verdict
 
 
 class _IgnoreRules(NamedTuple):

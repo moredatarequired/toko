@@ -483,7 +483,11 @@ def _walk(base_dir: Path, options: _WalkOptions) -> list[Path]:
     while stack:
         frame = stack.pop()
         try:
-            entries = list(os.scandir(frame.path))
+            # `with`, because an OSError raised part-way through the iteration leaves
+            # the iterator unexhausted, and an unexhausted ScandirIterator holds an
+            # open directory handle until the garbage collector gets to it.
+            with os.scandir(frame.path) as scan:
+                entries = list(scan)
         except OSError as error:
             options.report(_describe(str(frame.path), error))
             continue

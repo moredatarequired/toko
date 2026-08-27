@@ -355,6 +355,28 @@ def test_an_ignore_file_prunes_exactly_the_directories_ripgrep_prunes(starred_tr
     assert toko_scanned(starred_tree) == {".", "dir", "other"}
 
 
+def test_a_gitignored_directory_is_one_ripgrep_refuses_to_descend_into(tmp_path):
+    """A pruned directory is never opened, measured on the primitive the walk uses.
+
+    The version of this that spied on `os.walk` recorded nothing, because the walk has
+    always used `os.scandir`; its "nothing ignored was visited" assertion then held
+    over an empty list. Asserting the spy saw the root keeps that failure loud.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "node_modules/\n")
+    write(tmp_path / "app.js")
+    for index in range(5):
+        write(tmp_path / "node_modules" / f"pkg{index}" / "index.js")
+
+    scanned = toko_scanned(tmp_path)
+    skipped = ripgrep_skipped_dirs(tmp_path)
+
+    assert "." in scanned, "the scandir spy recorded nothing, so it proves nothing"
+    assert "node_modules" in skipped
+    assert scanned.isdisjoint(skipped)
+    assert scanned == {"."}
+
+
 def test_a_root_rgignore_beats_a_deeper_ignore(tmp_path):
     """Rank comes before depth: the kinds are separate tiers, not one ordered list."""
     write(tmp_path / ".rgignore", "shadowed.txt\n")

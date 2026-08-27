@@ -10,7 +10,7 @@ import pytest
 
 from tests.conftest import GIT_LOCATION_VARS
 from tests.git_runner import fixture_git_env, run_git
-from toko import file_reader
+from tests.test_ripgrep_parity import toko_scanned
 from toko.file_reader import find_files
 
 
@@ -172,25 +172,25 @@ def test_a_nested_repository_contributes_its_own_rules(repo):
     assert names(find_files(repo), repo) == {"vendor/lib/src.rs"}
 
 
-def test_ignored_directories_are_pruned_rather_than_walked(repo, monkeypatch):
+def test_ignored_directories_are_pruned_rather_than_walked(repo):
+    """A gitignored directory is never opened, not merely filtered out afterwards.
+
+    Spied on `os.scandir`, which is the primitive the walk actually uses. The previous
+    version of this test patched `os.walk`, which `file_reader` has never called, so
+    it recorded an empty list and its "nothing ignored was visited" assertion was true
+    of nothing. The assertion that the spy saw the root is what keeps a future rename
+    of the walk primitive failing loudly instead of going quiet again.
+    """
     write(repo / "loadout" / ".gitignore", "node_modules/\n")
     write(repo / "loadout" / "app.js")
     for i in range(5):
         write(repo / "loadout" / "node_modules" / f"pkg{i}" / "index.js")
 
-    visited: list[str] = []
-    real_walk = os.walk
+    scanned = toko_scanned(repo)
 
-    def recording_walk(top, *args, **kwargs):
-        for root, dirs, filenames in real_walk(top, *args, **kwargs):
-            visited.append(root)
-            yield root, dirs, filenames
-
-    monkeypatch.setattr(file_reader.os, "walk", recording_walk)
-    found = find_files(repo)
-
-    assert names(found, repo) == {"loadout/app.js"}
-    assert not [root for root in visited if "node_modules" in root]
+    assert "." in scanned, "the spy recorded nothing, so it cannot prove a pruning"
+    assert scanned == {".", "loadout"}
+    assert names(find_files(repo), repo) == {"loadout/app.js"}
 
 
 def test_no_ignore_keeps_every_ignored_file(repo):

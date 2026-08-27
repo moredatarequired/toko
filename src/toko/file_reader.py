@@ -236,10 +236,26 @@ def _build_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
 
 
 def _read_spec(path: Path) -> pathspec.PathSpec | None:
+    """Read one ignore file, stopping where ripgrep stops reading it.
+
+    ripgrep decodes an ignore file a line at a time and gives up at the first line it
+    cannot read as UTF-8: the rules above it apply and the rest of the file is gone.
+    It neither skips the one bad line nor discards the whole file, and the difference
+    is not cosmetic -- a negation below the bad line is truncated away, so reading on
+    re-includes a file ripgrep never lists and hands its contents to a provider.
+    """
     try:
-        patterns = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        raw = path.read_bytes()
     except OSError:
         return None
+    patterns = []
+    # bytes.splitlines breaks on CR, LF and CRLF and nothing else, which is the set
+    # ripgrep breaks on; str.splitlines would additionally break on NEL and friends.
+    for line in raw.splitlines():
+        try:
+            patterns.append(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            break
     return _build_spec(patterns)
 
 

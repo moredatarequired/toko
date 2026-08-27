@@ -1325,3 +1325,196 @@ def test_a_whitespace_only_rule_stays_the_no_operation_git_reads_it_as(tmp_path)
 
     assert toko_files(tmp_path, hidden=False) == listed
     assert listed == {"keep.txt", "   "}
+
+
+# Ignore files whose bytes are not valid UTF-8. ripgrep decodes a line at a time and
+# stops at the first line it cannot read, keeping the rules above it: it neither skips
+# the one bad line nor discards the file. Another shape the vocabulary could not write.
+ESCAPED_AND_EXOTIC_RULES = [
+    "\\ x.txt",  # the user's own way to write a literal leading space
+    "\\ \\ x.txt",
+    "\\\tx.txt",  # backslash before a real tab
+    "!  x.txt",
+    "\\!x.txt",
+    "X.TXT",
+    "x\u00e9.txt",  # NFC: e-acute as one code point
+    "xe\u0301.txt",  # NFD: e plus a combining acute
+]
+
+EXOTIC_NAMES = [
+    "keep.txt",
+    "x.txt",
+    " x.txt",
+    "  x.txt",
+    "\tx.txt",
+    "X.TXT",
+    "!x.txt",
+    "!",
+    "x\u00e9.txt",
+    "xe\u0301.txt",
+]
+
+
+@pytest.mark.parametrize("rule", ESCAPED_AND_EXOTIC_RULES)
+def test_a_rule_the_user_escaped_still_names_what_ripgrep_reads_it_as(tmp_path, rule):
+    """Neither ripgrep nor git folds case or Unicode normalisation, and nor may toko.
+
+    One accented name written NFC and the same name written NFD are two separate
+    files on disk, and a rule matches whichever one shares its bytes. A reader that
+    normalised either side would match both -- dropping a file ripgrep lists -- or
+    neither.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(f"{rule}\n".encode())
+    for name in EXOTIC_NAMES:
+        write(tmp_path / name)
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+
+
+def test_a_negation_keeps_the_leading_whitespace_that_follows_its_bang(tmp_path):
+    """`!  x.txt` takes back the file named with two spaces, not the bare one.
+
+    Negation is the leaking direction. Read as `!x.txt` it returns a file the user
+    excluded with `*` to the count and sends its contents to whatever is counting,
+    while the file the line actually names stays dropped -- both errors from one rule.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ".gitignore", "*\n!  x.txt\n")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "  x.txt")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"  x.txt"}
+
+
+def test_a_byte_order_mark_belongs_to_the_first_rule_the_way_ripgrep_reads_it(tmp_path):
+    """A third deliberate divergence from `git check-ignore`, measured not assumed.
+
+    git strips a UTF-8 BOM off an ignore file's first line and applies the rule beneath
+    it; ripgrep leaves the BOM in the pattern, where it matches no filename at all. In
+    this tree `git check-ignore` calls `x.txt` ignored and `rg --files` lists it, and
+    ripgrep is what this walk is measured against.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"\xef\xbb\xbfx.txt\n")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt", "x.txt"}
+
+
+# Every ignore source is parsed by the same grammar, so a rule shape measured on one
+# file proves nothing about the others. This is the sweep that catches a fix applied
+# where the fixtures happen to look, rather than where the parsing actually happens.
+IGNORE_FILE_KINDS = [".gitignore", ".ignore", ".rgignore", ".git/info/exclude"]
+
+
+@pytest.mark.parametrize("ignore_file", IGNORE_FILE_KINDS)
+def test_leading_whitespace_is_literal_in_every_kind_of_ignore_file(
+    tmp_path, ignore_file
+):
+    """Every ignore source parses rules alike, so every one of them has to be measured.
+
+    `.ignore` and `.rgignore` apply with no repository at all, so getting them wrong
+    reaches further than getting `.gitignore` wrong does, not less far.
+    """
+    run_git(tmp_path, "init", "-q")
+    write(tmp_path / ignore_file, "  x.txt\n")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "  x.txt")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt", "x.txt"}
+
+
+UNDECODABLE_IGNORE_FILES = [
+    b"x\xe9.txt\n*.log\n",
+    b"*.log\nx\xe9.txt\n",
+    b"*.log\nx\xe9.txt\n*.md\n",
+    b"*.log\nx\xe9.txt\n!y.log\n",
+    b"\xff\xfe\x00\x01\n",
+    b"\xe9*.log\n*.md\n",
+    b"*.log\r\nx\xe9.txt\r\n*.md\r\n",
+    b"*.log\nx\xe9.txt",
+    b"*.log\nx\xe9y\n!y.log\n",
+]
+
+
+@pytest.mark.parametrize("raw", UNDECODABLE_IGNORE_FILES, ids=repr)
+def test_an_undecodable_line_truncates_an_ignore_file_where_ripgrep_truncates_it(
+    tmp_path, raw
+):
+    """Where the bad line sits decides the answer, so the sweep varies where it sits.
+
+    A reader that replaces the undecodable bytes and carries on keeps applying every
+    later rule; one that discards the file drops the earlier ones. The two are told
+    apart only by a file with rules on both sides of the bad line.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(raw)
+    write(tmp_path / "keep.md")
+    write(tmp_path / "y.log")
+    write(tmp_path / "z.txt")
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+
+
+def test_a_negation_below_an_undecodable_line_never_re_includes_the_file(tmp_path):
+    """The leaking direction: reading past the bad line re-includes what rg never lists.
+
+    `*.log` excludes the file and `!y.log` would take it back, but ripgrep never reaches
+    the negation. A reader that does counts `y.log` and sends its contents to whichever
+    provider is counting -- an exclusion the user wrote, undone by a byte.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\nx\xe9.txt\n!y.log\n")
+    write(tmp_path / "y.log")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt"}
+
+
+def test_an_undecodable_first_line_leaves_every_later_rule_unread(tmp_path):
+    """Truncation, told apart from skipping just the bad line, at the sharpest position.
+
+    With the failure on line 1 there is nothing above it, so a truncating reader applies
+    no rule at all while a skipping reader still applies `*.md`.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"\xe9*.log\n*.md\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "y.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "y.log"}
+
+
+@pytest.mark.parametrize("ignore_file", IGNORE_FILE_KINDS)
+def test_an_undecodable_line_truncates_every_kind_of_ignore_file(tmp_path, ignore_file):
+    """The truncation is a property of reading an ignore file, not of one filename."""
+    run_git(tmp_path, "init", "-q")
+    path = tmp_path / ignore_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"*.log\nx\xe9.txt\n!y.log\n")
+    write(tmp_path / "y.log")
+    write(tmp_path / "keep.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.txt"}

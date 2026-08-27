@@ -1,5 +1,6 @@
 """Differential test: the files toko discovers are the files `rg --files` lists."""
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -29,10 +30,26 @@ def write(path: Path, text: str = "x") -> Path:
     return path
 
 
-def run_ripgrep(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def spelled_from(root: Path, cwd: Path) -> str:
+    """How the walk root is named on a command line run from `cwd`."""
+    return os.path.relpath(root, cwd)
+
+
+def run_ripgrep(
+    root: Path, *args: str, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """List `root` with ripgrep, from `cwd` when the walk is not started inside it.
+
+    Until this took a `cwd`, every fixture in this file ran ripgrep with its working
+    directory equal to the walk root, so the suite was structurally blind to every
+    rule ripgrep resolves against the working directory rather than against the tree
+    -- core.excludesFile is one. That was a property of the harness, not of any one
+    test: no fixture could have caught it, however many were added.
+    """
+    target = [] if cwd is None else ["--", spelled_from(root, cwd)]
     result = subprocess.run(  # noqa: S603
-        [RIPGREP, "--files", *args],
-        cwd=root,
+        [RIPGREP, "--files", *args, *target],
+        cwd=root if cwd is None else cwd,
         capture_output=True,
         text=True,
         check=False,
@@ -43,15 +60,43 @@ def run_ripgrep(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def ripgrep_files(root: Path, *args: str) -> set[str]:
-    return set(run_ripgrep(root, *args).stdout.split("\n")) - {""}
+def ripgrep_files(root: Path, *args: str, cwd: Path | None = None) -> set[str]:
+    listed = set(run_ripgrep(root, *args, cwd=cwd).stdout.split("\n")) - {""}
+    if cwd is None:
+        return listed
+    # ripgrep echoes the path it was given, so its listing is relative to `cwd`; the
+    # comparison is against toko's, which is relative to the walk root.
+    prefix = f"{spelled_from(root, cwd)}/"
+    return {name.removeprefix(prefix) for name in listed}
 
 
-def toko_files(root: Path, *, hidden: bool, follow: bool = False) -> set[str]:
-    return {
-        str(f.absolute().relative_to(root.absolute()))
-        for f in find_files(root, include_hidden=hidden, follow_symlinks=follow)
-    }
+def toko_files(
+    root: Path, *, hidden: bool, follow: bool = False, cwd: Path | None = None
+) -> set[str]:
+    """Walk with toko from the same working directory ripgrep was given.
+
+    The working directory is set rather than inherited because ripgrep's is: leaving
+    toko in whatever directory pytest was started from would compare two walks that
+    disagree about where the process is standing.
+    """
+    base = root.absolute()
+    workdir = root if cwd is None else cwd
+    with contextlib.chdir(workdir):
+        # Named the way ripgrep is given it, because ripgrep resolves the global
+        # excludes file against the working directory and reads each path as spelled:
+        # handing toko an absolute root while ripgrep gets a relative one compares two
+        # walks that were asked different questions.
+        found = find_files(
+            Path(spelled_from(root, workdir)),
+            include_hidden=hidden,
+            follow_symlinks=follow,
+        )
+        # abspath, not Path.absolute: a walk root spelled `..` leaves the `..` in
+        # every result, and relative_to compares the text rather than the directory.
+        return {
+            str(Path(os.path.abspath(f)).relative_to(base))  # noqa: PTH100
+            for f in found
+        }
 
 
 @pytest.fixture
@@ -426,6 +471,74 @@ def test_a_starred_rule_in_the_global_excludes_file_also_spares_the_negation(
 
     assert found == ripgrep_files(starred_tree)
     assert "dir/keep.txt" in found
+
+
+@pytest.fixture
+def anchored_excludes_tree(tmp_path, isolated_git_env, monkeypatch) -> Path:
+    """Build a tree whose global excludes file needs a directory to be resolved against.
+
+    `*.swp`, the pattern the other fixtures use, matches on its own wherever it is
+    read from, so it cannot show where the file is anchored. `/x.txt` is anchored and
+    `sub/y.txt` spans two segments; both need a directory to be resolved against, and
+    ripgrep resolves them against the process's working directory.
+    """
+    gitconfig = isolated_git_env / ".gitconfig"
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    excludes = write(isolated_git_env / "anchored-excludes", "/x.txt\nsub/y.txt\n")
+    write(gitconfig, f"[core]\n\texcludesFile = {excludes}\n")
+
+    run_git(tmp_path, "init", "-q")
+    for name in (
+        "x.txt",
+        "keep.txt",
+        "sub/x.txt",
+        "sub/y.txt",
+        "sub/keep.txt",
+        "sub/deep/y.txt",
+    ):
+        write(tmp_path / name)
+    return tmp_path
+
+
+@pytest.mark.parametrize("workdir", ["", "sub", "outside"])
+@pytest.mark.parametrize("walk", ["", "sub"])
+def test_the_global_excludes_file_is_anchored_at_the_working_directory(
+    anchored_excludes_tree, tmp_path_factory, walk, workdir
+):
+    """Every combination of where the walk starts and where the process is standing.
+
+    `workdir="sub"` is the one that reads the same excludes file to a different answer
+    -- `/x.txt` then names `sub/x.txt` and `sub/y.txt` names nothing -- and `outside`
+    is the case where nothing anchored can be resolved at all. git would answer all
+    three from the repository root; ripgrep answers them from the working directory,
+    and so does toko -- deliberately, and recorded as issue 133.
+    """
+    root = anchored_excludes_tree / walk if walk else anchored_excludes_tree
+    if workdir == "outside":
+        cwd = tmp_path_factory.mktemp("elsewhere")
+    else:
+        cwd = anchored_excludes_tree / workdir if workdir else anchored_excludes_tree
+
+    assert toko_files(root, hidden=False, cwd=cwd) == ripgrep_files(root, cwd=cwd)
+
+
+def test_the_anchored_excludes_tree_reads_differently_from_different_directories(
+    anchored_excludes_tree,
+):
+    """The fixture is only worth anything if ripgrep's own answer moves with its cwd."""
+    root = anchored_excludes_tree
+    sub = root / "sub"
+
+    assert ripgrep_files(root, cwd=root) == {
+        "keep.txt",
+        "sub/x.txt",
+        "sub/keep.txt",
+        "sub/deep/y.txt",
+    }
+    assert ripgrep_files(sub, cwd=sub) == {"y.txt", "keep.txt", "deep/y.txt"}
+    # From the repository root the same walk of `sub` drops y.txt and keeps x.txt,
+    # which is the exact reverse of the listing above.
+    assert ripgrep_files(sub, cwd=root) == {"x.txt", "keep.txt", "deep/y.txt"}
 
 
 def test_an_ignore_file_prunes_exactly_the_directories_ripgrep_prunes(starred_tree):

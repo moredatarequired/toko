@@ -327,9 +327,36 @@ def _global_excludes_spec() -> pathspec.PathSpec | None:
 
 
 def _global_layers(
-    repo_root: Path, spec: pathspec.PathSpec | None
+    spec: pathspec.PathSpec | None, named: Path
 ) -> tuple[_IgnoreLayer, ...]:
-    return () if spec is None else (_IgnoreLayer(_dir_prefix(repo_root), spec),)
+    """core.excludesFile, anchored where ripgrep anchors it: the working directory.
+
+    This is a deliberate divergence from git, which resolves the file's anchored and
+    multi-segment rules against the root of the repository a path belongs to. A rule
+    of `/x.txt` names the x.txt in the directory toko was run from, not the one at the
+    top of the checkout, and the same excludes file reads to a different answer from a
+    subdirectory. See https://github.com/moredatarequired/toko/issues/133.
+
+    ripgrep judges each path the way it spells it -- the walk root as the caller named
+    it, with the rest of the tree hung off that -- against a matcher rooted at the
+    working directory. A name that is absolute, or that climbs out of the working
+    directory, strips against nothing, so no anchored or multi-segment rule reaches
+    any of that walk, not even the part of it that does lie inside. The empty anchor
+    is that same verdict: it leaves the path absolute, where `/x.txt` and `sub/y.txt`
+    match nothing and a bare `*.swp` still matches on the name alone.
+
+    Read once per walk rather than per directory, so that one answer covers all of it,
+    nested checkouts included.
+    """
+    if spec is None:
+        return ()
+    working_directory = _dir_prefix(Path.cwd())
+    # abspath rather than Path.absolute, which leaves a `..` in place: `sub/..` is
+    # the parent, and would otherwise read as a directory inside `sub`.
+    resolvable = not named.is_absolute() and _dir_prefix(
+        Path(os.path.abspath(named))  # noqa: PTH100
+    ).startswith(working_directory)
+    return (_IgnoreLayer(working_directory if resolvable else "", spec),)
 
 
 class _WalkOptions(NamedTuple):
@@ -340,7 +367,7 @@ class _WalkOptions(NamedTuple):
     include_hidden: bool
     follow_symlinks: bool
     exclude_spec: pathspec.PathSpec | None
-    global_spec: pathspec.PathSpec | None
+    global_layers: tuple[_IgnoreLayer, ...]
     report: ErrorReporter
 
 
@@ -393,7 +420,7 @@ def _initial_frame(base_dir: Path, base_abs: Path, options: _WalkOptions) -> _Fr
     rgignore: list[_IgnoreLayer] = []
     if options.respect_gitignore:
         if repo_root is not None:
-            git.extend(_global_layers(repo_root, options.global_spec))
+            git.extend(options.global_layers)
         for directory in (*reversed(base_abs.parents), base_abs):
             if _is_within(directory, repo_root):
                 git.extend(_git_layers(directory, _git_dir(directory)))
@@ -434,7 +461,7 @@ def _descend(parent: _Frame, name: str, options: _WalkOptions) -> _Frame:
             # and no further: git resolves a path against the repository it belongs to,
             # and ripgrep follows it, so the outer rules are dropped rather than kept.
             repo_root = directory
-            git = _global_layers(directory, options.global_spec)
+            git = options.global_layers
         if repo_root is not None:
             git = (*git, *_git_layers(directory, git_dir))
         if options.respect_dot_ignore:
@@ -569,7 +596,9 @@ def find_files(
         include_hidden=include_hidden,
         follow_symlinks=follow_symlinks,
         exclude_spec=_build_spec(exclude_patterns),
-        global_spec=_global_excludes_spec() if respect_gitignore else None,
+        global_layers=(
+            _global_layers(_global_excludes_spec(), path) if respect_gitignore else ()
+        ),
         report=on_error if on_error is not None else lambda _message: None,
     )
     return sorted(_walk(path, options))

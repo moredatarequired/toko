@@ -619,6 +619,11 @@ def find_files(
 ) -> list[Path]:
     """Find files under a path, optionally recursing and applying skip rules.
 
+    The ignore rules read `path` as it is spelled rather than as it resolves, so the
+    same directory named `Path("sub")`, `Path.cwd() / "sub"` and `Path("../here/sub")`
+    can come back with three different listings. That is deliberate: ripgrep matches
+    each path the way the caller wrote it, and toko is held to ripgrep's answer.
+
     `on_error` receives the links and directories the walk could not resolve. They are
     reported rather than raised so that one of them cannot cost the caller the counts
     for every other file in the tree.

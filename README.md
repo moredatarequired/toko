@@ -335,11 +335,15 @@ A run exits `1` when:
 > results for the inputs it could read *before* it exits `1`, so a partial failure
 > still emits a complete, well-formed document — a full JSON envelope with both
 > `results` and `totals`, or a full table, of exactly the shape a successful run of the
-> same command emits. A model that failed is marked, by a `null` `tokens` with a
-> `reason` in JSON and by empty cells in CSV and TSV. An *input* that failed is not:
-> the totals simply sum a smaller set of files than a successful run would, and no
-> field says so. Check the exit code before you trust a total, and read stderr for
-> which inputs are missing.
+> same command emits. A model that failed is marked in the row of each source it failed
+> on, by a `null` `tokens` with a `reason` in JSON and by empty cells in CSV and TSV;
+> its *total* is marked that way only when every source failed for it. A total the
+> failures merely thinned is a plain number — `reason` `null` in JSON, a filled cell in
+> CSV and TSV — indistinguishable from a total of everything you named, and a run whose
+> inputs all read but whose model failed on some of them exits `0`. An *input* that
+> failed is not marked at all: the totals simply sum a smaller set of files than a
+> successful run would, and no field says so. Check the exit code before you trust a
+> total, and read stderr for which inputs are missing.
 
 One known inconsistency, which this table describes rather than hides: a model that
 fails among several — a missing `ANTHROPIC_API_KEY`, say — leaves a warning on stderr,

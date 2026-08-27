@@ -1152,6 +1152,24 @@ _FD_FENCE_LIMIT = 192
 _FD_WARMING_LIMIT = 512
 
 
+_PLAIN_RUN = """
+from toko.cli import app
+
+app()
+"""
+
+
+def _run_toko(args: list[str], env: dict[str, str]):
+    """Run the CLI in a child, so an environment-only setting is actually in force."""
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _PLAIN_RUN, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
 def _run_with_fd_limit(limit: int, args: list[str], env: dict[str, str]):
     return subprocess.run(  # noqa: S603
         [sys.executable, "-c", _FD_LIMITED_RUN, str(limit), *args],
@@ -1247,7 +1265,7 @@ def test_a_preloaded_tokenizer_needs_nothing_further_to_encode(tmp_path):
     env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
     args = ["--format", "csv", "-m", "gpt-5", str(tree)]
 
-    warming = _run_with_fd_limit(_FD_WARMING_LIMIT, args, env)
+    warming = _run_toko(args, env)
     assert warming.returncode == 0, warming.stderr
 
     checked = subprocess.run(  # noqa: S603
@@ -1259,6 +1277,147 @@ def test_a_preloaded_tokenizer_needs_nothing_further_to_encode(tmp_path):
     )
 
     assert checked.returncode == 0, checked.stderr
+
+
+# Instrumentation rather than substitution: the real constructor still runs, and all it
+# is asked is which thread ran it. Every route into a tokenizer ends here -- both the
+# by-model and the by-name lookup reach tiktoken's registry, which builds an Encoding
+# once per encoding -- so the recorded threads are every build the run performed.
+_BUILDING_THREAD_CHECK = """
+import sys
+import threading
+
+import tiktoken.core
+
+builders = []
+build = tiktoken.core.Encoding.__init__
+
+
+def recording(self, *args, **kwargs):
+    builders.append(threading.get_ident())
+    return build(self, *args, **kwargs)
+
+
+tiktoken.core.Encoding.__init__ = recording
+
+from typer.testing import CliRunner
+
+from toko.cli import app
+
+result = CliRunner().invoke(app, sys.argv[1:])
+if result.exit_code != 0:
+    raise SystemExit(f"the run failed: {result.output}")
+
+if not builders:
+    raise SystemExit("the run built no tokenizer, so it proves nothing about where")
+off_main = [ident for ident in builders if ident != threading.main_thread().ident]
+if off_main:
+    raise SystemExit(f"{len(off_main)} of {len(builders)} builds ran off the main thread")
+"""
+
+
+@pytest.mark.slow
+def test_no_tokenizer_is_ever_built_inside_a_worker(tmp_path):
+    """Where the warm-up happens is the whole of what it buys, so pin the where.
+
+    Every other guard here looks at the finished run, and a warm-up moved to after the
+    pool satisfies all of them -- the tokenizer is resident either way. What it stops
+    being is safe: the point of #115 is that a build inside a worker happens under
+    whatever descriptor pressure the run has reached, and tiktoken's registry does not
+    survive being built with none left. So the property is that the build happens on the
+    thread that has not run any work yet, and it is observed the way #56 asks for -- by
+    recording what actually ran, in a child process, not by reading the source.
+
+    Deliberately an uncached run: a cached one reaches no tokenizer from the pool at all,
+    so it would pass wherever the warm-up sat.
+    """
+    tree = _write_tree(tmp_path)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+
+    checked = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            _BUILDING_THREAD_CHECK,
+            "--format",
+            "csv",
+            "-m",
+            "gpt-5",
+            "--jobs",
+            "8",
+            str(tree),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert checked.returncode == 0, checked.stderr
+
+
+# The positive control for the test below: proof the child really cannot reach the blob
+# store, rather than an assumption that setting a proxy variable was enough. Kept apart
+# from toko so it says only that, and cannot pass because of anything toko does.
+_DOWNLOAD_MUST_FAIL = """
+import tiktoken
+
+try:
+    tiktoken.get_encoding("o200k_base")
+except Exception:
+    raise SystemExit(0)
+raise SystemExit("the encoding downloaded, so nothing here was actually offline")
+"""
+
+
+@pytest.mark.slow
+def test_a_cached_run_survives_a_cold_tiktoken_cache_it_cannot_refill(tmp_path):
+    """Warming a tokenizer must not turn a working run into a failing one.
+
+    Every count is already in toko's cache, so the run needs no tokenizer at all -- but
+    tiktoken's blob cache lives in /tmp and is wiped by a reboot, so the warm-up reaches
+    for a download that an offline machine cannot serve. That is an ordinary state, not
+    an exotic one, and the run has to finish exactly as it did before there was a
+    warm-up: same total, same exit code.
+    """
+    tree = _write_tree(tmp_path)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
+
+    warm = _run_toko(args, env)
+    assert warm.returncode == 0, warm.stderr
+
+    # A blob cache of its own, left empty, and a proxy pointed at a port nothing is
+    # listening on: between them the child is a machine that has rebooted and has no
+    # route out, without touching this one's caches or network.
+    blocked = {
+        **env,
+        "TIKTOKEN_CACHE_DIR": str(tmp_path / "cold-tiktoken"),
+        "DATA_GYM_CACHE_DIR": str(tmp_path / "cold-tiktoken"),
+        "NO_PROXY": "",
+        "no_proxy": "",
+    }
+    blocked.update(
+        dict.fromkeys(
+            ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"),
+            "http://127.0.0.1:1",
+        )
+    )
+    (tmp_path / "cold-tiktoken").mkdir()
+
+    control = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _DOWNLOAD_MUST_FAIL],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=blocked,
+    )
+    assert control.returncode == 0, control.stderr
+
+    offline = _run_toko(args, blocked)
+
+    assert offline.returncode == 0, offline.stderr
+    assert _csv_rows(offline.stdout) == _csv_rows(warm.stdout)
 
 
 def test_jobs_below_one_is_rejected(tmp_path):

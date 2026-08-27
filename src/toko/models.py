@@ -418,7 +418,9 @@ def detect_provider(model: str) -> str | None:
     # Newer OpenAI names tiktoken has never heard of (gpt-6, gpt-5.6, o5). Checked
     # last so gpt-oss and org-prefixed names keep their more specific providers: an owner
     # segment that merely opens like an OpenAI model (gpt-4-lab/mymodel, o1-labs/mymodel)
-    # must stay a Hub repo id rather than becoming an o200k_base guess.
+    # must stay a Hub repo id rather than becoming an unknown-OpenAI-model guess on
+    # whatever encoding that owner's prefix resolves to -- cl100k_base for the first,
+    # o200k_base for the second.
     if _OPENAI_NAME_PATTERN.match(model_lower):
         return "openai"
 

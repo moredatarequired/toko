@@ -347,8 +347,8 @@ A run exits `1` when:
 
 One known inconsistency, which this table describes rather than hides: a model that
 fails among several — a missing `ANTHROPIC_API_KEY`, say — leaves a warning on stderr,
-keeps its column with every cell empty, and still exits `0`, while a *path* that fails
-among several exits `1`. Making the two agree is breaking change 4 of
+keeps its column with every cell it failed on marked, and still exits `0`, while a
+*path* that fails among several exits `1`. Making the two agree is breaking change 4 of
 [issue #28](https://github.com/moredatarequired/toko/issues/28); until it lands, check
 stderr, or count one model per invocation if a partial result would be dangerous.
 

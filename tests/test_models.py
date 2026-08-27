@@ -31,10 +31,12 @@ from toko.result import TokenCount
         ("gemma-3-1b-it", "google"),
         # Ordering, not patterns: the "/" branch runs ahead of the trailing OpenAI name
         # pattern, so an owner segment that merely opens like an OpenAI model leaves the
-        # name a Hub repo id. Reversed, these count on o200k_base as unknown OpenAI models
-        # instead of being fetched from the Hub. Owners whose tail is itself a tiktoken
-        # name (gpt-4-lab/gpt2, o1-labs/text-davinci-003) cannot show this -- the first
-        # loop returns OpenAI for them before either branch is reached.
+        # name a Hub repo id. Reversed, these count as unknown OpenAI models on whatever
+        # encoding the owner's prefix resolves to -- cl100k_base for gpt-4-lab/mymodel and
+        # o200k_base for o1-labs/mymodel -- instead of being fetched from the Hub. Owners
+        # whose tail is itself a tiktoken name (gpt-4-lab/gpt2, o1-labs/text-davinci-003)
+        # cannot show this -- the first loop returns OpenAI for them before either
+        # branch is reached.
         ("gpt-4-lab/mymodel", "huggingface"),
         ("o1-labs/mymodel", "huggingface"),
         # "models/" is the Google API's own path prefix, not a Hub owner: huggingface.co

@@ -7,7 +7,10 @@ from enum import StrEnum
 class CaveatKind(StrEnum):
     """Why a count came from something other than the model's own tokenizer."""
 
-    # An OpenAI name toko has no verified encoding for, counted with o200k_base.
+    # An OpenAI name toko has no verified encoding for, counted with whatever
+    # `encoding` names: the encoding its family prefix resolves to (gpt-4-1 ->
+    # cl100k_base, gpt-oss-lab/gpt2 -> o200k_harmony), or o200k_base when no prefix
+    # matches. Picking one is a guess at the encoding, not evidence the name exists.
     OPENAI_ENCODING_GUESS = "openai_encoding_guess"
     # An xAI model counted with the Grok-1 Hugging Face tokenizer, because the
     # xAI token API was unreachable.

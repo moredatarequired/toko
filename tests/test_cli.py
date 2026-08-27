@@ -817,6 +817,34 @@ def test_a_symlink_cycle_under_follow_is_reported_and_the_walk_finishes(
     assert "File system loop found" in result.stderr
 
 
+def test_a_loop_through_an_ignored_directory_still_fails_the_cli(tmp_path, monkeypatch):
+    """The bug this guards was the CLI exiting 0 on a tree ripgrep calls broken.
+
+    The library-level regression test asserts the `on_error` callback, which is not the
+    observable that was wrong. `kept/loop` is a real directory the same rule prunes, so
+    a run that drops `c.txt` proves the rule is live -- otherwise a loop reported here
+    would only mean the rule never reached the link at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "kept" / "loop").mkdir(parents=True)
+    (tmp_path / "pruned").mkdir()
+    (tmp_path / "kept" / "a.txt").write_text("hello world")
+    (tmp_path / "kept" / "loop" / "c.txt").write_text("hello world")
+    (tmp_path / "pruned" / "b.txt").write_text("hello world")
+    (tmp_path / "pruned" / "loop").symlink_to(tmp_path)
+    (tmp_path / ".ignore").write_text("loop\n")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "-L", "."])
+
+    assert result.exit_code == 1
+    assert "File system loop found" in result.stderr
+    # The walk still finishes, and the rule that prunes the loop is demonstrably live.
+    assert "a.txt,2" in result.stdout
+    assert "b.txt,2" in result.stdout
+    assert "c.txt" not in result.stdout
+
+
 def test_a_symlink_named_as_an_argument_is_read_without_follow(tmp_path, monkeypatch):
     """Ripgrep reads a link it was handed; --follow governs the walk, not arguments."""
     monkeypatch.chdir(tmp_path)

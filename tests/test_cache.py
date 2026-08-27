@@ -134,8 +134,9 @@ def test_counting_many_files_does_not_hold_a_handle_per_file():
 
     That is the descriptor leak behind #115: the handles grew one per counted file until
     the process ran out, at which point a cache hit became a miss and the first tiktoken
-    load of the run happened with no descriptors left. A bound rather than a number,
-    because a few concurrent counts may legitimately each hold one while they work.
+    load of the run happened with no descriptors left. Counted after the pool has joined,
+    where the answer is exactly none: every worker is finished, so a handle still open is
+    a handle that was never closed.
     """
     clear_cache()
     texts = [f"descriptor fence, line {index}\n" for index in range(200)]
@@ -144,4 +145,4 @@ def test_counting_many_files_does_not_hold_a_handle_per_file():
         counts = list(pool.map(lambda text: count_tokens(text, model="gpt-5"), texts))
 
     assert len(counts) == len(texts)
-    assert _open_cache_handles() <= 8
+    assert _open_cache_handles() == 0

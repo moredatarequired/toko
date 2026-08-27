@@ -14,7 +14,7 @@ from toko import __version__
 from toko.cache import clear_cache as do_clear_cache
 from toko.config import Config, apply_api_keys, load_config
 from toko.cost import estimate_cost
-from toko.counter import count_tokens, preload_tokenizer
+from toko.counter import count_tokens
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
@@ -229,6 +229,11 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
+    # Typer's own test for "the user did not type this" is the parameter source being
+    # None or ParameterSource.DEFAULT (typer/core.py). Matched on the member name because
+    # that enum lives in typer's vendored copy of click and has no public import path.
+    jobs_source = ctx.get_parameter_source("jobs")
+
     # Otherwise, run the count logic as default
     _do_count(
         paths,
@@ -245,6 +250,7 @@ def main(
         include_retired=include_retired,
         sort_order=sort_order,
         jobs=jobs,
+        jobs_explicit=jobs_source is not None and jobs_source.name != "DEFAULT",
     )
 
 
@@ -483,6 +489,17 @@ def _handle_text_input(
     typer.echo(output)
 
 
+def _open_file_limit() -> int:
+    """Report this process's soft RLIMIT_NOFILE, negative where there is no limit."""
+    try:
+        import resource  # noqa: PLC0415
+    except ImportError:
+        # Windows has no RLIMIT_NOFILE, and no per-process descriptor budget to run out
+        # of. RLIM_INFINITY is itself negative, so unlimited and absent read the same.
+        return -1
+    return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+
+
 def _count_one(job: tuple[str, str]) -> TokenCount | str:
     """Count one (content, model) pair, returning the failure message instead of raising.
 
@@ -497,20 +514,39 @@ def _count_one(job: tuple[str, str]) -> TokenCount | str:
 
 
 def _collect_file_counts(
-    models: list[str], files: list[tuple[str, str]], *, jobs: int = DEFAULT_JOBS
+    models: list[str],
+    files: list[tuple[str, str]],
+    *,
+    jobs: int = DEFAULT_JOBS,
+    jobs_explicit: bool = False,
 ) -> tuple[dict[str, dict[str, TokenCount]], dict[str, dict[str, str]], dict[str, str]]:
     # Flattened so that one file counted against several API models parallelises too,
     # rather than only files being spread across workers.
     work = [(content, model_name) for _, content in files for model_name in models]
 
-    # Before any worker exists, and even when there will be none: a tokenizer built
-    # inside a pool worker is built under whatever descriptor pressure the run has
-    # accumulated by then, and tiktoken's registry does not survive being built with
-    # none left. Once resident it cannot be broken by a later shortage.
-    for model_name in models:
-        preload_tokenizer(model_name)
-
-    workers = min(jobs, len(work))
+    # Every concurrent count opens the cache database, so a run with more workers than
+    # descriptors turns cache hits into misses -- and the miss that arrives with none
+    # left empties tiktoken's encoding registry for good, which is #115. Half the limit
+    # rather than all of it, because the same budget also holds the tree already read and
+    # whatever the interpreter opened to start.
+    #
+    # Both halves of the clamp are load-bearing, so do not reduce this to `open_files //
+    # 2`: at a soft limit of 4 -- the lowest limit toko can start at, since three or
+    # fewer leaves the interpreter unable to open the tree -- half the budget is 2, and
+    # two concurrent counts at four descriptors is already one too many. The subtraction
+    # is what carries that limit; the halving is what carries the large ones. Reserving
+    # three keeps a worker for every limit at which toko runs at all, and
+    # test_the_lowest_limit_toko_runs_at_still_counts_every_file fails if it is dropped.
+    open_files = _open_file_limit()
+    fits = MAX_JOBS if open_files < 0 else max(1, min(open_files // 2, open_files - 3))
+    requested = min(jobs, len(work))
+    workers = min(requested, fits)
+    if jobs_explicit and workers < requested:
+        typer.echo(
+            f"Warning: Reducing --jobs from {jobs} to {workers} to stay inside the"
+            f" open-file limit of {open_files}",
+            err=True,
+        )
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             # map yields in submission order, so everything below -- the row order, the
@@ -566,9 +602,10 @@ def _handle_file_inputs(
     include_header: bool,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
+    jobs_explicit: bool = False,
 ) -> None:
     file_results, file_errors, model_errors = _collect_file_counts(
-        models, files, jobs=jobs
+        models, files, jobs=jobs, jobs_explicit=jobs_explicit
     )
 
     if model_errors:
@@ -651,6 +688,7 @@ def _do_count(
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
+    jobs_explicit: bool = False,
 ) -> None:
     config = _load_runtime_config()
     _prepare_prices(config)
@@ -686,6 +724,7 @@ def _do_count(
         include_header=include_header,
         sort_order=sort_order,
         jobs=jobs,
+        jobs_explicit=jobs_explicit,
     )
     # Results for the readable inputs are already printed; signal the bad ones.
     if inputs.had_failures:

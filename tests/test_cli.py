@@ -16,7 +16,6 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
-import toko.counter as counter
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
@@ -1104,29 +1103,6 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         assert get_cached_count(content, "gpt-5") == int(gpt_5)
 
 
-def test_a_fully_cached_run_still_loads_the_tokenizer_up_front(tmp_path):
-    """A run builds the tokenizers it might need before it dispatches any counting.
-
-    Demonstrated on a run that needs none: every count is already cached, so nothing in
-    the work itself can reach a tokenizer, and a resident one afterwards can only have
-    been built ahead of the pool. That is the guarantee that matters -- a tokenizer
-    already built cannot be broken by a descriptor shortage that arrives mid-run, which
-    is how tiktoken's registry came to be permanently empty in #115.
-    """
-    tree = _write_tree(tmp_path)
-    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
-
-    warming = _invoke_cli(args)
-    assert warming.exit_code == 0
-
-    counter._TOKENIZER_CACHE.clear()  # noqa: SLF001
-    cached = _invoke_cli(args)
-
-    assert cached.exit_code == 0
-    assert cached.stdout == warming.stdout
-    assert counter._TOKENIZER_CACHE  # noqa: SLF001
-
-
 # Lowered inside the child rather than through preexec_fn, so the limit is in force for
 # the whole run the way a shell's `ulimit -n` would be.
 _FD_LIMITED_RUN = """
@@ -1225,135 +1201,182 @@ def test_a_warm_cache_counts_every_file_when_descriptors_are_scarce(tmp_path):
     assert sum(int(count) for _, count in _csv_rows(warm.stdout)[1:]) == sum(counted)
 
 
-# Run in a process that has never encoded anything, so a lazy import tiktoken defers to
-# the first encode has not already been satisfied by something else.
-_RESIDENCY_CHECK = """
-import sys
+# 60 files against 10 descriptors: an unclamped run undercounted 10 of 10 reps at the
+# default -j 8 and 10 of 10 at -j 64, while the 5 workers the clamp allows were correct
+# 10 of 10. Fewer files than that and the undercount stops being reliable -- 20 files
+# undercounted only 5 of 10.
+_CLAMP_FENCE_FILES = 60
+_CLAMP_FENCE_LIMIT = 10
+# Half of ten, and ten is far enough above four that the three-descriptor reserve is not
+# what decides this number -- so the tests below move if the halving moves.
+_CLAMP_FENCE_WORKERS = 5
 
-from typer.testing import CliRunner
+# The lowest soft limit at which toko starts at all: at three or fewer the interpreter
+# cannot open the tree, and at four half the budget is one worker too many, so this is
+# the limit that the reserve rather than the halving has to carry.
+_MINIMUM_LIMIT = 4
 
-import toko.counter as counter
-from toko.cli import app
-
-result = CliRunner().invoke(app, sys.argv[1:])
-if result.exit_code != 0:
-    raise SystemExit(f"the cached run failed: {result.output}")
-
-resident = list(counter._TOKENIZER_CACHE.values())
-if not resident:
-    raise SystemExit("a fully cached run loaded no tokenizer")
-
-loaded = set(sys.modules)
-for tokenizer in resident:
-    tokenizer.encode("fence")
-missing = sorted(set(sys.modules) - loaded)
-if missing:
-    raise SystemExit(f"encoding still had to import {missing}")
-"""
+# Repetitions of the descriptor-starved run below. Losing the reserve does not undercount
+# every time -- two workers at four descriptors is a race, and measured over 16 reps a
+# single attempt caught it 14 times. One attempt would therefore wave through a dropped
+# reserve about one CI run in eight; three independent attempts, all of which have to
+# count the whole tree, cut that to roughly (2/16)**3, about one in five hundred. The
+# repetitions do not change what is being observed, only how many chances there are to
+# observe it, so the number can be raised without changing the test's meaning.
+_MINIMUM_LIMIT_ATTEMPTS = 3
 
 
-@pytest.mark.slow
-def test_a_preloaded_tokenizer_needs_nothing_further_to_encode(tmp_path):
-    """Residency has to be complete, not just constructed.
-
-    tiktoken defers part of its own import work to the first encode, and an import needs
-    a descriptor like anything else -- so a registry warmed but never exercised still
-    left the first real encode to fail inside a pool worker. Checked in a child process
-    because this one has encoded already, which would satisfy the import for free.
-    """
-    tree = _write_tree(tmp_path)
+def _clamp_fence(tmp_path: Path) -> tuple[Path, dict[str, str], list[str]]:
+    """Fill the cache, and return the arguments that count it, for the clamp tests."""
+    tree = _write_fd_fence_tree(tmp_path, _CLAMP_FENCE_FILES)
     env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
-    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
+    args = ["--header", "--format", "csv", "-m", "gpt-5", str(tree)]
 
-    warming = _run_toko(args, env)
+    # Warmed without touching the limit at all, so no hard-limit guard is needed: every
+    # run below only ever lowers the soft limit, and lowering is always permitted.
+    warming = _run_toko([*args, "--jobs", "1"], env)
     assert warming.returncode == 0, warming.stderr
-
-    checked = subprocess.run(  # noqa: S603
-        [sys.executable, "-c", _RESIDENCY_CHECK, *args],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    assert checked.returncode == 0, checked.stderr
-
-
-# Instrumentation rather than substitution: the real constructor still runs, and all it
-# is asked is which thread ran it. Every route into a tokenizer ends here -- both the
-# by-model and the by-name lookup reach tiktoken's registry, which builds an Encoding
-# once per encoding -- so the recorded threads are every build the run performed.
-_BUILDING_THREAD_CHECK = """
-import sys
-import threading
-
-import tiktoken.core
-
-builders = []
-build = tiktoken.core.Encoding.__init__
-
-
-def recording(self, *args, **kwargs):
-    builders.append(threading.get_ident())
-    return build(self, *args, **kwargs)
-
-
-tiktoken.core.Encoding.__init__ = recording
-
-from typer.testing import CliRunner
-
-from toko.cli import app
-
-result = CliRunner().invoke(app, sys.argv[1:])
-if result.exit_code != 0:
-    raise SystemExit(f"the run failed: {result.output}")
-
-if not builders:
-    raise SystemExit("the run built no tokenizer, so it proves nothing about where")
-off_main = [ident for ident in builders if ident != threading.main_thread().ident]
-if off_main:
-    raise SystemExit(f"{len(off_main)} of {len(builders)} builds ran off the main thread")
-"""
+    assert len(_csv_rows(warming.stdout)) == _CLAMP_FENCE_FILES + 1
+    return tree, env, args
 
 
 @pytest.mark.slow
-def test_no_tokenizer_is_ever_built_inside_a_worker(tmp_path):
-    """Where the warm-up happens is the whole of what it buys, so pin the where.
+def test_a_warm_run_counts_every_file_when_jobs_outnumber_the_descriptors(tmp_path):
+    """Closing the leaked handles is not on its own enough to make #115 stay fixed.
 
-    Every other guard here looks at the finished run, and a warm-up moved to after the
-    pool satisfies all of them -- the tokenizer is resident either way. What it stops
-    being is safe: the point of #115 is that a build inside a worker happens under
-    whatever descriptor pressure the run has reached, and tiktoken's registry does not
-    survive being built with none left. So the property is that the build happens on the
-    thread that has not run any work yet, and it is observed the way #56 asks for -- by
-    recording what actually ran, in a child process, not by reading the source.
+    With the handles closed, a warm run still undercounts once the workers outnumber the
+    descriptors: a worker that cannot open the cache database reads a miss where there
+    was a hit, and that miss is the run's first tiktoken load, which leaves the encoding
+    registry empty for the rest of the run. Exit code 0, so the short total is the answer
+    a script gets. Asked for the whole cap, far past the boundary, so a run that honoured
+    the request could not pass by luck.
 
-    Deliberately an uncached run: a cached one reaches no tokenizer from the pool at all,
-    so it would pass wherever the warm-up sat.
+    A sequential run at the same limit is the positive control: ten descriptors is a
+    budget this interpreter happens to fit in, not one it is owed, and on a heavier image
+    -- more shared libraries open before main, a locale or certificate bundle this one
+    does not load -- even one worker would not fit. Then the limit says nothing about the
+    clamp, and a skip is the honest result rather than a failure.
     """
-    tree = _write_tree(tmp_path)
-    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    _, env, args = _clamp_fence(tmp_path)
+    truth = _csv_rows(_run_toko([*args, "--jobs", "1"], env).stdout)
 
-    checked = subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            "-c",
-            _BUILDING_THREAD_CHECK,
-            "--format",
-            "csv",
-            "-m",
-            "gpt-5",
-            "--jobs",
-            "8",
-            str(tree),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
+    control = _run_with_fd_limit(_CLAMP_FENCE_LIMIT, [*args, "--jobs", "1"], env)
+    if control.returncode != 0:
+        pytest.skip(
+            f"this interpreter cannot run at {_CLAMP_FENCE_LIMIT} descriptors even"
+            f" sequentially: {control.stderr.strip()[:200]}"
+        )
+    if _csv_rows(control.stdout) != truth:
+        pytest.skip(
+            f"a sequential run at {_CLAMP_FENCE_LIMIT} descriptors is already short of"
+            " the unrestricted total, so the limit says nothing about the clamp"
+        )
+
+    scarce = _run_with_fd_limit(
+        _CLAMP_FENCE_LIMIT, [*args, "--jobs", str(MAX_JOBS)], env
     )
 
-    assert checked.returncode == 0, checked.stderr
+    assert scarce.returncode == 0, scarce.stderr
+    assert "Failed to count tokens" not in scarce.stderr
+    assert _csv_rows(scarce.stdout) == truth
+
+
+def test_the_reduction_is_reported_when_the_jobs_count_was_asked_for(tmp_path):
+    """Silently ignoring an explicit -j is a smaller version of what #115 was."""
+    _, env, args = _clamp_fence(tmp_path)
+
+    reduced = _run_with_fd_limit(
+        _CLAMP_FENCE_LIMIT, [*args, "--jobs", str(MAX_JOBS)], env
+    )
+
+    assert reduced.returncode == 0, reduced.stderr
+    assert (
+        f"Reducing --jobs from {MAX_JOBS} to {_CLAMP_FENCE_WORKERS} to stay inside the"
+        f" open-file limit of {_CLAMP_FENCE_LIMIT}" in reduced.stderr
+    )
+
+
+def test_the_reduction_is_not_reported_when_only_the_default_was_reduced(tmp_path):
+    """Nobody asked for the default, so trimming it is not news.
+
+    The counts still have to come out right, and that is what says the clamp ran at all:
+    the default is 8 and only 5 fit, so a run that skipped the clamp would undercount.
+    """
+    _, env, args = _clamp_fence(tmp_path)
+    truth = _csv_rows(_run_toko([*args, "--jobs", "1"], env).stdout)
+
+    defaulted = _run_with_fd_limit(_CLAMP_FENCE_LIMIT, args, env)
+
+    assert defaulted.returncode == 0, defaulted.stderr
+    assert "Reducing --jobs" not in defaulted.stderr
+    assert _csv_rows(defaulted.stdout) == truth
+
+
+def test_a_jobs_count_typed_out_as_the_default_still_counts_as_asked_for(tmp_path):
+    """Explicitness is where the value came from, not what the value is.
+
+    `--jobs 8` and no --jobs at all arrive as the same number, so a check that compared
+    against DEFAULT_JOBS would file the typed one as a default and swallow the notice the
+    user is owed. What separates them is the parameter source click records.
+    """
+    _, env, args = _clamp_fence(tmp_path)
+    assert DEFAULT_JOBS > _CLAMP_FENCE_WORKERS, "the default has to be one that is cut"
+
+    typed = _run_with_fd_limit(
+        _CLAMP_FENCE_LIMIT, [*args, "--jobs", str(DEFAULT_JOBS)], env
+    )
+
+    assert typed.returncode == 0, typed.stderr
+    assert (
+        f"Reducing --jobs from {DEFAULT_JOBS} to {_CLAMP_FENCE_WORKERS}" in typed.stderr
+    )
+
+
+@pytest.mark.slow
+def test_a_jobs_count_that_already_fits_is_left_alone(tmp_path):
+    """The other direction: a run with descriptors to spare says nothing and cuts nothing."""
+    _, env, args = _clamp_fence(tmp_path)
+    truth = _csv_rows(_run_toko([*args, "--jobs", "1"], env).stdout)
+
+    ample = _run_toko([*args, "--jobs", str(MAX_JOBS)], env)
+
+    assert ample.returncode == 0, ample.stderr
+    assert "Reducing --jobs" not in ample.stderr
+    assert _csv_rows(ample.stdout) == truth
+
+
+@pytest.mark.slow
+def test_the_lowest_limit_toko_runs_at_still_counts_every_file(tmp_path):
+    """Half of four is two, and at four descriptors two workers is already one too many.
+
+    The one limit the halving does not cover on its own, which is why the clamp reserves
+    three descriptors as well as halving. A sequential run at the same limit is the
+    positive control: if even that cannot start, the limit says nothing about the clamp.
+
+    Run several times because the failure it guards against is a race rather than a
+    certainty: dropping the reserve leaves two workers contending for four descriptors,
+    which usually undercounts but not always. Every repetition has to count the whole
+    tree, so the chance of a dropped reserve going unnoticed falls off geometrically.
+    """
+    _, env, args = _clamp_fence(tmp_path)
+    truth = _csv_rows(_run_toko([*args, "--jobs", "1"], env).stdout)
+
+    control = _run_with_fd_limit(_MINIMUM_LIMIT, [*args, "--jobs", "1"], env)
+    if control.returncode != 0:
+        pytest.skip(
+            f"this interpreter cannot run at {_MINIMUM_LIMIT} descriptors even"
+            f" sequentially: {control.stderr.strip()[:200]}"
+        )
+    assert _csv_rows(control.stdout) == truth
+
+    for attempt in range(1, _MINIMUM_LIMIT_ATTEMPTS + 1):
+        scarce = _run_with_fd_limit(
+            _MINIMUM_LIMIT, [*args, "--jobs", str(MAX_JOBS)], env
+        )
+
+        assert scarce.returncode == 0, f"attempt {attempt}: {scarce.stderr}"
+        assert "Failed to count tokens" not in scarce.stderr, f"attempt {attempt}"
+        assert _csv_rows(scarce.stdout) == truth, f"attempt {attempt} undercounted"
 
 
 # The positive control for the test below: proof the child really cannot reach the blob
@@ -1372,13 +1395,14 @@ raise SystemExit("the encoding downloaded, so nothing here was actually offline"
 
 @pytest.mark.slow
 def test_a_cached_run_survives_a_cold_tiktoken_cache_it_cannot_refill(tmp_path):
-    """Warming a tokenizer must not turn a working run into a failing one.
+    """A run whose every count is cached must not need the network to finish.
 
-    Every count is already in toko's cache, so the run needs no tokenizer at all -- but
-    tiktoken's blob cache lives in /tmp and is wiped by a reboot, so the warm-up reaches
-    for a download that an offline machine cannot serve. That is an ordinary state, not
-    an exotic one, and the run has to finish exactly as it did before there was a
-    warm-up: same total, same exit code.
+    tiktoken's blob cache lives in /tmp and is wiped by a reboot, so resolving an
+    encoding reaches for a download an offline machine cannot serve -- while a run that
+    can answer every count from toko's own cache never needed an encoding at all. The
+    two only stay separate as long as nothing on the path touches a tokenizer eagerly,
+    which is exactly what the next well-meant warm-up would reintroduce, so the property
+    is fenced here rather than left to the absence of one.
     """
     tree = _write_tree(tmp_path)
     env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}

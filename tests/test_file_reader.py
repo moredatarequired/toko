@@ -1,5 +1,6 @@
 """Tests for file_reader module."""
 
+import importlib
 import os
 import subprocess
 import sys
@@ -7,10 +8,19 @@ import tempfile
 from pathlib import Path
 
 import httpx
+import pathspec
+import pathspec.patterns.gitwildmatch
 import pytest
 import respx
 
-from toko.file_reader import fetch_url, find_files, read_file, read_gitignore
+import toko.file_reader
+from toko.file_reader import (
+    _matched_self,
+    fetch_url,
+    find_files,
+    read_file,
+    read_gitignore,
+)
 
 
 def test_read_file():
@@ -378,3 +388,53 @@ def test_a_starred_directory_exclude_still_lets_a_later_pattern_re_include(tmp_p
     found = find_files(tmp_path, exclude_patterns=["dir/**", "!dir/keep.txt"])
 
     assert {path.name for path in found} == {"top.txt", "keep.txt"}
+
+
+@pytest.fixture
+def pathspec_without_the_descendant_mark(monkeypatch):
+    """Stand in for a pathspec release that renames the private group toko reads.
+
+    Nothing in pathspec's public surface promises `ps_d`, and the requirement carries
+    no upper bound, so this is the shape of the regression the import-time guard exists
+    to turn into an exception.
+    """
+    original = pathspec.patterns.gitwildmatch.GitWildMatchPattern.pattern_to_regex
+
+    def renamed(pattern):
+        regex, include = original(pattern)
+        if regex is not None:
+            regex = regex.replace("?P<ps_d>", "?P<ps_descendant>")
+        return regex, include
+
+    monkeypatch.setattr(
+        pathspec.patterns.gitwildmatch.GitWildMatchPattern,
+        "pattern_to_regex",
+        staticmethod(renamed),
+    )
+    yield
+    # A reload that raised part way through leaves the module object stripped of every
+    # name defined below the guard, so rebuild it once pathspec is itself again.
+    monkeypatch.undo()
+    importlib.reload(toko.file_reader)
+
+
+@pytest.mark.usefixtures("pathspec_without_the_descendant_mark")
+def test_losing_the_pathspec_descendant_mark_silently_restores_pruning():
+    """Why the guard is worth having: the regression it catches raises nothing itself."""
+    pattern = next(
+        iter(pathspec.PathSpec.from_lines("gitwildmatch", ["dir/"]).patterns)
+    )
+
+    # `dir/below.txt` is something *inside* `dir`, so the honest verdict is None and
+    # the walk is left to prune. Without the mark it reads as the directory's own
+    # match, and a later `!dir/keep.txt` loses the directory it needed opened.
+    assert _matched_self(pattern, "dir/below.txt") is True
+
+
+@pytest.mark.usefixtures("pathspec_without_the_descendant_mark")
+def test_importing_fails_loudly_when_pathspec_drops_the_descendant_mark():
+    """The same regression met at import: an exception naming what broke, not silence."""
+    with pytest.raises(RuntimeError, match="pathspec") as raised:
+        importlib.reload(toko.file_reader)
+
+    assert "ps_d" in str(raised.value)

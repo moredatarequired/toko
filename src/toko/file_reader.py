@@ -20,6 +20,29 @@ ErrorReporter = Callable[[str], None]
 _DESCENDANT_MARK = "ps_d"
 
 
+def _descendant_mark_is_live() -> bool:
+    pattern = next(
+        iter(pathspec.PathSpec.from_lines("gitwildmatch", ["dir/"]).patterns)
+    )
+    found = pattern.match_file("dir/below.txt")
+    return (
+        found is not None and found.match.groupdict().get(_DESCENDANT_MARK) is not None
+    )
+
+
+# The mark is private to pathspec and the requirement carries no upper bound, so a
+# release that renames or drops it would not raise: `.get` would return None for every
+# descendant match, `_matched_self` would call each one the directory's own match, and
+# `dir/**` would quietly prune `dir` again -- undoing the re-inclusion below for an
+# installed user while the pinned lockfile keeps CI green. So say so at import instead.
+if not _descendant_mark_is_live():
+    raise RuntimeError(
+        f"pathspec no longer marks a match on a descendant with the "
+        f"{_DESCENDANT_MARK!r} capture group, which toko.file_reader needs to tell a "
+        f"directory's own match from a match on something inside it."
+    )
+
+
 def _probe(relative: str, pattern: pathspec.Pattern, *, is_dir: bool) -> str:
     """How one entry is spelled for one rule: only a `dir/` rule sees the separator.
 

@@ -43,7 +43,7 @@ def spelled_from(root: Path, cwd: Path, *, absolute: bool = False) -> str:
 def run_ripgrep(
     root: Path, *args: str, cwd: Path | None = None, absolute: bool = False
 ) -> subprocess.CompletedProcess[str]:
-    """List `root` with ripgrep, from `cwd` when the walk is not started inside it.
+    r"""List `root` with ripgrep, from `cwd` when the walk is not started inside it.
 
     What this helper can express is what the parity suite can cover, and twice now the
     gap has been here rather than in any one test. It used to run ripgrep with its
@@ -52,19 +52,28 @@ def run_ripgrep(
     and it spelled the walk root relatively always, which made an absolutely named root
     inexpressible even after `cwd` arrived. Fixtures cannot close a hole in the shapes
     the helper can produce, so widen this before adding one.
+
+    The output is decoded here rather than by `text=True`, which reads the pipe in
+    universal-newline mode: that turns the `\r` in a filename into a newline and splits
+    one listed path into two, making a name holding a carriage return inexpressible.
     """
     target = [] if cwd is None else ["--", spelled_from(root, cwd, absolute=absolute)]
     result = subprocess.run(  # noqa: S603
         [RIPGREP, "--files", *args, *target],
         cwd=root if cwd is None else cwd,
         capture_output=True,
-        text=True,
         check=False,
+    )
+    decoded = subprocess.CompletedProcess(
+        result.args,
+        result.returncode,
+        os.fsdecode(result.stdout),
+        os.fsdecode(result.stderr),
     )
     # 2 is ripgrep's "something went wrong", which --follow returns for this tree's
     # dangling link and its cycle while still listing every file it did reach.
-    assert result.returncode in (0, 2), result.stderr
-    return result
+    assert decoded.returncode in (0, 2), decoded.stderr
+    return decoded
 
 
 def ripgrep_files(
@@ -1518,6 +1527,226 @@ def test_an_undecodable_line_truncates_every_kind_of_ignore_file(tmp_path, ignor
 
     assert toko_files(tmp_path, hidden=False) == listed
     assert listed == {"keep.txt"}
+
+
+# A lone carriage return is not a line ending to ripgrep. `BufRead::lines` ends a line
+# at a newline and nowhere else, taking the `\r` of a CRLF with it, so a `\r` on its own
+# is a byte inside the rule. The CRLF sweep above cannot see this: every `\r` in it is
+# followed by a newline, which is the one arrangement both readings agree on.
+LONE_CARRIAGE_RETURN_IGNORE_FILES = [
+    b"*.log\r*.md\r",
+    b"*.log\r*.md",
+    b"*.log\r",
+    b"*.log\r\r\n",
+    b"x\r.txt\n",
+    b"*.log\r\n*.md\rx.txt\n",
+    b"*.log\n*.md\r!y.log\n",
+    b" \ry.log\n",
+    b"\r y.log\n",
+    b"*.log\\ \r\n",
+    b"\\\\ \r\r\n",
+    b"*.log\rcaf\xe9.txt\r!y.log\r",
+    b"*.log\r\xff*.md\n",
+    b"*.log\xff\r*.md\n",
+]
+
+CARRIAGE_RETURN_NAMES = [
+    "keep.md",
+    "x.txt",
+    "y.log",
+    "x\r.txt",
+    " y.log",
+    " \ry.log",
+    "\r y.log",
+    "y.log ",
+    "\\",
+    "\\ ",
+]
+
+
+@pytest.mark.parametrize("raw", LONE_CARRIAGE_RETURN_IGNORE_FILES, ids=repr)
+def test_a_lone_carriage_return_does_not_end_a_rule_for_ripgrep(tmp_path, raw):
+    r"""A reader that breaks on `\r` applies as two rules a line ripgrep never split.
+
+    Both halves are wrong at once and neither is visible in an editor: the text before
+    the `\r` becomes a rule ripgrep never had, and the whole line stops naming the file
+    it does name. The sweep varies where the `\r` sits, because the halves it produces
+    are what decide the answer.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(raw)
+    for name in CARRIAGE_RETURN_NAMES:
+        write(tmp_path / name)
+
+    assert toko_files(tmp_path, hidden=False) == ripgrep_files(tmp_path)
+
+
+def test_a_carriage_return_separated_file_holds_no_rule_at_all(tmp_path):
+    """The severe shape: an editor writes CR line endings and every rule disappears.
+
+    Read as three rules the file excludes two of these; read the way ripgrep reads it
+    the whole file is one glob that names nothing. Saying which files survive keeps the
+    sweep above from passing because toko and ripgrep are wrong together.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\r*.md\r")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "y.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt", "y.log"}
+
+
+def test_a_carriage_return_inside_a_rule_still_names_the_file_holding_one(tmp_path):
+    r"""The `\r` belongs to the name, so the rule matches the file whose name has it.
+
+    A splitting reader spares `x\r.txt` -- the file the line actually names -- and
+    counts it, sending its contents to whatever provider is counting, while `x.txt`
+    survives either way and hides the difference from a test that only counts files.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"x\r.txt\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "x\r.txt")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt"}
+
+
+def test_a_carriage_return_beside_a_crlf_line_ending_leaves_the_crlf_working(tmp_path):
+    r"""CRLF still ends a line, told apart from the lone `\r` inside the same file.
+
+    A reader that stops taking the `\r` off a CRLF line keeps it in the rule, where it
+    matches nothing; one that goes on breaking at every `\r` splits the second line.
+    Only a file holding both arrangements separates the two.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\r\n*.md\rx.txt\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "y.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt"}
+
+
+def test_a_negation_after_a_carriage_return_never_re_includes_the_file(tmp_path):
+    r"""The leaking direction: `*.md\r!y.log` is one glob, not an exclusion undone.
+
+    A splitting reader reads a `!y.log` ripgrep never sees and hands back a file the
+    line above excluded, so its contents reach whichever provider is counting -- and
+    it drops `keep.md` from the same line, which is the error that gets noticed.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\n*.md\r!y.log\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "y.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt"}
+
+
+def test_a_carriage_return_before_an_undecodable_byte_truncates_the_whole_line(
+    tmp_path,
+):
+    r"""Where the line ends decides what the undecodable byte takes with it.
+
+    `*.log\r\xff*.md` is a single line, so the byte ripgrep cannot read costs the whole
+    file its rules -- `*.log` included. A reader that breaks at the `\r` first hands
+    `*.log` to the spec before the truncation can reach it and drops a file ripgrep
+    lists, which is why the strip belongs after the decode rather than before the split.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\r\xff*.md\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "y.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt", "y.log"}
+
+
+def test_a_crlf_line_ending_comes_off_a_rule_that_escapes_its_trailing_space(tmp_path):
+    r"""The `\r` has to go before the rule is read, not be left for the strip to take.
+
+    `*.log\\ ` keeps its trailing space only because the rule ends with the escape; a
+    `\r` left behind it hides the escape, and what remains once the whitespace strips
+    is a dangling backslash rather than a pattern. Written with LF the same rule is
+    unremarkable, so only the CRLF spelling shows whether the `\r` was taken off.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b"*.log\\ \r\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "x.txt")
+    write(tmp_path / "y.log")
+    write(tmp_path / "y.log ")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "x.txt", "y.log"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "listed_beside_keep"),
+    [(b"\\\\ \n", "\\"), (b"\\\\ \r\r\n", "\\ ")],
+    ids=repr,
+)
+def test_a_carriage_return_behind_an_escape_decides_which_file_a_rule_names(
+    tmp_path, raw, listed_beside_keep
+):
+    r"""One `\r` is the line ending; a second one is trailing whitespace ahead of it.
+
+    `\\ ` keeps its space only because the rule ends with the escape. Leave a `\r`
+    behind it and the escape is no longer at the end, so the whitespace strips and the
+    rule names the bare backslash instead -- ripgrep reads the two spellings as two
+    different files. Taking every trailing `\r` off restores an escape ripgrep had
+    already lost and excludes the other file of the pair, which is a one-byte edit to
+    the reader and a complete swap of which file's contents a provider is shown.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(raw)
+    write(tmp_path / "keep.md")
+    write(tmp_path / "\\")
+    write(tmp_path / "\\ ")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", listed_beside_keep}
+
+
+def test_a_carriage_return_beside_leading_whitespace_stays_in_the_name(tmp_path):
+    r"""The `\r` and the escape that holds leading whitespace meet on one line.
+
+    ` \ry.log` names a file starting with a space, and the escape has to survive the
+    `\r` sitting behind it. A splitting reader turns the line into a blank one and a
+    bare `y.log`, which excludes the file ripgrep lists and lists the one it excludes.
+    """
+    run_git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_bytes(b" \ry.log\n")
+    write(tmp_path / "keep.md")
+    write(tmp_path / "y.log")
+    write(tmp_path / " y.log")
+    write(tmp_path / " \ry.log")
+
+    listed = ripgrep_files(tmp_path)
+
+    assert toko_files(tmp_path, hidden=False) == listed
+    assert listed == {"keep.md", "y.log", " y.log"}
 
 
 def test_a_gitignore_directly_above_the_repository_root_reaches_nothing_inside_it(

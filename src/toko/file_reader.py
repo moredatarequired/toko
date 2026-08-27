@@ -248,14 +248,20 @@ def _read_spec(path: Path) -> pathspec.PathSpec | None:
         raw = path.read_bytes()
     except OSError:
         return None
+    # ripgrep reads an ignore file with `BufRead::lines`, which ends a line at a
+    # newline and nowhere else, taking the `\r` of a CRLF with it. A lone `\r` is
+    # ordinary text inside a rule there, so any splitter that breaks on one -- both
+    # `splitlines` methods do -- applies as two rules a line ripgrep never split.
+    lines = raw.split(b"\n")
+    if not lines[-1]:
+        lines.pop()
     patterns = []
-    # bytes.splitlines breaks on CR, LF and CRLF and nothing else, which is the set
-    # ripgrep breaks on; str.splitlines would additionally break on NEL and friends.
-    for line in raw.splitlines():
+    for line in lines:
         try:
-            patterns.append(line.decode("utf-8"))
+            decoded = line.decode("utf-8")
         except UnicodeDecodeError:
             break
+        patterns.append(decoded.removesuffix("\r"))
     return _build_spec(patterns)
 
 

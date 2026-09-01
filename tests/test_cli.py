@@ -1,10 +1,13 @@
 """Tests for the CLI."""
 
 import ast
+import contextlib
 import json
 import os
 import re
 import resource
+import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -18,6 +21,7 @@ from typer.testing import CliRunner
 
 import toko.counter as counter
 from tests.cache_keys import cache_key
+from tests.git_runner import run_git
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
 from toko.cli import DEFAULT_JOBS, MAX_JOBS, app
@@ -56,7 +60,7 @@ def _isolated_config_home(tmp_path, monkeypatch):
 def _invoke_cli(
     args: list[str],
     env_overrides: dict[str, str] | None = None,
-    stdin: str | None = None,
+    stdin: str | bytes | None = None,
 ):
     """Invoke the CLI against the per-test config home."""
     return runner.invoke(app, args, env=env_overrides, input=stdin)
@@ -341,6 +345,20 @@ def test_count_from_stdin():
     result = _invoke_cli(["--header", "--format", "tsv"], stdin="hello world")
     assert result.exit_code == 0
     assert result.stdout.strip() == "model\ttokens\ngpt-5\t2"
+
+
+def test_binary_stdin_is_refused_the_way_a_binary_file_is():
+    """A confident count for bytes toko never decoded is its worst failure mode.
+
+    A binary file on disk leaves the table with a warning and, when it was the only
+    input, a non-zero exit. Piped binary used to be decoded with replacement
+    characters and counted anyway, so the wrong number came back at exit 0.
+    """
+    result = _invoke_cli([], stdin=b"hello\x00\x80\x81world\n")
+
+    assert result.exit_code == 1
+    assert "Skipping binary file <stdin>" in result.stderr
+    assert not result.stdout.strip()
 
 
 def test_count_with_multiple_models():
@@ -657,6 +675,46 @@ def test_google_bad_response_reports_error_without_traceback():
     assert "Error: All models failed to count tokens" in result.stderr
 
 
+# A counted file's contents leave the machine only as the body of a provider request,
+# so that is where the sentinel is looked for. The two halves need separate caches:
+# `count_tokens` returns before any provider call on a cache hit, so a shared one
+# would let the repository half pass on a replayed count rather than on exclusion.
+# The autouse `_cache_root` fixture gives each parametrised case its own `tmp_path`.
+_LEAK_SENTINEL = "toko-leak-sentinel-b7f3a1c2"
+
+
+@respx.mock
+@pytest.mark.parametrize("in_a_repository", [False, True])
+def test_gitignore_withholds_contents_from_the_provider_only_inside_a_repository(
+    tmp_path, in_a_repository
+):
+    respx.post(ANTHROPIC_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"input_tokens": 7})
+    )
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / ".gitignore").write_text("secret.txt\n")
+    (tree / "secret.txt").write_text(_LEAK_SENTINEL)
+    (tree / "notes.txt").write_text("ordinary contents")
+    if in_a_repository:
+        run_git(tree, "init", "-q")
+
+    result = _invoke_cli(
+        ["--model", "claude-sonnet-4-5", "--format", "csv", str(tree)],
+        {"ANTHROPIC_API_KEY": "test-key"},
+    )
+
+    assert result.exit_code == 0
+    assert {str(call.request.url) for call in respx.calls} == {ANTHROPIC_COUNT_URL}
+    bodies = [call.request.content.decode() for call in respx.calls]
+    assert sum(_LEAK_SENTINEL in body for body in bodies) == (
+        0 if in_a_repository else 1
+    )
+
+    assert "notes.txt" in result.stdout
+    assert ("secret.txt" in result.stdout) is not in_a_repository
+
+
 def test_option_after_positional_path(tmp_path):
     sample = tmp_path / "sample.txt"
     sample.write_text("hello world")
@@ -734,16 +792,140 @@ def test_bad_url_does_not_abort_good_url_or_file(tmp_path):
     assert _BAD_URL not in result.stdout
 
 
-def test_unreadable_file_in_directory_does_not_abort_batch(tmp_path):
-    (tmp_path / "sample.txt").write_text("hello world")
-    # A self-referential symlink is unreadable for every user, including root.
-    (tmp_path / "loop.txt").symlink_to("loop.txt")
+@contextlib.contextmanager
+def _time_limit(seconds: int):
+    """Fail the test rather than the suite if something below stops returning."""
 
-    result = _invoke_cli(["--format", "csv", str(tmp_path)])
+    def give_up(_signum, _frame):
+        raise TimeoutError(f"still running after {seconds}s")
+
+    previous = signal.signal(signal.SIGALRM, give_up)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_fifo_in_a_scanned_directory_does_not_stall_the_run(tmp_path, monkeypatch):
+    # A FIFO reaches read_text() only if discovery hands it over, and read_text()
+    # on one blocks until something opens the far end -- forever, in a run with no
+    # other end. The time limit turns that back into a failure.
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    os.mkfifo("pipe")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "."])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in result.stdout
+    assert "pipe" not in result.stdout
+
+
+def test_a_socket_in_a_scanned_directory_is_skipped_without_an_error(
+    tmp_path, monkeypatch
+):
+    # chdir plus a short relative name: an AF_UNIX path caps at ~104 bytes, which a
+    # macOS tmp_path can exceed on its own.
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind("sock")
+
+        result = _invoke_cli(["--format", "csv", "."])
+
+    assert result.exit_code == 0
+    assert "sample.txt,2" in result.stdout
+    assert "sock" not in result.stdout
+    # "without an error" is a claim about stderr; the exit code only carries it by way
+    # of which exception open() happens to raise on an AF_UNIX socket.
+    assert result.stderr == ""
+
+
+def test_follow_counts_a_symlinked_file_that_is_skipped_by_default(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("link.txt").symlink_to("sample.txt")
+
+    assert "link.txt" not in _invoke_cli(["--format", "csv", "."]).stdout
+
+    followed = _invoke_cli(["--format", "csv", "--follow", "."])
+
+    assert followed.exit_code == 0
+    assert "link.txt,2" in followed.stdout
+
+
+def test_broken_symlink_under_follow_does_not_abort_the_batch(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("broken.txt").symlink_to("gone.txt")
+
+    result = _invoke_cli(["--format", "csv", "-L", "."])
+
     assert result.exit_code == 1
     assert "sample.txt,2" in result.stdout
-    assert "Error reading" in result.stderr
-    assert "loop.txt" in result.stderr
+    assert "broken.txt" in result.stderr
+    assert "No such file or directory" in result.stderr
+
+
+def test_a_symlink_cycle_under_follow_is_reported_and_the_walk_finishes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("down").mkdir()
+    (Path("down") / "up").symlink_to("..")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "-L", "."])
+
+    assert result.exit_code == 1
+    assert "sample.txt,2" in result.stdout
+    assert "File system loop found" in result.stderr
+
+
+def test_a_loop_through_an_ignored_directory_still_fails_the_cli(tmp_path, monkeypatch):
+    """The bug this guards was the CLI exiting 0 on a tree ripgrep calls broken.
+
+    The library-level regression test asserts the `on_error` callback, which is not the
+    observable that was wrong. `kept/loop` is a real directory the same rule prunes, so
+    a run that drops `c.txt` proves the rule is live -- otherwise a loop reported here
+    would only mean the rule never reached the link at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "kept" / "loop").mkdir(parents=True)
+    (tmp_path / "pruned").mkdir()
+    (tmp_path / "kept" / "a.txt").write_text("hello world")
+    (tmp_path / "kept" / "loop" / "c.txt").write_text("hello world")
+    (tmp_path / "pruned" / "b.txt").write_text("hello world")
+    (tmp_path / "pruned" / "loop").symlink_to(tmp_path)
+    (tmp_path / ".ignore").write_text("loop\n")
+
+    with _time_limit(20):
+        result = _invoke_cli(["--format", "csv", "-L", "."])
+
+    assert result.exit_code == 1
+    assert "File system loop found" in result.stderr
+    # The walk still finishes, and the rule that prunes the loop is demonstrably live.
+    assert "a.txt,2" in result.stdout
+    assert "b.txt,2" in result.stdout
+    assert "c.txt" not in result.stdout
+
+
+def test_a_symlink_named_as_an_argument_is_read_without_follow(tmp_path, monkeypatch):
+    """Ripgrep reads a link it was handed; --follow governs the walk, not arguments."""
+    monkeypatch.chdir(tmp_path)
+    Path("sample.txt").write_text("hello world")
+    Path("link.txt").symlink_to("sample.txt")
+
+    result = _invoke_cli(["--format", "csv", "link.txt"])
+
+    assert result.exit_code == 0
+    assert "link.txt,2" in result.stdout
 
 
 def test_missing_path_reports_only_the_specific_error(tmp_path):

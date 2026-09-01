@@ -5,7 +5,7 @@ Toko is a token counting tool. It is built for use as a CLI, and available as a 
 ## Highlights
 
 - Accurate token counting for OpenAI models out of the box, with optional support for Anthropic, Google, xAI, Mistral, Llama, DeepSeek, and Qwen families.
-- Reads inline text, stdin, files, directories (respects `.gitignore` automatically), and URLs.
+- Reads inline text, stdin, files, directories (skips what ripgrep skips), and URLs.
 - Compare multiple models in one run and add cost estimates powered by bundled `genai-prices` data.
 - Emits `text`, `json`, `csv`, or `tsv` output. When stdout is piped, Toko automatically switches to TSV so you can chain tools like `cut` or `awk`.
 - Caches counts in SQLite under your platform cache folder (e.g. `~/.cache/toko`) so repeated runs avoid redundant API calls.
@@ -114,26 +114,30 @@ toko --exclude '**/__pycache__/*' src/
 File                                   gpt-5
 src/toko/__init__.py                     378
 src/toko/cache.py                        863
-src/toko/cli.py                        5,112
+src/toko/cli.py                        5,731
 src/toko/config.py                     1,374
-src/toko/cost.py                       1,387
-src/toko/counter.py                    6,495
+src/toko/cost.py                       3,435
+src/toko/counter.py                    6,836
 src/toko/data/__init__.py                  8
-src/toko/data/models.toml              2,952
+src/toko/data/models.toml              4,031
 src/toko/data/openrouter_models.json     359
-src/toko/file_reader.py                1,170
-src/toko/formatters.py                 3,999
-src/toko/models.py                     7,175
+src/toko/file_reader.py                5,472
+src/toko/formatters.py                 4,109
+src/toko/models.py                     7,497
 src/toko/output_format.py                 53
-src/toko/price_update.py               1,414
+src/toko/price_update.py               1,420
 src/toko/py.typed                          0
 src/toko/result.py                       107
 src/toko/sort_order.py                    50
-TOTAL                                 32,896
+TOTAL                                 41,723
 ```
 
-- Directories are processed recursively by default and honor `.gitignore`.
-- Use `--no-recursive` to stay shallow and `--no-ignore` to include ignored files.
+- Directories are processed recursively by default and skip what `rg --files` skips: the ignore files ripgrep honors (`.gitignore` at every level up to the repository root, `.git/info/exclude`, `core.excludesFile`, and `.ignore`/`.rgignore`), hidden files and directories, symlinks, and anything that is not a regular file, such as a FIFO, a socket or a device node.
+- When two ignore files disagree, rank settles it before depth does: `.rgignore` beats `.ignore`, and both beat `.gitignore` and `.git/info/exclude`, wherever each one sits. A `.rgignore` at the top of a tree therefore wins over an `.ignore` several directories below it. Only between files of the same kind does the deeper one win. Git's ignore files belong to the repository that holds them: a checkout nested inside another one answers to its own rules and not to the outer repository's, exactly as `git` and `rg` treat it.
+- **Git's ignore files need a git repository.** In a directory that is not inside one, `.gitignore` is not read at all, and a file you excluded with it *will* be counted — and if it decodes as UTF-8 its contents are sent to every API-backed model (Anthropic, Google, xAI) whose key you have set, since a missing key makes Anthropic and Google fail the count and xAI fall back to a local tokenizer. This is what `rg --files` does; `--no-require-git` is how you switch it off there, and toko has no equivalent. **Use `.ignore` or `.rgignore` instead**: they take the same patterns, they are honoured all the way to the filesystem root whether or not a repository exists, and they outrank `.gitignore` where both apply. The fix is to add an `.ignore` beside the `.gitignore` holding the same patterns, which restores the set of files you had before everywhere except inside a nested checkout, where `.ignore` reaches and git's ignore files stop. Renaming the `.gitignore` to `.ignore` also works for toko, but git then stops ignoring those paths — a secret you were keeping out of the repository becomes committable — so adding the second file is the safer of the two.
+- `--exclude`/`-e` takes the patterns `rg -g '!PATTERN'` takes, and prunes the directories ripgrep prunes: `-e 'node_modules/'` never opens `node_modules`, while `-e 'node_modules/**'` opens it once and prunes everything inside, because that pattern matches only what is under the directory and not the directory itself. `core.excludesFile` is read from git's global config only — the `$HOME/.gitconfig` and `$XDG_CONFIG_HOME/git/config` that `rg` parses for itself — so a setting in a repository's own `.git/config` changes what `git status` hides without changing what toko counts, and its anchored patterns resolve against the working directory the way `rg` resolves them, not against the repository root that `git` uses. A negated `--exclude` only re-includes what another `--exclude` pattern excluded, never a file an ignore file already dropped: for that, use `--no-ignore` or a `!` line in an `.ignore`.
+- Use `--no-recursive` to stay shallow, `--no-ignore` to include every ignored file, `--no-ignore-dot` to drop only the `.ignore`/`.rgignore` rules, and `--hidden` to count dotted paths such as `.env` and `.github/`. `--no-ignore` switches off the ignore *files* but not the hidden rule, exactly as in ripgrep, so "count absolutely everything" is now `--no-ignore --hidden` rather than `--no-ignore` alone. `--hidden` walks `.git` as well, the same as `rg --hidden` does, so on a real checkout it counts the loose objects, refs and packfiles inside it; add `--exclude '.git/**'` if you want the dotted paths without the object store.
+- Symlinks met while walking a directory are skipped, as `rg` skips them. Pass `--follow`/`-L` to walk them the way `rg -L` does: symlinked files are counted and symlinked directories are descended into. A symlink named directly on the command line is read either way, with or without the flag. Following stops at a cycle instead of looping forever, and a link that dangles or spirals is reported on stderr while the rest of the tree is still counted. Such a run exits 1, where `rg` exits 2 for the same tree, so a script standing in front of both should test for a non-zero status rather than match on the number.
 - Counting files runs eight counts at a time, which matters most for the API-backed providers. Pass `--jobs`/`-j` (1 to 64) to change that, or `--jobs 1` to count one at a time. It has no effect on `--text` or piped stdin, and URLs are still fetched one after another.
 - Use `--sort count` to put the biggest files first, which is the quick way to find
   whatever is filling a context window. `--sort path` sorts the rows by path instead.
@@ -341,7 +345,10 @@ xai = "xai-..."
 # reads it: OpenAI models are tokenized locally with tiktoken.
 ```
 
-Config values act as defaults; command-line flags always win.
+Config values act as defaults; command-line flags always win. `respect_gitignore`
+governs every ignore file toko reads, not only `.gitignore`: setting it to `false` is
+what `--no-ignore` does, and drops `.git/info/exclude`, `core.excludesFile` and
+`.ignore`/`.rgignore` along with it.
 
 ## Teaching Toko about a new model
 

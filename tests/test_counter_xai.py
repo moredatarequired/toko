@@ -5,6 +5,7 @@ import pytest
 
 import toko.counter as counter
 from toko.cache import get_cached_count
+from toko.result import CaveatKind, Retirement
 
 
 class DummyResponse:
@@ -78,7 +79,7 @@ def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
     stderr = capsys.readouterr().err
     assert counted.count == len("hi")
     assert counted.approximate is True
-    assert counted.caveat is not None
+    assert counted.caveats[0].kind is CaveatKind.XAI_GROK1_STANDIN
     assert "grok-4.5" in stderr
     assert "approximate" in stderr
     # The transport's own message is never quoted, only what kind of failure it was.
@@ -94,7 +95,7 @@ def test_xai_without_api_key_warns_that_count_is_approximate(monkeypatch, capsys
     stderr = capsys.readouterr().err
     assert counted.count == len("hi")
     assert counted.approximate is True
-    assert counted.caveat == stderr.removeprefix("Warning: ").strip()
+    assert counted.caveats[0].message == stderr.removeprefix("Warning: ").strip()
     assert "XAI_API_KEY is not set" in stderr
     assert "approximate" in stderr
 
@@ -167,6 +168,34 @@ class TestRetirementWarningsThroughCountTokens:
     def test_a_current_model_is_never_warned_about(self, capsys):
         counter.count_tokens("hi", "grok-4.5")
         assert "retired" not in capsys.readouterr().err
+
+    def test_a_retired_count_carries_a_structured_retirement(self, capsys):
+        counted = counter.count_tokens("hi", "grok-3")
+
+        assert counted.retirement == Retirement(
+            model="grok-3", date="2026-05-15", redirects_to="grok-4.3"
+        )
+        # The stderr warning is unchanged; the field is what a program reads.
+        assert "was retired" in capsys.readouterr().err
+
+    def test_a_cache_hit_still_carries_the_retirement(self, monkeypatch, capsys):
+        monkeypatch.setenv("XAI_API_KEY", "test-key")
+        monkeypatch.setattr(
+            counter.httpx, "post", lambda *_a, **_k: DummyResponse({"token_count": 2})
+        )
+
+        assert counter.count_tokens("hi", "grok-3").count == 2
+        capsys.readouterr()
+
+        cached = counter.count_tokens("hi", "grok-3")
+
+        assert cached.count == 2
+        assert cached.retirement == Retirement(
+            model="grok-3", date="2026-05-15", redirects_to="grok-4.3"
+        )
+
+    def test_a_current_model_carries_no_retirement(self):
+        assert counter.count_tokens("hi", "grok-4.5").retirement is None
 
     def test_an_alias_of_a_retired_model_inherits_the_warning(self, capsys):
         counter.count_tokens("hi", "grok-4")

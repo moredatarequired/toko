@@ -18,6 +18,7 @@ from toko.counter import count_tokens, preload_tokenizer
 from toko.file_reader import fetch_url, find_files, read_file
 from toko.formatters import format_file_table, format_output, is_stdin_empty
 from toko.models import list_models as get_model_list
+from toko.models import retirement_for_requested
 from toko.output_format import OutputFormat
 from toko.price_update import (
     apply_cached_prices,
@@ -25,7 +26,7 @@ from toko.price_update import (
     refresh_prices,
     update_prices_if_stale,
 )
-from toko.result import TokenCount
+from toko.result import Retirement, TokenCount
 from toko.sort_order import SortOrder
 
 _SUBCOMMAND_META_KEY = "toko.subcommand"
@@ -210,7 +211,10 @@ def main(
         bool,
         typer.Option(
             "--include-retired",
-            help="Include retired models in --list-models output (no other effect)",
+            help=(
+                "Count with retired models instead of failing, and list them in "
+                "--list-models output"
+            ),
         ),
     ] = False,
     jobs: Annotated[
@@ -300,7 +304,19 @@ def _prepare_prices(config: Config) -> None:
 
 
 def _resolve_models(config: Config, cli_models: list[str] | None) -> list[str]:
-    return cli_models or [config.default_model]
+    # Deduplicated here, before the counting, so that naming a model twice asks for it
+    # once: no second API call, no second failure warning, and `-m gpt-5 -m gpt-5`
+    # answers the way `-m gpt-5` does on both input paths. Fenced by
+    # test_a_model_named_twice_is_asked_for_once, on both paths, and by
+    # test_a_model_named_twice_is_counted_once. format_output deduplicates too, for
+    # callers that reach the formatters directly, and it does not stand in for this:
+    # keep only the formatter's and the first of those tests still fails on the
+    # bare-number collapse in _handle_text_input, which reads len(models) before any
+    # formatter sees the list, and the second still fails on a stderr warning printed
+    # twice, which no formatter emits.
+    if not cli_models:
+        return [config.default_model]
+    return list(dict.fromkeys(cli_models))
 
 
 def _resolve_output_format(config: Config, requested: OutputFormat) -> OutputFormat:
@@ -442,22 +458,21 @@ def _handle_text_input(
     text: str,
     *,
     output_format: OutputFormat,
+    total_only: bool,
     include_costs: bool,
     include_header: bool,
 ) -> None:
     results: dict[str, TokenCount] = {}
+    errors: dict[str, str] = {}
 
     for model_name in models:
         try:
             results[model_name] = count_tokens(text, model=model_name)
         except ValueError as e:
+            errors[model_name] = str(e)
             typer.echo(
                 f"Warning: Failed to count tokens for {model_name}: {e}", err=True
             )
-
-    if not results:
-        typer.echo("Error: All models failed to count tokens", err=True)
-        raise typer.Exit(1)
 
     if include_costs:
         results = _attach_costs(results)
@@ -467,20 +482,29 @@ def _handle_text_input(
         output_format == OutputFormat.TSV
         and not include_costs
         and not include_header
-        and len(results) == 1
-        # A bare number would strand the approximate marker on stderr, which is
-        # exactly where a piping consumer will not see it.
-        and not any(counted.approximate for counted in results.values())
+        # The models asked for, not the counts that came back: a run collapses to a
+        # bare number because one model was named, and it still prints one line when
+        # that model fails. Which shape a command emits is settled before it runs.
+        and len(models) == 1
     ):
         adjusted_format = OutputFormat.TEXT
 
     output = format_output(
         results,
         output_format=adjusted_format,
+        models=models,
+        errors=errors,
         show_costs=include_costs,
         include_header=include_header,
+        total_only=total_only,
     )
     typer.echo(output)
+
+    # After the output, not instead of it: the run failed, and it still owes the
+    # reader the shape the command asked for, with the cells it could not fill empty.
+    if not results:
+        typer.echo("Error: All models failed to count tokens", err=True)
+        raise typer.Exit(1)
 
 
 def _count_one(job: tuple[str, str]) -> TokenCount | str:
@@ -574,11 +598,6 @@ def _handle_file_inputs(
     if model_errors:
         _emit_model_error_summary(model_errors, file_errors)
 
-    has_results = any(file_results[file] for file in file_results)
-    if not has_results:
-        typer.echo("Error: All models failed for all files", err=True)
-        raise typer.Exit(1)
-
     if include_costs:
         file_results = _attach_file_costs(file_results)
 
@@ -586,11 +605,21 @@ def _handle_file_inputs(
         file_results,
         output_format=output_format,
         total_only=total_only,
+        models=models,
+        errors=file_errors,
         show_costs=include_costs,
         include_header=include_header,
         sort_order=sort_order,
     )
     typer.echo(output)
+
+    # After the output, not instead of it: a run where everything failed has the same
+    # shape as one where nothing did -- the same header, the same row per file -- with
+    # every count cell empty. The exit code is what says the run failed.
+    has_results = any(file_results[file] for file in file_results)
+    if not has_results:
+        typer.echo("Error: All models failed for all files", err=True)
+        raise typer.Exit(1)
 
 
 def _attach_costs(counts: dict[str, TokenCount]) -> dict[str, TokenCount]:
@@ -629,6 +658,44 @@ def _collect_supported_models(*, include_retired: bool) -> list[str]:
     return sorted(names, key=str.lower)
 
 
+def _retired_model_error(requested: str, retirement: Retirement) -> str:
+    when = "date unknown" if retirement.date is None else retirement.date
+    redirect = (
+        f"; it redirects to {retirement.redirects_to}"
+        if retirement.redirects_to
+        else ""
+    )
+    return (
+        f"Error: model '{requested}' is retired ({when}){redirect}. "
+        "Pass --include-retired to count with it anyway."
+    )
+
+
+def _reject_retired_models(models: list[str], *, include_retired: bool) -> None:
+    """Refuse a retired model before anything is read or counted.
+
+    A retired name gives a number that is either another model's or nothing at all,
+    so the run fails whole rather than printing a table where one column is quietly
+    wrong. A name whose provider cannot be detected is not this function's problem:
+    the counting path already reports that, and reporting it twice would bury this
+    error under it.
+    """
+    if include_retired:
+        return
+
+    errors: list[str] = []
+    for requested in models:
+        retirement = retirement_for_requested(requested)
+        if retirement is not None:
+            errors.append(_retired_model_error(requested, retirement))
+
+    if not errors:
+        return
+    for error in errors:
+        typer.echo(error, err=True)
+    raise typer.Exit(1)
+
+
 def _show_model_list(*, include_retired: bool) -> None:
     models = _collect_supported_models(include_retired=include_retired)
     typer.echo("\n".join(models))
@@ -657,6 +724,7 @@ def _do_count(
     if list_models:
         _show_model_list(include_retired=include_retired)
     models = _resolve_models(config, model)
+    _reject_retired_models(models, include_retired=include_retired)
     actual_format = _resolve_output_format(config, output_format)
     merged_exclude = _merge_excludes(config, exclude)
     include_header = header if header is not None else is_stdout_tty()
@@ -673,6 +741,7 @@ def _do_count(
             models,
             inputs.text,
             output_format=actual_format,
+            total_only=total_only,
             include_costs=cost,
             include_header=include_header,
         )

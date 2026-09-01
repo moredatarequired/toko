@@ -16,7 +16,7 @@ from toko.cost import (
 from toko.models import (
     ANTHROPIC_MODELS,
     GOOGLE_MODELS,
-    RETIRED_OPENAI_MODELS,
+    UNLISTED_OPENAI_MODELS,
     XAI_MODELS,
     detect_provider,
     list_models,
@@ -105,7 +105,7 @@ class TestPricingCoverage:
         current_prefixes = ("gpt-", "o", "text-embedding-3")
 
         for model_name in openai_models:
-            if model_name in RETIRED_OPENAI_MODELS:
+            if model_name in UNLISTED_OPENAI_MODELS:
                 continue
             if not any(model_name.startswith(prefix) for prefix in current_prefixes):
                 # Skip legacy completions and embeddings we no longer track pricing for

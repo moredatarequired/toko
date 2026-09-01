@@ -235,7 +235,7 @@ class TestPackagedRegistry:
         assert entries, "no OpenAI entries found; this guard would pass vacuously"
 
         estimated = {
-            name: counted.caveat
+            name: counted.caveats
             for name in entries
             if (counted := count_tokens("hello world", model=name, use_cache=False))
             and counted.approximate
@@ -451,6 +451,25 @@ class TestRegistryParsing:
 
         err = capsys.readouterr().err
         assert "grok-imaginary-8" in err
+        assert "grok-imaginary-9" in err
+
+    def test_an_empty_alias_is_ignored_out_loud(self, capsys):
+        """_clean_entry refuses an entry with no 'name', and an alias is a name too.
+
+        Registering "" made get_model("") resolve, which is the whole reason the empty
+        tail of "anthropic/" could reach a real model. The other aliases in the same
+        list still land, so one nonsense entry does not discard the rest.
+        """
+        registry = _registry("""
+            [[model]]
+            name = "grok-imaginary-9"
+            provider = "xai"
+            aliases = ["", "grok-nickname"]
+        """)
+        assert registry.aliases["xai"] == {"grok-nickname": "grok-imaginary-9"}
+
+        err = capsys.readouterr().err
+        assert "empty alias" in err
         assert "grok-imaginary-9" in err
 
     def test_only_aliasable_providers_may_declare_aliases(self, capsys):
@@ -675,7 +694,7 @@ class TestUserOverlay:
 
         assert counted.count == 7
         assert counted.approximate is False
-        assert counted.caveat is None
+        assert counted.caveats == ()
 
     def test_a_capitalised_openai_name_keeps_its_registry_metadata(self, user_registry):
         """OpenAI has no lowercasing resolver of its own, unlike the others.
@@ -695,6 +714,89 @@ class TestUserOverlay:
             resolved = reloaded.get_model(spelling)
             assert resolved.name == "gpt-imaginary-9"
             assert resolved.retired == "2099-01-01"
+
+    def test_a_user_model_named_after_a_shut_down_openai_engine_is_not_retired(
+        self, user_registry
+    ):
+        """RETIRED_OPENAI_MODELS carries OpenAI's shutdowns, and only OpenAI's.
+
+        A user registry is what makes retirement_of's provider check reachable:
+        "davinci" is a key in that table, and the Google builder prefixes the name
+        to "models/davinci", which retirement_of strips straight back to the key.
+        Without the check this model inherits an OpenAI date it has nothing to do
+        with.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "davinci"
+            provider = "google"
+        """)
+        resolved = reloaded.get_model("davinci")
+        assert resolved.provider == "google"
+        assert resolved.name == "models/davinci"
+        assert "davinci" in reloaded.RETIRED_OPENAI_MODELS
+        assert reloaded.retirement_of(resolved) is None
+
+    def test_an_empty_alias_is_refused_so_no_model_hides_behind_it(self, user_registry):
+        """The overlay that made _routed_model_name's `not tail` guard load-bearing.
+
+        An overlay is the only way "" ever resolved: _clean_entry refuses an empty
+        'name', so nothing packaged is reachable under it, but _build_aliases used to
+        accept an empty alias. With one declared on a retired model, get_model("")
+        returned that model, and _routed_model_name without its `not tail` check handed
+        "" to the gate as a candidate -- `toko -m anthropic/` then failed with
+        "model 'anthropic/' is retired (2026-05-15)" instead of the Hub lookup error it
+        gets today. This fences the rejection and the guard together: drop either and
+        the empty name has to stay unresolvable and the prefixed spelling unretired.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "grok-3"
+            provider = "xai"
+            aliases = [""]
+        """)
+        assert reloaded.get_model("grok-3").retired is not None
+        with pytest.raises(ValueError, match="Could not detect provider"):
+            reloaded.get_model("")
+        assert reloaded.retirement_candidates("anthropic/") == ["anthropic/"]
+        assert reloaded.retirement_for_requested("anthropic/") is None
+
+    def test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement(
+        self, user_registry
+    ):
+        """The typed spelling comes before the routed one, not just before its -latest strip.
+
+        test_the_spelling_as_typed_decides_which_retirement_is_reported fences the
+        -latest axis only: building retirement_candidates' `bases` routed-first leaves
+        that test green, because no packaged name is registered under both a routed
+        spelling and its tail. This test is the fence for the routed axis instead -- with
+        the build flipped it is the only failure in the suite. An overlay is what makes
+        the axis reachable -- a registry entry may be named for the full routed spelling
+        and carry its own date, and routed-first then answers for the tail model instead,
+        contradicting retirement_for_requested's "as spelled" contract with a date and a
+        redirect that belong to a different model.
+        """
+        reloaded = user_registry("""
+            [[model]]
+            name = "openrouter/xai/grok-3"
+            provider = "xai"
+            retired = "2031-12-31"
+        """)
+        reported = reloaded.retirement_for_requested("openrouter/xai/grok-3")
+        assert reported.model == "openrouter/xai/grok-3"
+        assert reported.date == "2031-12-31"
+        assert reported.redirects_to is None
+
+        assert reloaded.retirement_candidates("openrouter/xai/grok-3") == [
+            "openrouter/xai/grok-3",
+            "grok-3",
+        ]
+        tail = reloaded.retirement_for_requested("grok-3")
+        assert (tail.model, tail.date, tail.redirects_to) == (
+            "grok-3",
+            "2026-05-15",
+            "grok-4.3",
+        )
 
     def test_a_capitalised_anthropic_name_keeps_its_tokenizer(self, user_registry):
         """Missing the registry entry would hand back a bare, untokenized model."""

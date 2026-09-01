@@ -9,10 +9,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources, util
+from types import MappingProxyType
 
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
 from toko.config import get_models_path
+from toko.result import Retirement
 
 
 @dataclass
@@ -211,6 +213,13 @@ def _build_aliases(
         for alias in declared:
             if not isinstance(alias, str):
                 continue
+            # _clean_entry already refuses an entry whose 'name' is empty, and an
+            # alias is a name too. Accepting one here made get_model("") resolve,
+            # which is what put a real model behind the empty tail of "anthropic/"
+            # and made the retirement gate's `not tail` guard load-bearing.
+            if not alias:
+                _warn(f"ignoring an empty alias on '{name}': an alias needs a name")
+                continue
             # Every lookup goes through a lowercased name, so an alias key that
             # kept its capitals would be registered and then never match.
             key = alias.lower()
@@ -349,9 +358,17 @@ def detect_provider(model: str) -> str | None:
     model_lower = model.lower()
     model_lower_base = model_lower.split("/")[-1]
 
+    # This loop is the only branch that reads the last segment alone; every branch below
+    # reads the whole name, which is why google/gemini-2.5-pro is huggingface and not
+    # google. So a prefixed name whose tail is a tiktoken name never reaches them at all.
     for tiktoken_model in TIKTOKEN_MODEL_TO_ENCODING:
         # If tiktoken prefix is in the model name, then the rest should be, e.g.
         # tiktoken includes gpt-5 which covers gpt-5, gpt-5-mini, gpt-5-nano, etc.
+        # The .lower() on the key is unreachable by any model name: all 45 keys in
+        # tiktoken's MODEL_TO_ENCODING are already lowercase, so it is the identity on
+        # every value it can be handed. Only an upstream release adding a capitalized key
+        # would reach it, which is what it is here for -- no test can fence it, because no
+        # input distinguishes it.
         if model_lower_base.startswith(tiktoken_model.lower()):
             return "openai"
 
@@ -388,11 +405,22 @@ def detect_provider(model: str) -> str | None:
     if model_lower.startswith("gpt-oss"):
         return "huggingface"
 
+    # "models/" is the Google API's own path prefix, not a Hub owner -- huggingface.co
+    # reserves /models, so no repo can be owned by it. The exemption is reachable, but not
+    # through Gemini or Gemma: the branch above returns for those first, so what it
+    # governs is the rest of Google's ListModels output (models/text-bison-001,
+    # models/embedding-001, models/aqa). Without it those resolve as huggingface and the
+    # run tells the user to "use the full model path (org/model-name)" for a name that
+    # already is Google's full path.
     if "/" in model_lower and not model_lower.startswith("models/"):
         return "huggingface"
 
     # Newer OpenAI names tiktoken has never heard of (gpt-6, gpt-5.6, o5). Checked
-    # last so gpt-oss and org-prefixed names keep their more specific providers.
+    # last so gpt-oss and org-prefixed names keep their more specific providers: an owner
+    # segment that merely opens like an OpenAI model (gpt-4-lab/mymodel, o1-labs/mymodel)
+    # must stay a Hub repo id rather than becoming an unknown-OpenAI-model guess on
+    # whatever encoding that owner's prefix resolves to -- cl100k_base for the first,
+    # o200k_base for the second.
     if _OPENAI_NAME_PATTERN.match(model_lower):
         return "openai"
 
@@ -555,51 +583,77 @@ MISTRAL_MODELS: tuple[str, ...] = (
     "mistral-large-2411",
 )
 
-# Names tiktoken still carries in MODEL_TO_ENCODING that --list-models should not
-# advertise. They tokenize fine, so counting is untouched; they are only hidden from
-# the default listing. As of 2026-08-11 that covers OpenAI engines already shut down,
-# babbage-002 and davinci-002 (no new fine-tuning since 2024-10-28, API shutdown
-# 2026-09-28, and genai-prices no longer prices them), and gpt-35-turbo, which is the
-# Azure deployment spelling of gpt-3.5-turbo rather than a name the OpenAI API accepts.
-# Deliberately absent because they are still live: gpt-3.5-turbo, gpt-4 (both shut down
-# 2026-10-23) and text-embedding-ada-002.
-RETIRED_OPENAI_MODELS: frozenset[str] = frozenset(
+# OpenAI engines tiktoken still tokenizes that the API has already shut down, mapped to
+# the shutdown date OpenAI published (https://developers.openai.com/api/docs/deprecations).
+# This is the set the retirement gate reads, so membership has to mean "naming this gets
+# the request rejected" and nothing weaker: refusing a name the API still serves costs a
+# user a count they were entitled to. Every date below is a shutdown date, and the last
+# one OpenAI published for that name -- code-davinci-002 is listed twice, under the
+# 2023-03-20 Codex announcement with a 2023-03-23 shutdown and again under the
+# 2023-07-06 "GPT and embeddings" announcement's base-model table with a 2024-01-04 one,
+# and 2024-01-04 is the shutdown that happened.
+# cushman-codex and davinci-codex are None because they are /v1/engines-era names that
+# were withdrawn before OpenAI kept shutdown tables at all, so no date exists to quote.
+# Names that tiktoken carries and --list-models hides but that are NOT here, because the
+# API or the weights still answer for them, are in UNLISTED_OPENAI_MODELS below.
+RETIRED_OPENAI_MODELS = MappingProxyType(
     {
-        "ada",
-        "babbage",
-        "babbage-002",
-        "code-cushman-001",
-        "code-cushman-002",
-        "code-davinci-001",
-        "code-davinci-002",
-        "code-davinci-edit-001",
-        "code-search-ada-code-001",
-        "code-search-babbage-code-001",
-        "curie",
-        "cushman-codex",
-        "davinci",
-        "davinci-002",
-        "davinci-codex",
-        "gpt-2",
-        "gpt-3.5",
-        "gpt-35-turbo",
-        "gpt2",
-        "text-ada-001",
-        "text-babbage-001",
-        "text-curie-001",
-        "text-davinci-001",
-        "text-davinci-002",
-        "text-davinci-003",
-        "text-davinci-edit-001",
-        "text-search-ada-doc-001",
-        "text-search-babbage-doc-001",
-        "text-search-curie-doc-001",
-        "text-search-davinci-doc-001",
-        "text-similarity-ada-001",
-        "text-similarity-babbage-001",
-        "text-similarity-curie-001",
-        "text-similarity-davinci-001",
+        "ada": "2024-01-04",
+        "babbage": "2024-01-04",
+        "code-cushman-001": "2023-03-23",
+        "code-cushman-002": "2023-03-23",
+        "code-davinci-001": "2023-03-23",
+        "code-davinci-002": "2024-01-04",
+        "code-davinci-edit-001": "2024-01-04",
+        "code-search-ada-code-001": "2024-01-04",
+        "code-search-babbage-code-001": "2024-01-04",
+        "curie": "2024-01-04",
+        "cushman-codex": None,
+        "davinci": "2024-01-04",
+        "davinci-codex": None,
+        "text-ada-001": "2024-01-04",
+        "text-babbage-001": "2024-01-04",
+        "text-curie-001": "2024-01-04",
+        "text-davinci-001": "2024-01-04",
+        "text-davinci-002": "2024-01-04",
+        "text-davinci-003": "2024-01-04",
+        "text-davinci-edit-001": "2024-01-04",
+        "text-search-ada-doc-001": "2024-01-04",
+        "text-search-babbage-doc-001": "2024-01-04",
+        "text-search-curie-doc-001": "2024-01-04",
+        "text-search-davinci-doc-001": "2024-01-04",
+        "text-similarity-ada-001": "2024-01-04",
+        "text-similarity-babbage-001": "2024-01-04",
+        "text-similarity-curie-001": "2024-01-04",
+        "text-similarity-davinci-001": "2024-01-04",
     }
+)
+
+# Live names that --list-models still should not advertise, either because the API is
+# about to drop them or because they are not OpenAI API names at all. Hiding a name only
+# keeps it out of the default listing; it tokenizes, it counts, and the gate never reads
+# this set, so nothing here can be refused. As of 2026-08-17:
+#   babbage-002, davinci-002 -- fine-tuning closed 2024-10-28 and the API shuts them down
+#     2026-09-28, but that is still in the future and genai-prices no longer prices them,
+#     so they are hidden rather than recommended.
+#   gpt-35-turbo -- the Azure deployment spelling of gpt-3.5-turbo (Azure forbids dots in
+#     deployment names). Same cl100k_base encoding and same price; Azure serves it, and
+#     gpt-3.5-turbo itself does not shut down until 2026-10-23. Accepting one spelling and
+#     refusing the other would be arbitrary, so it counts but stays out of the listing.
+#   gpt-3.5 -- a family shorthand, not a name any API accepts, but it resolves to the
+#     cl100k_base encoding the live gpt-3.5-turbo family uses, so the count it gives is
+#     correct and calling it retired would not be.
+#   gpt2, gpt-2 -- open-weights models that were never OpenAI API models, so they have no
+#     retirement to report; they are counted from the gpt2 encoding.
+_UNADVERTISED_LIVE_OPENAI_MODELS: frozenset[str] = frozenset(
+    {"babbage-002", "davinci-002", "gpt-2", "gpt-3.5", "gpt-35-turbo", "gpt2"}
+)
+
+# The --list-models visibility filter: every tiktoken name the default listing hides.
+# Deliberately absent because they are both live and worth advertising: gpt-3.5-turbo and
+# gpt-4 (shutdown 2026-10-23), and text-embedding-ada-002.
+UNLISTED_OPENAI_MODELS: frozenset[str] = (
+    frozenset(RETIRED_OPENAI_MODELS) | _UNADVERTISED_LIVE_OPENAI_MODELS
 )
 
 MODELS = {**ANTHROPIC_MODELS, **GOOGLE_MODELS, **XAI_MODELS, **OPENAI_MODELS}
@@ -766,24 +820,203 @@ def get_model(name: str) -> ModelInfo:
     return builder(name)
 
 
-def retirement_notice(model_info: ModelInfo) -> str | None:
-    """Explain that a model is retired, and what the provider serves instead."""
-    if model_info.retired is None:
-        return None
+def retirement_of(model_info: ModelInfo) -> Retirement | None:
+    """Report what toko knows about a model's retirement, across both of its sources.
+
+    The registry carries dates and redirect targets; RETIRED_OPENAI_MODELS carries a
+    shutdown date for the OpenAI engines tiktoken still tokenizes, and no redirect
+    target because a shut-down engine has nothing to redirect to. Callers should not
+    have to know which mechanism caught a name, so both answer here.
+    """
     # Google's canonical names carry the API's "models/" prefix, which is an
     # implementation detail of the endpoint rather than a name users typed.
     name = model_info.name.removeprefix("models/")
+    if model_info.retired is not None:
+        # RETIREMENT_DATE_UNKNOWN has to become None here, because everything downstream
+        # reads a date as a date: passing the sentinel through prints "is retired
+        # (unknown)" for grok-3-mini, as though "unknown" were the day xAI shut it down.
+        # Fenced by test_a_retirement_with_no_published_date_says_so, the one test in the
+        # suite that catches it.
+        return Retirement(
+            model=name,
+            date=None
+            if model_info.retired == RETIREMENT_DATE_UNKNOWN
+            else model_info.retired,
+            redirects_to=model_info.redirects_to,
+        )
+    # The provider check changes behaviour, and only a user registry reaches it. Both
+    # halves hold for the packaged registry -- every key in RETIRED_OPENAI_MODELS detects
+    # as openai, and no packaged entry is named after one under another provider -- but
+    # ~/.config/toko/models.toml is a supported input merged over it, and an entry naming
+    # `davinci` under provider `google` builds a Google ModelInfo whose name, once
+    # "models/" is stripped above, is a key in this table. Without the check that model
+    # reports OpenAI's 2024-01-04 shutdown, which is false about the user's own model.
+    # Fenced by test_a_user_model_named_after_a_shut_down_openai_engine_is_not_retired.
+    # The name.lower() beside it is reachable too, and fenced: `-m CURIE` builds an
+    # OpenAI ModelInfo that keeps the name as typed, and without the fold a shut-down
+    # engine counts instead of being refused.
+    if model_info.provider == "openai" and name.lower() in RETIRED_OPENAI_MODELS:
+        return Retirement(model=name.lower(), date=RETIRED_OPENAI_MODELS[name.lower()])
+    return None
+
+
+# Segments that route to a provider rather than owning a Hugging Face repo, so anything
+# in front of the model name is addressing and the model being asked for is the last
+# segment. Derived from the providers toko builds models for -- adding a builder covers
+# its prefix too -- plus the router that fronts them, which has no builder because
+# openrouter/<provider>/<model> resolves as the provider's.
+#
+# "google" and "huggingface" are excluded because both are Hub organisations that own
+# real repos (google/gemma-3-1b-it, huggingface/CodeBERTa-small-v1), and detect_provider
+# already reads a leading "google/" as a repo owner rather than as Google. "openai" is
+# kept despite openai/ also being a Hub organisation: --list-models prints the
+# openai/<model> spelling, so refusing to read it as addressing would make the listing's
+# own output unrefusable.
+_ROUTING_PREFIX_SEGMENTS: frozenset[str] = (
+    frozenset(_PROVIDER_BUILDERS) | {"openrouter"}
+) - {"google", "huggingface"}
+
+
+def _routed_model_name(name: str) -> str | None:
+    """Return the model a routing prefix points at, or None if the prefix owns the name.
+
+    Every segment in front of the last has to be routing for the last one to be the model
+    being named. An empty segment counts as routing because no Hub repo can have one:
+    "/text-davinci-003" owns nothing, so the shut-down engine is what it names.
+
+    A prefix that names something else is left alone, which is the whole point of
+    checking. "Xenova/text-davinci-003" and "openai-community/gpt2" are live Hub repos
+    that happen to end in an OpenAI engine's name, and calling either of them retired
+    would be false about a repo that is still there.
+    """
+    prefix, separator, tail = name.rpartition("/")
+    # `not tail` keeps a name ending in "/" from adding "" as a retirement candidate.
+    # This comment used to call that unreachable. It was not: with an overlay declaring
+    # `aliases = [""]` on grok-3, `toko -m anthropic/` was run with this check dropped and
+    # printed "model 'anthropic/' is retired (2026-05-15)", because get_model("") resolved
+    # through that alias. _build_aliases now rejects an empty alias at the door, so the
+    # empty candidate no longer resolves: re-running that overlay and that command with
+    # the check dropped left the verdict alone, and retirement_for_requested("anthropic/")
+    # is None either way. Only the verdict -- retirement_candidates("anthropic/") still
+    # grows an empty candidate without the check, and dropping it fails
+    # test_an_empty_alias_is_refused_so_no_model_hides_behind_it on that list assertion.
+    # It stays as the second half of the pair that test fences: nothing else stops a
+    # future empty-name path from putting a model behind an empty tail.
+    #
+    # `not separator` is not independent of the dict.fromkeys dedupe in
+    # retirement_candidates: neither changes an answer while the other stands, and
+    # dropping both duplicates every bare name. They are one guard between them, fenced
+    # jointly by test_a_bare_name_yields_exactly_one_candidate.
+    if not separator or not tail:
+        return None
+    # Each segment is case-folded because a user types the provider's branding ("XAI/",
+    # "OpenRouter/"), not the lowercase spelling --list-models prints.
+    #
+    # Every segment, not just the first: narrowing this to prefix.split("/")[:1] flips
+    # `-m openai/Xenova/text-davinci-003` from a count to a retirement refusal, which is
+    # false about a live Hub repo. Fenced by
+    # test_a_repo_owner_behind_a_routing_segment_still_blocks_the_strip, the only test in
+    # the suite that catches it.
+    if all(
+        not segment or segment.lower() in _ROUTING_PREFIX_SEGMENTS
+        for segment in prefix.split("/")
+    ):
+        return tail
+    return None
+
+
+def retirement_candidates(requested: str) -> list[str]:
+    """Spellings of one ``--model`` that name the same model for retirement purposes.
+
+    ``get_model`` cannot be relied on to reach the retired model behind these: it never
+    strips the ``provider/`` prefix that ``--list-models`` prints, and of the three
+    ``-latest`` resolvers only Anthropic's strips the suffix. Google's returns the alias
+    unstripped on purpose -- it sends the alias to ``countTokens`` rather than pin a
+    target that goes stale. xAI's does not strip either; it matches only the ``-latest``
+    names the registry declares as aliases, so ``grok-4-latest`` resolves to the retired
+    ``grok-4-0709`` and reports that retirement on its own, while an undeclared
+    ``grok-3-latest`` reaches a bare, unretired entry even though ``grok-3`` is retired.
+    Stripping the suffix below is what closes that gap. Normalizing here lets a retired
+    model be recognised under the name the user actually typed. It decides only what is
+    retired -- how a name counts is untouched.
+    """
+    name = requested.strip()
+
+    # Typed spelling before routed: retirement_for_requested reports the first candidate
+    # that resolves, and the routed tail can be a different registry entry with its own
+    # date and redirect, so routed-first answers for a model the user did not name.
+    # Fenced by test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement.
+    bases = [name]
+    routed = _routed_model_name(name)
+    if routed is not None:
+        bases.append(routed)
+
+    candidates: list[str] = []
+    for base in bases:
+        candidates.append(base)
+        # Folded because "grok-3-LATEST" is a spelling users type, and without the fold
+        # the alias is never stripped and the retired base name is never reached.
+        if base.lower().endswith("-latest"):
+            candidates.append(base[: -len("-latest")])
+    # Paired with the `not separator` guard in _routed_model_name -- see the note there.
+    # Each is inert only while the other stands, so they are fenced jointly by
+    # test_a_bare_name_yields_exactly_one_candidate rather than one test each.
+    return list(dict.fromkeys(candidates))
+
+
+@lru_cache
+def retirement_for_requested(requested: str) -> Retirement | None:
+    """Report the retirement of a model as spelled, over every equivalent spelling.
+
+    This is the single answer to "is this name retired": the gate refuses on it and the
+    reporter reports it, so a run cannot refuse a name as retired and then describe it as
+    live. Reading the raw name in one place and the normalized one in the other is what
+    made ``--include-retired -m anthropic/curie`` emit ``"retirement": null`` while bare
+    ``curie`` emitted the full object.
+
+    The candidate order is what "as spelled" means, so this walk is first-non-None and
+    not any-non-None: the typed spelling is reported when it resolves, and only a
+    normalization of it answers otherwise. Reversing the loop moves the reported
+    retirement onto the suffix-stripped base for every "-latest" spelling in the
+    gemini-2.0-flash family -- 11 of them across the registry's names and Google's
+    declared aliases -- and onto a different date for exactly one of those, namely
+    gemini-2.0-flash-preview-image-generation-latest: 2026-06-01 as typed against
+    2025-11-14 stripped. Nothing in the suite caught that until the fences below were
+    added.
+
+    Two orderings carry "as spelled" between them, and they need separate fences.
+    test_the_spelling_as_typed_decides_which_retirement_is_reported fences this loop
+    only: the name it asserts on has no "/", so retirement_candidates builds the same
+    list from it whichever order `bases` is built in, and building `bases` routed-first
+    leaves that test passing. The typed-before-routed half of the order is fenced by
+    test_a_routed_spelling_that_is_its_own_entry_reports_its_own_retirement, which kills
+    the routed-first build and this reversal alike.
+    """
+    for candidate in retirement_candidates(requested):
+        try:
+            model_info = get_model(candidate)
+        except ValueError:
+            continue
+        retirement = retirement_of(model_info)
+        if retirement is not None:
+            return retirement
+    return None
+
+
+def retirement_notice(model_info: ModelInfo) -> str | None:
+    """Explain that a model is retired, and what the provider serves instead."""
+    retirement = retirement_for_requested(model_info.name)
+    if retirement is None:
+        return None
     when = (
-        "on an unpublished date"
-        if model_info.retired == RETIREMENT_DATE_UNKNOWN
-        else f"on {model_info.retired}"
+        "on an unpublished date" if retirement.date is None else f"on {retirement.date}"
     )
-    notice = f"{name} was retired {when}"
-    if model_info.redirects_to:
+    notice = f"{retirement.model} was retired {when}"
+    if retirement.redirects_to:
         return (
             f"{notice}; {model_info.provider} still answers for it but serves "
-            f"{model_info.redirects_to}, so this count is {model_info.redirects_to}'s, "
-            f"not {name}'s."
+            f"{retirement.redirects_to}, so this count is {retirement.redirects_to}'s, "
+            f"not {retirement.model}'s."
         )
     return f"{notice}; the {model_info.provider} API will reject or redirect it."
 
@@ -792,9 +1025,10 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
     """List all supported models grouped by provider.
 
     Args:
-        include_retired: Also list models the provider has retired. They stay in
-            the registry so toko can explain the failure, but they are hidden by
-            default because they can no longer be counted.
+        include_retired: Also list the names the default listing hides -- models the
+            provider has retired, which stay in the registry so toko can explain the
+            failure, plus the live-but-unadvertised tiktoken names in
+            UNLISTED_OPENAI_MODELS.
 
     Returns:
         Dictionary mapping provider name to list of model names
@@ -809,7 +1043,7 @@ def list_models(*, include_retired: bool = False) -> dict[str, list[str]]:
         providers[model.provider].add(model.name)
 
     for model_name in TIKTOKEN_MODEL_TO_ENCODING:
-        if not include_retired and model_name in RETIRED_OPENAI_MODELS:
+        if not include_retired and model_name in UNLISTED_OPENAI_MODELS:
             continue
         provider = detect_provider(model_name)
         if provider is None:

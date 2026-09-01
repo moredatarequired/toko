@@ -97,12 +97,13 @@ toko --header --format tsv --model gpt-5-mini --model claude-opus-4-5 --text "Th
 ```
 
 ```txt
-model	tokens	cost
-gpt-5-mini	4	$0.000001
-claude-opus-4-5	11	$0.000055
+model	tokens	cost	approximate
+gpt-5-mini	4	0.000001	false
+claude-opus-4-5	11	0.000055	false
 ```
 
-Costs come from the bundled `genai-prices` feed. Models without pricing information display `N/A`.
+Costs come from the bundled `genai-prices` feed. A model it has no price for shows `N/A`
+in the text table, an empty cell in CSV and TSV, and `null` in JSON.
 
 ### Work with directories, URLs, and filters
 
@@ -143,12 +144,15 @@ TOTAL                                 32,896
 directory stay together. A directory scan already arrives in near-path order, but not the
 same one: the scan compares path components, so `src/toko.py` lands after everything under
 `src/toko/`, where `--sort path` puts it first. `--sort count` ranks rows by the leftmost
-model column, which belongs to the model whose name sorts first as a string rather than to
-the first `--model` you passed; files the model could not be counted for keep their `N/A`
-and sort last. The `TOTAL` row stays at the bottom whichever order you pick, and the order
-applies to every format, not just the text table, so `--sort count --format json` yields
-keys in the same order the table would show. Runs that count `--text` or stdin have no file
-rows, and neither does `--total-only`, so the option is accepted and ignored there.
+model column, which is always your first `--model`: model columns run in the order you
+named the models in, and a model no file could be counted for keeps its column rather
+than dropping out of that order. Files the model has no count for sort last, after every
+file that has one, because no count is not a count of zero; within each group the path
+breaks the tie. Those cells read `N/A` in the text table and are empty in CSV and TSV. The
+`TOTAL` row stays at the bottom whichever order you pick, and the order applies to every
+format, not just the text table, so `--sort count --format json` lists its sources in the
+same order the table would show. Runs that count `--text` or stdin have no file rows, so
+`--sort` is accepted and ignored there.
 
 ## Machine-readable output
 
@@ -160,22 +164,116 @@ toko --model gpt-5 --format json LICENSE
 
 ```json
 {
-  "LICENSE": {
-    "gpt-5": 223
-  }
+  "schema_version": 1,
+  "results": [
+    {
+      "source": {
+        "kind": "file",
+        "name": "LICENSE"
+      },
+      "counts": [
+        {
+          "model": "gpt-5",
+          "tokens": 223,
+          "approximate": false,
+          "cost": null,
+          "caveats": [],
+          "retirement": null,
+          "reason": null
+        }
+      ]
+    }
+  ],
+  "totals": [
+    {
+      "model": "gpt-5",
+      "tokens": 223,
+      "approximate": false,
+      "cost": null,
+      "caveats": [],
+      "retirement": null,
+      "reason": null
+    }
+  ]
 }
 ```
+
+Every JSON run emits that one document, whatever flags it was given:
+
+- `schema_version` is `1`. It changes only when the shape below does.
+- `results` holds one entry per source counted, each naming where the counts came
+  from — `{"kind": "text", "name": null}` for `--text` or stdin, `"file"` with the
+  path, `"url"` with the URL — and `totals` holds one count per model, summed across
+  the sources. Both keys are always present and always arrays. `--total-only` empties
+  `results` rather than changing the document's shape, and a `--text` run's totals
+  simply repeat its single set of counts.
+- A count object always carries all seven of `model`, `tokens`, `approximate`, `cost`,
+  `caveats`, `retirement` and `reason`. No key appears or disappears with a flag or
+  with what the counting produced: `cost` is `null` without `--cost`, `caveats` is `[]`
+  when the count is the model's own, and `retirement` is `null` for a live model.
+  `jq '.totals[] | .tokens'` reads any run that printed a document.
+- `tokens` is `null` exactly when the model could not be counted, and `reason` then
+  holds the failure — the same sentence the warning on stderr carries. On a count that
+  succeeded, `reason` is `null`; on one that did not, `approximate` and `cost` are
+  `null` too, since there is no count for them to describe. `reason` is a human-readable
+  explanation and explicitly **not** machine-parseable: branch on `tokens == null`, not
+  on its wording. It is JSON-only, like `caveats`, because a delimited cell cannot carry
+  a free-text sentence.
+- Every count array in a document — each `results[].counts` and `totals` — holds one
+  entry per model you named with `--model`, in that order, whether or not that model
+  could be counted for that source. Which models a document describes is a function of
+  the command, not of what the counting managed to produce, so a run against one
+  directory and the same run against another describe the same models. `totals` still
+  sums only the sources that produced a count, and is `null` for a model none did.
+  **Match on `model` anyway; never index or zip the arrays together.**
 
 ```sh
 toko --header --model gpt-5 --format csv --text "hello world"
 ```
 
 ```csv
-model,tokens
-gpt-5,2
+model,tokens,approximate
+gpt-5,2,false
 ```
 
 Use `--format tsv` to force TSV even when running interactively.
+
+CSV and TSV have one shape per command, and you can work it out before you run it. A
+`--text` or stdin run is model-major: a `model` column, a `tokens` column, a `cost`
+column if and only if you passed `--cost`, and an `approximate` column, then one row per
+model you named. A run over paths is file-major: a `file` column, then `<model>_tokens`,
+`<model>_cost` (with `--cost`) and `<model>_approximate` for each model in the order you
+named them, then one row per source — or, with `--total-only`, one `TOTAL` row in place
+of them. A model named twice is asked for once on either shape, so `-m gpt-5 -m gpt-5`
+emits what `-m gpt-5` emits. Nothing in that depends on what the counting produced: a
+model that failed everywhere keeps its columns, and a run in which every count failed
+prints the same header and the same rows with the cells empty. `--no-header` removes the
+header row and nothing else. The one command that emits something other than the two
+shapes above is a headerless single-model TSV `--text` or stdin run, which collapses to
+a bare number — and that too is decided by the command rather than by the counting, as
+the next section describes.
+
+The text table is the one written for people, and it keeps the `$`; CSV and TSV write
+the `cost` column for a program instead:
+
+- **A bare number, never a currency symbol** — no `$`, and no rounding to `0.000000`
+  for a fraction of a cent. `float()` accepts every non-empty cell toko writes in a
+  `cost` column; the empty ones are described in the last bullet.
+- **Always positional decimal, never an exponent.** A fraction of a cent is written
+  `0.00000375`, not `3.75e-06`, so `sort -n` orders a cost column correctly and `bc`
+  can read a cell at all — both of which mis-handle exponent form, `sort -n` silently.
+- **The same number as `--format json` reports.** A cost is rounded to twelve
+  significant digits once, where it is produced, so the delimited cell and the JSON
+  number are one value written two ways. Where there is no cost the two say so
+  differently: JSON writes `null`, the cell is empty.
+- **An empty cell for a model with no price, and for one with no count.** No number
+  would be honest in either — `0` reads as free, and as zero tokens — so the cell holds
+  nothing; where it is the count that is missing, the `<model>_tokens` and
+  `<model>_approximate` cells are empty too, and `--format json` says why under
+  `reason`. Beware that this is an *empty field*, not a missing one: `awk -F'\t'` and
+  `awk -F,` see it correctly, but bare `awk` splits on runs of whitespace and collapses
+  the empty cell away, shifting every field after it left. Since headerless TSV is what
+  a piped run emits by default, pass `-F'\t'`.
 
 ### What a piped run emits without `--format`
 
@@ -187,18 +285,72 @@ to a bare number, which is what makes the usual scripting shape work:
 n=$(toko -m gpt-5 --text "hello world")   # 2
 ```
 
-Two exceptions are worth knowing before you parse the output:
+What decides that shape is the command, never the counting: one model named and a
+non-TTY stdout is a bare number whatever comes back, including nothing — a model that
+failed prints an empty line, and the run exits `1`. Two things are worth knowing before
+you parse the output:
 
 - The collapse to a bare number is for `--text` and stdin only. Give `toko` a path and
-  you get a `file<TAB>tokens` row per file, because the filename has to go somewhere.
-- An **approximate** count never collapses. It keeps its full row so the marker travels
-  with the number, rather than being stranded on stderr where the process on the other
-  end of the pipe cannot see it. `n=$(toko -m gpt-6 --text "hello world")` yields
-  `gpt-6<TAB>2<TAB>true`, not `2`. Read the second field, or pass `--format json` and
-  read `tokens`, if a run of yours can hit an OpenAI name Toko does not list — a dated
-  snapshot such as `gpt-4o-2024-08-06` counts as one — an xAI model without
-  `XAI_API_KEY`, or a Mistral name with no pinned tokenizer: the three cases that
-  produce an approximate count.
+  you get the file-major shape above, a `file<TAB>tokens<TAB>approximate` row per file:
+  the filename has to go somewhere, and a run over paths keeps the columns its shape
+  always has rather than dropping them for having only one model to describe.
+- A bare number has nowhere to say that a count is **approximate**, and the marker is
+  on stderr, which the process at the other end of the pipe is not reading. Ask for a
+  shape that has somewhere to put it if a run of yours can hit any of the three paths
+  that produce an approximate count — they are listed under **Library usage** below.
+  `--header` is enough: `toko --header --format tsv -m gpt-6 --text "hello world"`
+  writes `model<TAB>tokens<TAB>approximate` and then `gpt-6<TAB>2<TAB>true`. So is
+  `--format json`, where every count carries `approximate` of its own.
+
+## Exit codes
+
+| Code | Meaning                                                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`  | Toko printed counts. Some of what you asked for may still have failed — see the inconsistency below.                                                               |
+| `1`  | The run produced no usable result, or one of its inputs did not survive. **Output may still have been printed, and it is short** — see the warning below the list. |
+| `2`  | The command line itself was wrong: an unknown option, a missing value, or an unsupported `--format`. Typer reports these before Toko runs.                         |
+
+A run exits `1` when:
+
+- **no input was given _at a terminal_** — no `--text`, no paths, and stdin still the
+  tty. Redirected or piped stdin is input, however little of it there is:
+  `toko -m gpt-5 < /dev/null` counts the empty string, prints `0` and exits `0`;
+- no files matched, which includes a directory whose every file was skipped;
+- **a path could not be found, or a file could not be read** — even when other paths
+  were counted. Toko resolves the paths before it counts anything, so the error reaches
+  stderr first and the counts follow it, at a terminal and in a pipe alike. A file that
+  is not valid UTF-8 is the exception: it is skipped with a `Warning: Skipping binary file …` on stderr, it contributes no row and no tokens, and the *skip itself* does not
+  fail the run. It is only the skip that is exempt, though. If skipping leaves nothing
+  to count — a binary file named on its own, or a directory of them — the run still
+  exits `1` under the "no files matched" rule above: `toko -m gpt-5 photo.png` warns,
+  then prints `Error: No files found matching criteria` and exits `1`. A binary file
+  alongside a file that did count exits `0`;
+- every model failed for every input;
+- a **retired model** was named without `--include-retired` (nothing is read or
+  counted in that case; the error names the model, its retirement date and its
+  redirect target, if it has one);
+- the config file is unreadable, or `toko update-prices` could not fetch prices.
+
+> **A nonzero exit means the totals cover only what succeeded.** Toko prints the
+> results for the inputs it could read *before* it exits `1`, so a partial failure
+> still emits a complete, well-formed document — a full JSON envelope with both
+> `results` and `totals`, or a full table, of exactly the shape a successful run of the
+> same command emits. A model that failed is marked in the row of each source it failed
+> on, by a `null` `tokens` with a `reason` in JSON and by empty cells in CSV and TSV;
+> its *total* is marked that way only when every source failed for it. A total the
+> failures merely thinned is a plain number — `reason` `null` in JSON, a filled cell in
+> CSV and TSV — indistinguishable from a total of everything you named, and a run whose
+> inputs all read but whose model failed on some of them exits `0`. An *input* that
+> failed is not marked at all: the totals simply sum a smaller set of files than a
+> successful run would, and no field says so. Check the exit code before you trust a
+> total, and read stderr for which inputs are missing.
+
+One known inconsistency, which this table describes rather than hides: a model that
+fails among several — a missing `ANTHROPIC_API_KEY`, say — leaves a warning on stderr,
+keeps its column with every cell it failed on marked, and still exits `0`, while a
+*path* that fails among several exits `1`. Making the two agree is breaking change 4 of
+[issue #28](https://github.com/moredatarequired/toko/issues/28); until it lands, check
+stderr, or count one model per invocation if a partial result would be dangerous.
 
 ## Library usage
 
@@ -212,14 +364,15 @@ result = count_tokens("hello world", model="gpt-5")
 print(result.count)  # 2
 ```
 
-| Field         | Type            | Meaning                                                                               |
-| ------------- | --------------- | ------------------------------------------------------------------------------------- |
-| `count`       | `int`           | The token count.                                                                      |
-| `model`       | `str`           | The canonical model the request resolved to, which need not be the string you passed. |
-| `provider`    | `str`           | The provider that produced the count.                                                 |
-| `approximate` | `bool`          | True when the count came from a stand-in tokenizer rather than the model's own.       |
-| `caveat`      | `str \| None`   | Why the count is approximate, when it is.                                             |
-| `cost`        | `float \| None` | Estimated cost in USD, when pricing data covers the model.                            |
+| Field         | Type                 | Meaning                                                                                        |
+| ------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
+| `count`       | `int`                | The token count.                                                                               |
+| `model`       | `str`                | The canonical model the request resolved to, which need not be the string you passed.          |
+| `provider`    | `str`                | The provider that produced the count.                                                          |
+| `approximate` | `bool`               | True when the count came from a stand-in tokenizer rather than the model's own.                |
+| `caveats`     | `tuple[Caveat, ...]` | Why the count is approximate, one `Caveat` per reason; empty when there is nothing to say.     |
+| `cost`        | `float \| None`      | Estimated cost in USD, when pricing data covers the model.                                     |
+| `retirement`  | `Retirement \| None` | Set when the named model has been retired, with the date and what the provider serves instead. |
 
 An unreachable tokenizer is usually an error, not a fallback: `count_tokens` raises
 `ValueError` when `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY` is missing, and when no
@@ -231,8 +384,8 @@ count instead, so check `approximate` on those before treating a count as exact:
   when the name starts with a family it knows (`gpt-4-1` gets `cl100k_base` through
   `gpt-4-`), and otherwise with `o200k_base`, the encoding every OpenAI model since
   `gpt-4o` uses. A family prefix is a good guess at the encoding but no evidence the
-  name exists, so either way the count is an estimate and `caveat` names the encoding
-  it came from.
+  name exists, so either way the count is an estimate and the `Caveat` it carries names
+  the encoding the count came from.
 - An xAI model is counted with the Grok-1 Hugging Face tokenizer when `XAI_API_KEY` is
   unset or the xAI endpoint fails. That stand-in needs `toko[transformers]`; without it
   the call raises instead.
@@ -244,14 +397,26 @@ count instead, so check `approximate` on those before treating a count as exact:
   `mistral-medium-2506` cannot.
 
 ```python
-result = count_tokens("hello world", model="grok-4")
-if result.approximate:
-    print(f"estimate only: {result.caveat}")
+from toko import CaveatKind, count_tokens
+
+result = count_tokens("hello world", model="grok-4.5")
+for caveat in result.caveats:
+    if caveat.kind is CaveatKind.XAI_GROK1_STANDIN:
+        print(f"stood in with {caveat.tokenizer}, because {caveat.reason}")
+    print(caveat.message)  # the sentence Toko printed on stderr
 ```
 
-`caveat` is a human-readable explanation to show a person and is explicitly **not**
-machine-parseable — its wording, and for an aggregate its internal punctuation, may change
-at any time, so branch on the `approximate` boolean rather than parsing `caveat`.
+Each `Caveat` carries a `kind` (a `CaveatKind`: `OPENAI_ENCODING_GUESS`,
+`XAI_GROK1_STANDIN` or `MISTRAL_TOKENIZER_FALLBACK`), the `model` it is about, the
+`message` a person should read, and whichever of `encoding`, `tokenizer` and `reason`
+that kind has to report. Branch on `kind` and read the fields; `message` is prose and
+its wording may change, so it is the one part not to parse.
+
+A `Retirement` is separate from the caveats on purpose: a caveat says the tokenizer was
+substituted, while `retirement` says the *model* is gone. It carries the `model`, the
+`date` it was retired (`None` when the provider published none), and `redirects_to`,
+the model the provider serves in its place. The CLI refuses a retired model unless
+`--include-retired` is passed; the library counts it and describes it in this field.
 
 `TokenCount` is deliberately not int-like: it does not implement `__int__`/`__index__`
 or arithmetic, and it compares equal only to another `TokenCount` with the same fields,
@@ -276,7 +441,20 @@ anthropic/claude-opus-4-6
 anthropic/claude-opus-4-7
 ```
 
-Retired models are hidden from that listing: both the dead OpenAI engines tiktoken still carries (`text-davinci-003`, `code-cushman-001`, and friends) and the Anthropic, Google and xAI models their providers have shut down. Add `--include-retired` to see them. It affects `--list-models` and nothing else: on any other command it is accepted and ignored, and the retired names still count exactly as before.
+Retired models are hidden from that listing: both the dead OpenAI engines tiktoken still carries (`text-davinci-003`, `code-cushman-001`, and friends) and the Anthropic, Google and xAI models their providers have shut down. A few live names tiktoken carries are hidden too, because listing them would mislead rather than help: `gpt-35-turbo` (the Azure deployment spelling of `gpt-3.5-turbo`), the bare family name `gpt-3.5`, `babbage-002` and `davinci-002` (shutdown 2026-09-28), and `gpt2`/`gpt-2` (open weights, never OpenAI API models). Add `--include-retired` to see all of them. Being hidden is not being refused: the live names above count normally without any flag. Naming a genuinely retired model without the flag is an error, and the run stops before anything is read:
+
+```sh
+toko -m grok-3 --text "hello world"
+# Error: model 'grok-3' is retired (2026-05-15); it redirects to grok-4.3. Pass --include-retired to count with it anyway.
+```
+
+That is the point of the flag: `grok-3` still answers, but what answers is `grok-4.3`, so the number and its price belong to a model you did not ask for. With `--include-retired` the count happens, the warning stays on stderr, and JSON reports the `retirement` object alongside the count.
+
+The refusal follows the name rather than one spelling of it: surrounding whitespace, a router path ending in it (`openrouter/xai/grok-3`), and a `-latest` alias of a retired model (`grok-3-latest`) are all refused too. **A prefix is dropped only when every segment of it is empty or is one of a fixed set of routing segments — `openai/`, `anthropic/`, `xai/`, `mistral/`, `llama/`, `deepseek/`, `qwen/`, and `openrouter/` — because such a prefix is addressing rather than a repo owner. So `openrouter/text-davinci-003` and `/text-davinci-003` are the shut-down engine and are refused, while a Hugging Face repo whose last segment happens to be a retired name keeps its prefix and counts: `Xenova/text-davinci-003` and `openai-community/gpt2` are live repos, and calling either retired would be false about them.**
+
+`google/` and `huggingface/` are left out of that set, because both are Hub organisations that own real repos, so `google/gemma-3-1b-it` stays that repo rather than becoming Google's `gemma-3-1b-it`. That exemption wins over the spelling `--list-models` prints, so a `google/` prefix keeps any Gemini name away from Google — retirement has nothing to do with it. `xai/grok-3` is refused as retired, but `google/gemini-2.0-flash-001` is not: it is read as a Hub repo id, and since no such repo answers, the run fails with `not found on HuggingFace` rather than with the retirement error. The live `google/gemini-2.5-flash` fails exactly the same way. Drop the `google/` prefix and the name reaches Google, where a retired one earns the retirement refusal and a live one is counted.
+
+Whatever the gate matched on is what the run reports, so `--include-retired` gives `anthropic/curie` the same `retirement` object and stderr warning that bare `curie` gets.
 
 ```sh
 toko --list-models --include-retired | grep davinci

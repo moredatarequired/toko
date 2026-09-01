@@ -6,7 +6,7 @@ import toko.counter as counter
 from tests.cache_keys import cache_key
 from toko.cache import cache_count, get_cached_count
 from toko.counter import count_tokens
-from toko.result import TokenCount
+from toko.result import Caveat, CaveatKind, TokenCount
 
 # 13 tokens on cl100k_base and 7 on o200k_base, so a count says which encoding produced
 # it. An ASCII phrase would tokenize the same on both and hide an encoding swap.
@@ -112,10 +112,15 @@ def test_a_prefix_matched_openai_name_is_estimated_on_its_family_encoding(
 
     assert counted.count == expected
     assert counted.approximate is True
-    assert counted.caveat == (
-        f"unknown OpenAI model '{model}'; estimating with {encoding}"
+    assert counted.caveats == (
+        Caveat(
+            kind=CaveatKind.OPENAI_ENCODING_GUESS,
+            model=model,
+            message=f"unknown OpenAI model '{model}'; estimating with {encoding}",
+            encoding=encoding,
+        ),
     )
-    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveat}"
+    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveats[0].message}"
 
 
 @pytest.mark.parametrize(
@@ -133,10 +138,10 @@ def test_an_exactly_known_openai_name_stays_exact_and_silent(model, expected, ca
     """Demoting the prefix table must not demote a name toko or tiktoken lists."""
     counted = count_tokens(MIXED_SCRIPT_TEXT, model=model, use_cache=False)
 
-    assert (counted.count, counted.approximate, counted.caveat) == (
+    assert (counted.count, counted.approximate, counted.caveats) == (
         expected,
         False,
-        None,
+        (),
     )
     assert capsys.readouterr().err == ""
 
@@ -223,7 +228,7 @@ def test_count_tokens_reports_the_model_and_provider_it_resolved():
 
     assert counted == TokenCount(count=2, model="gpt-5", provider="openai")
     assert counted.approximate is False
-    assert counted.caveat is None
+    assert counted.caveats == ()
     assert counted.cost is None
 
 
@@ -231,9 +236,16 @@ def test_unknown_openai_model_carries_the_caveat_it_printed(capsys):
     counted = count_tokens("hello world", model="gpt-6", use_cache=False)
 
     assert counted.approximate is True
-    assert counted.caveat == "unknown OpenAI model 'gpt-6'; estimating with o200k_base"
-    # The caveat is the sentence stderr already carried, so the two cannot drift.
-    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveat}"
+    assert counted.caveats == (
+        Caveat(
+            kind=CaveatKind.OPENAI_ENCODING_GUESS,
+            model="gpt-6",
+            message="unknown OpenAI model 'gpt-6'; estimating with o200k_base",
+            encoding="o200k_base",
+        ),
+    )
+    # The message is the sentence stderr already carried, so the two cannot drift.
+    assert capsys.readouterr().err.strip() == f"Warning: {counted.caveats[0].message}"
 
 
 def test_a_cache_hit_returns_a_fully_populated_count():

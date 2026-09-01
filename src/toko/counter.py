@@ -338,6 +338,52 @@ def _count_openai(text: str, model_info: ModelInfo) -> TokenCount:
     return _approximate(count, model_info, caveat)
 
 
+def preload_tokenizer(model: str) -> None:
+    """Build the local tokenizer for one model now, so no later count is the first build.
+
+    tiktoken builds its encoding registry on first use, and a build that happens while
+    the process is out of file descriptors leaves that registry permanently empty --
+    pkgutil swallows the OSError, so tiktoken's own reset never fires, and every later
+    lookup raises. Doing it here keeps the one fragile build in the caller's thread
+    before any worker pool exists, where nothing has had a chance to exhaust anything.
+
+    Only the OpenAI provider has a tokenizer to warm; the API-backed providers have
+    nothing local, and a HuggingFace or Mistral build starved of descriptors fails
+    transiently rather than permanently -- `_cached_tokenizer` stores only on success,
+    so the next call retries it -- and both are far too large to load speculatively.
+
+    The whole body is suppressed, not just the encode: warming is an optimisation, and
+    a run that would have succeeded without it must still succeed. Resolving an
+    encoding can reach the network -- tiktoken downloads its BPE file when its blob
+    cache is cold -- and a run whose every count is already in toko's own cache never
+    needed that download at all. `Exception` rather than a bare `except`, so
+    KeyboardInterrupt and SystemExit still stop the run.
+    """
+    with contextlib.suppress(Exception):
+        model_info = get_model(model)
+        if model_info.provider != "openai":
+            return
+
+        # Resolved through tiktoken's own name table rather than any richer toko lookup:
+        # warming only has to name the right BPE file, so the less of the counting path
+        # it borrows, the less there is to keep in step with it. The table is a plain
+        # dict lookup, so unlike encoding_for_model it builds nothing to answer.
+        try:
+            encoding_name = tiktoken.encoding_name_for_model(model_info.name.lower())
+        except KeyError:
+            encoding_name = model_info.encoding or OPENAI_FALLBACK_ENCODING
+
+        encoding = _get_tiktoken_encoding_by_name(encoding_name)
+        if encoding is None:
+            return
+
+        # Constructing the encoding is not the whole of loading it: tiktoken defers
+        # `import regex` to the first encode (tiktoken/core.py), and an import needs a
+        # descriptor of its own. Without this the registry survives a shortage but the
+        # first real encode still dies on that import, inside a pool worker.
+        encoding.encode("")
+
+
 def _warn_if_retired(model_info: ModelInfo) -> None:
     notice = retirement_notice(model_info)
     if notice is not None:

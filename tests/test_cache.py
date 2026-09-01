@@ -1,8 +1,12 @@
 """Tests for cache module."""
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pytest
 
 from toko.cache import cache_count, clear_cache, get_cache_db_path, get_cached_count
+from toko.counter import count_tokens
 
 
 def test_cache_and_retrieve(cache_dir):
@@ -103,3 +107,41 @@ def test_counts_racing_for_one_message_all_survive():
     assert {model: get_cached_count(text, model) for model in models} == {
         model: len(model) for model in models
     }
+
+
+def _open_cache_handles() -> int:
+    """Count this process's open descriptors that point at the cache database."""
+    fd_dir = Path("/proc/self/fd")
+    if not fd_dir.is_dir():
+        pytest.skip("only /proc exposes a process's own open descriptors")
+
+    db_path = str(get_cache_db_path())
+    handles = 0
+    for entry in fd_dir.iterdir():
+        try:
+            target = str(entry.readlink())
+        except OSError:
+            # The descriptor for the listing itself goes away mid-iteration.
+            continue
+        # Startswith rather than equality so a journal or WAL sidecar still counts.
+        if target.startswith(db_path):
+            handles += 1
+    return handles
+
+
+def test_counting_many_files_does_not_hold_a_handle_per_file():
+    """A connection left to the cyclic collector is not reclaimed in a pool worker.
+
+    That is the descriptor leak behind #115: the handles grew one per counted file until
+    the process ran out, at which point a cache hit became a miss and the first tiktoken
+    load of the run happened with no descriptors left. A bound rather than a number,
+    because a few concurrent counts may legitimately each hold one while they work.
+    """
+    clear_cache()
+    texts = [f"descriptor fence, line {index}\n" for index in range(200)]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        counts = list(pool.map(lambda text: count_tokens(text, model="gpt-5"), texts))
+
+    assert len(counts) == len(texts)
+    assert _open_cache_handles() <= 8

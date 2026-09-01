@@ -4,7 +4,10 @@ import ast
 import json
 import os
 import re
+import resource
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -13,6 +16,7 @@ import respx
 from genai_prices.data_snapshot import set_custom_snapshot
 from typer.testing import CliRunner
 
+import toko.counter as counter
 from tests.cache_keys import cache_key
 from tests.hf_hub import skip_if_rate_limited
 from toko.cache import get_cache_db_path, get_cached_count
@@ -1121,6 +1125,322 @@ def test_concurrent_counting_leaves_the_cache_intact(tmp_path):
         # write landed under another thread's key or was lost to a locked database.
         assert get_cached_count(content, cache_key("gpt-4")) == int(gpt_4)
         assert get_cached_count(content, cache_key("gpt-5")) == int(gpt_5)
+
+
+def test_a_fully_cached_run_still_loads_the_tokenizer_up_front(tmp_path, monkeypatch):
+    """A run builds the tokenizers it might need before it dispatches any counting.
+
+    Demonstrated on a run that needs none: every count is already cached, so nothing in
+    the work itself can reach a tokenizer, and a resident one afterwards can only have
+    been built ahead of the pool. That is the guarantee that matters -- a tokenizer
+    already built cannot be broken by a descriptor shortage that arrives mid-run, which
+    is how tiktoken's registry came to be permanently empty in #115.
+    """
+    tree = _write_tree(tmp_path)
+    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
+
+    warming = _invoke_cli(args)
+    assert warming.exit_code == 0
+
+    monkeypatch.setattr(counter, "_TOKENIZER_CACHE", {})
+    cached = _invoke_cli(args)
+
+    assert cached.exit_code == 0
+    assert cached.stdout == warming.stdout
+    assert counter._TOKENIZER_CACHE  # noqa: SLF001
+
+
+# Lowered inside the child rather than through preexec_fn, so the limit is in force for
+# the whole run the way a shell's `ulimit -n` would be.
+_FD_LIMITED_RUN = """
+import resource, sys
+
+limit = int(sys.argv[1])
+del sys.argv[1]
+resource.setrlimit(
+    resource.RLIMIT_NOFILE, (limit, resource.getrlimit(resource.RLIMIT_NOFILE)[1])
+)
+
+from toko.cli import app
+
+app()
+"""
+
+# 800 files against 192 descriptors is clear of the boundary from both sides: the run
+# counted roughly `ulimit -n` files before the fix, and needs about thirty after it.
+_FD_FENCE_FILES = 800
+_FD_FENCE_LIMIT = 192
+# Well above the ~192 where a sequential run starts to run short itself, so the pass
+# that fills the cache is trustworthy even without the fix.
+_FD_WARMING_LIMIT = 512
+
+
+_PLAIN_RUN = """
+from toko.cli import app
+
+app()
+"""
+
+
+def _run_toko(args: list[str], env: dict[str, str]):
+    """Run the CLI in a child, so an environment-only setting is actually in force."""
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _PLAIN_RUN, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _run_with_fd_limit(limit: int, args: list[str], env: dict[str, str]):
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _FD_LIMITED_RUN, str(limit), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _write_fd_fence_tree(tmp_path: Path, files: int) -> Path:
+    tree = tmp_path / "wide"
+    tree.mkdir()
+    for index in range(files):
+        (tree / f"file_{index:05d}.txt").write_text(
+            f"naïve café 日本語 🚀 line {index}\n" * (2 + index % 5)
+        )
+    return tree
+
+
+@pytest.mark.slow
+def test_a_warm_cache_counts_every_file_when_descriptors_are_scarce(tmp_path):
+    """#115: a warm run over a tree larger than `ulimit -n` reported a fraction at exit 0.
+
+    Cache hits leaked a SQLite handle each until the process ran out of descriptors; the
+    next hit then failed into a miss, and that miss was the run's first tiktoken load,
+    which left the registry empty for good. Stdout still looked normal and the exit code
+    was still 0, so the wrong total was the answer a script got.
+    """
+    hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    if hard_limit != resource.RLIM_INFINITY and hard_limit < _FD_WARMING_LIMIT:
+        pytest.skip(
+            f"the hard descriptor limit is {hard_limit}, too low to warm safely"
+        )
+
+    tree = _write_fd_fence_tree(tmp_path, _FD_FENCE_FILES)
+    # A subprocess needs the cache directory through the environment, since the override
+    # the test fixtures use lives in this process only.
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    args = ["--header", "--format", "csv", "-m", "gpt-5", str(tree)]
+
+    cold = _run_with_fd_limit(_FD_WARMING_LIMIT, [*args, "--jobs", "1"], env)
+    assert cold.returncode == 0, cold.stderr
+    cold_rows = _csv_rows(cold.stdout)
+    assert len(cold_rows) == _FD_FENCE_FILES + 1
+
+    warm = _run_with_fd_limit(_FD_FENCE_LIMIT, [*args, "--jobs", "8"], env)
+
+    assert warm.returncode == 0, warm.stderr
+    assert "Failed to count tokens" not in warm.stderr
+    assert _csv_rows(warm.stdout) == cold_rows
+    counted = [int(count) for _, count in cold_rows[1:]]
+    assert sum(int(count) for _, count in _csv_rows(warm.stdout)[1:]) == sum(counted)
+
+
+# Run in a process that has never encoded anything, so a lazy import tiktoken defers to
+# the first encode has not already been satisfied by something else.
+_RESIDENCY_CHECK = """
+import sys
+
+from typer.testing import CliRunner
+
+import toko.counter as counter
+from toko.cli import app
+
+result = CliRunner().invoke(app, sys.argv[1:])
+if result.exit_code != 0:
+    raise SystemExit(f"the cached run failed: {result.output}")
+
+resident = list(counter._TOKENIZER_CACHE.values())
+if not resident:
+    raise SystemExit("a fully cached run loaded no tokenizer")
+
+loaded = set(sys.modules)
+for tokenizer in resident:
+    tokenizer.encode("fence")
+missing = sorted(set(sys.modules) - loaded)
+if missing:
+    raise SystemExit(f"encoding still had to import {missing}")
+"""
+
+
+@pytest.mark.slow
+def test_a_preloaded_tokenizer_needs_nothing_further_to_encode(tmp_path):
+    """Residency has to be complete, not just constructed.
+
+    tiktoken defers part of its own import work to the first encode, and an import needs
+    a descriptor like anything else -- so a registry warmed but never exercised still
+    left the first real encode to fail inside a pool worker. Checked in a child process
+    because this one has encoded already, which would satisfy the import for free.
+    """
+    tree = _write_tree(tmp_path)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
+
+    warming = _run_toko(args, env)
+    assert warming.returncode == 0, warming.stderr
+
+    checked = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _RESIDENCY_CHECK, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert checked.returncode == 0, checked.stderr
+
+
+# Instrumentation rather than substitution: the real constructor still runs, and all it
+# is asked is which thread ran it. Every route into a tokenizer ends here -- both the
+# by-model and the by-name lookup reach tiktoken's registry, which builds an Encoding
+# once per encoding -- so the recorded threads are every build the run performed.
+_BUILDING_THREAD_CHECK = """
+import sys
+import threading
+
+import tiktoken.core
+
+builders = []
+build = tiktoken.core.Encoding.__init__
+
+
+def recording(self, *args, **kwargs):
+    builders.append(threading.get_ident())
+    return build(self, *args, **kwargs)
+
+
+tiktoken.core.Encoding.__init__ = recording
+
+from typer.testing import CliRunner
+
+from toko.cli import app
+
+result = CliRunner().invoke(app, sys.argv[1:])
+if result.exit_code != 0:
+    raise SystemExit(f"the run failed: {result.output}")
+
+if not builders:
+    raise SystemExit("the run built no tokenizer, so it proves nothing about where")
+off_main = [ident for ident in builders if ident != threading.main_thread().ident]
+if off_main:
+    raise SystemExit(f"{len(off_main)} of {len(builders)} builds ran off the main thread")
+"""
+
+
+@pytest.mark.slow
+def test_no_tokenizer_is_ever_built_inside_a_worker(tmp_path):
+    """Where the warm-up happens is the whole of what it buys, so pin the where.
+
+    Every other guard here looks at the finished run, and a warm-up moved to after the
+    pool satisfies all of them -- the tokenizer is resident either way. What it stops
+    being is safe: the point of #115 is that a build inside a worker happens under
+    whatever descriptor pressure the run has reached, and tiktoken's registry does not
+    survive being built with none left. So the property is that the build happens on the
+    thread that has not run any work yet, and it is observed the way #56 asks for -- by
+    recording what actually ran, in a child process, not by reading the source.
+
+    Deliberately an uncached run: a cached one reaches no tokenizer from the pool at all,
+    so it would pass wherever the warm-up sat.
+    """
+    tree = _write_tree(tmp_path)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+
+    checked = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            _BUILDING_THREAD_CHECK,
+            "--format",
+            "csv",
+            "-m",
+            "gpt-5",
+            "--jobs",
+            "8",
+            str(tree),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert checked.returncode == 0, checked.stderr
+
+
+# The positive control for the test below: proof the child really cannot reach the blob
+# store, rather than an assumption that setting a proxy variable was enough. Kept apart
+# from toko so it says only that, and cannot pass because of anything toko does.
+_DOWNLOAD_MUST_FAIL = """
+import tiktoken
+
+try:
+    tiktoken.get_encoding("o200k_base")
+except Exception:
+    raise SystemExit(0)
+raise SystemExit("the encoding downloaded, so nothing here was actually offline")
+"""
+
+
+@pytest.mark.slow
+def test_a_cached_run_survives_a_cold_tiktoken_cache_it_cannot_refill(tmp_path):
+    """Warming a tokenizer must not turn a working run into a failing one.
+
+    Every count is already in toko's cache, so the run needs no tokenizer at all -- but
+    tiktoken's blob cache lives in /tmp and is wiped by a reboot, so the warm-up reaches
+    for a download that an offline machine cannot serve. That is an ordinary state, not
+    an exotic one, and the run has to finish exactly as it did before there was a
+    warm-up: same total, same exit code.
+    """
+    tree = _write_tree(tmp_path)
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    args = ["--format", "csv", "-m", "gpt-5", str(tree)]
+
+    warm = _run_toko(args, env)
+    assert warm.returncode == 0, warm.stderr
+
+    # A blob cache of its own, left empty, and a proxy pointed at a port nothing is
+    # listening on: between them the child is a machine that has rebooted and has no
+    # route out, without touching this one's caches or network.
+    blocked = {
+        **env,
+        "TIKTOKEN_CACHE_DIR": str(tmp_path / "cold-tiktoken"),
+        "DATA_GYM_CACHE_DIR": str(tmp_path / "cold-tiktoken"),
+        "NO_PROXY": "",
+        "no_proxy": "",
+    }
+    blocked.update(
+        dict.fromkeys(
+            ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"),
+            "http://127.0.0.1:1",
+        )
+    )
+    (tmp_path / "cold-tiktoken").mkdir()
+
+    control = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _DOWNLOAD_MUST_FAIL],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=blocked,
+    )
+    assert control.returncode == 0, control.stderr
+
+    offline = _run_toko(args, blocked)
+
+    assert offline.returncode == 0, offline.stderr
+    assert _csv_rows(offline.stdout) == _csv_rows(warm.stdout)
 
 
 def test_jobs_below_one_is_rejected(tmp_path):

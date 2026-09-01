@@ -19,6 +19,7 @@ import tiktoken
 from tiktoken.model import MODEL_TO_ENCODING as TIKTOKEN_MODEL_TO_ENCODING
 
 from toko.cache import cache_count, get_cached_count
+from toko.http_client import shared_client
 from toko.models import ModelInfo, get_model, retirement_notice
 from toko.result import TokenCount
 
@@ -419,7 +420,7 @@ def _count_xai(text: str, model_info: ModelInfo) -> TokenCount:
 
 def _count_xai_via_api(text: str, model_name: str, api_key: str) -> int:
     try:
-        response = httpx.post(
+        response = shared_client().post(
             XAI_TOKENIZE_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -505,7 +506,7 @@ def _count_anthropic(text: str, model_info: ModelInfo) -> TokenCount:
         "messages": [{"role": "user", "content": text}],
     }
     try:
-        response = httpx.post(
+        response = shared_client().post(
             ANTHROPIC_COUNT_URL, headers=headers, json=payload, timeout=10.0
         )
         response.raise_for_status()
@@ -542,7 +543,7 @@ def _count_google(text: str, model_info: ModelInfo) -> TokenCount:
     url = f"{GOOGLE_COUNT_URL_BASE}/{model_info.name}:countTokens"
     payload = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
     try:
-        response = httpx.post(
+        response = shared_client().post(
             url, headers={"x-goog-api-key": api_key}, json=payload, timeout=10.0
         )
         response.raise_for_status()

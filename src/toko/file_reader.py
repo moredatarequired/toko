@@ -3,8 +3,9 @@
 import os
 from pathlib import Path
 
-import httpx
 import pathspec
+
+from toko.http_client import shared_client
 
 
 def read_gitignore(directory: Path) -> pathspec.PathSpec | None:
@@ -193,6 +194,14 @@ def fetch_url(url: str, *, timeout: float = 30.0) -> str:
         httpx.HTTPError: If request fails
         UnicodeDecodeError: If response is not valid UTF-8
     """
-    response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    # The whole process shares one client, so a cookie this URL sets would otherwise be
+    # sent along with the next URL the user asked for. Emptying the jar per fetch keeps
+    # each one its own session while leaving a real jar in place: httpx builds a redirect
+    # request from the client's cookies, so a jar that discarded them would silently
+    # break cookie-gated redirects within this fetch. Nothing else runs while this does
+    # -- URLs are collected one at a time, before any counting starts.
+    client = shared_client()
+    client.cookies.clear()
+    response = client.get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()
     return response.text

@@ -12,7 +12,8 @@ git fetch --tags origin
 ```
 
 Fetching tags is not optional. Commitizen derives the next version from the commits
-since the most recent tag, so a checkout missing `0.2.1` will compute the wrong bump.
+since the most recent release tag, so a checkout missing that tag will compute the
+wrong bump.
 
 ## 2. Bump
 
@@ -25,8 +26,9 @@ Commit messages, writes it into `pyproject.toml`, regenerates `CHANGELOG.md`
 (`update_changelog_on_bump = true`), and creates the tag.
 
 `major_version_zero = true` keeps Toko pre-1.0, so a `BREAKING CHANGE` in the range
-bumps the minor rather than the major. On the commits sitting on `main` today that
-yields **0.3.0**, not 1.0.0. Confirm the plan before committing to it:
+bumps the minor rather than the major: the three `BREAKING CHANGE` footers in the 0.3.0
+release took 0.2.1 to 0.3.0, not to 1.0.0. Confirm what the range computes before you run
+the bump above:
 
 ```sh
 uv run cz bump --dry-run

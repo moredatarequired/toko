@@ -51,19 +51,16 @@ jobs:
       - name: Sync dependencies (all groups)
         run: uv sync --all-groups --all-extras
 
-      # Fails if the runner's TLS clients, uv, or the locked certifi still accept a
-      # certificate from the compromised eMudhra intermediates. An intercepting
-      # proxy turns every line INCONCLUSIVE, which passes.
+      # Fails if uv, the locked certifi, or the runner's OS store (which checkout's
+      # git uses) accepts a certificate from the compromised eMudhra intermediates,
+      # or if any of them gives no ok verdict.
       - name: Probe trust stores for the eMudhra CA compromise
+        timeout-minutes: 10
         run: |
           uv run sh scripts/emudhra/probe_runtime.sh > probe.txt
-          sh scripts/emudhra/probe_package_managers.sh >> probe.txt
+          ONLY=uv sh scripts/emudhra/probe_package_managers.sh >> probe.txt
           cat probe.txt
-          # The runner image's own node and system pip are not used by this job.
-          if grep -E '^VULNERABLE' probe.txt | grep -vE '^VULNERABLE +(node|npm|python3 -m pip) '; then exit 1; fi
-          if grep -qE '^VULNERABLE +(node|npm|python3 -m pip) ' probe.txt; then
-            echo "::warning::the runner image's node or system pip trusts the compromised eMudhra intermediates"
-          fi
+          sh scripts/emudhra/gate.sh probe.txt uv python-ssl-certifi curl
         env:
           UV_NO_SYNC: "1"
 

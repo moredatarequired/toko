@@ -186,7 +186,8 @@ echo "== control (pypi.org)"
 control=$(run_clients pypi.org)
 printf '%s\n' "$control" | sed 's/^/control: /'
 cissuer=""
-if have openssl; then
+# openssl s_client ignores HTTPS_PROXY, so behind a proxy read the issuer from the clients instead.
+if have openssl && [ -z "${HTTPS_PROXY:-}${https_proxy:-}" ]; then
   cissuer=$(echo | openssl s_client -connect pypi.org:443 -servername pypi.org 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)
 fi
 [ -n "$cissuer" ] || cissuer=$(printf '%s\n' "$control" | sed -n 's/^[a-z-]* TRUSTED //p' | grep -v '^?$' | head -1)
@@ -198,7 +199,7 @@ if [ -z "${INTERCEPTED:-}" ]; then
     *) INTERCEPTED=1 ;;
   esac
 fi
-[ "$INTERCEPTED" = 1 ] && echo "WARNING: TLS looks intercepted (issuer above is not a public CA). Only a client that accepted an EM intermediate counts; everything else is INCONCLUSIVE. Re-run where egress is direct, or use check_bundle.sh."
+[ "$INTERCEPTED" = 1 ] && echo "WARNING: TLS looks intercepted (issuer above is not a public CA). Only a client that accepted an EM intermediate counts; everything else is INCONCLUSIVE. Re-run where egress is direct, or use scripts/emudhra/check_bundle.sh."
 
 echo "== compromised chains"
 for h in $HOSTS; do
@@ -219,4 +220,4 @@ for h in $HOSTS; do
   done
 done
 echo "== done. A client marked vulnerable above still trusts a compromised intermediate."
-echo "   Not probed here: Go and Rust binaries, the JVM, .NET. Check those by version (see SKILL.md)."
+echo "   Not probed here: Go and Rust binaries, the JVM, .NET. Check those by version (see https://emudhra.we-have-a-problem.com/)."

@@ -32,12 +32,21 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # See the pinning note in tests.yml; keep these three in sync.
-          version: "0.12.3"
-          checksum: "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101" # pragma: allowlist secret
+          version: "0.13.5"
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f" # pragma: allowlist secret
       - name: Install Python 3.14
         run: uv python install 3.14
       - name: Build
         run: uv build
+      # Refuse to publish from a runner whose uv, or whose environment for the built
+      # wheel, still accepts a certificate from the compromised eMudhra intermediates:
+      # the publish step sends a PyPI upload token over uv's TLS.
+      - name: Probe trust stores for the eMudhra CA compromise
+        run: |
+          uv run --isolated --no-project --with "$(ls dist/*.whl)" sh scripts/emudhra/probe_runtime.sh > probe.txt
+          sh scripts/emudhra/probe_package_managers.sh >> probe.txt
+          cat probe.txt
+          if grep -E '^VULNERABLE' probe.txt; then exit 1; fi
       # Check that basic features work and we didn't miss to include crucial files.
       # The no-extras install comes first because it is the only one that can catch a
       # dependency toko imports but never declares: [all] pulls transformers, which

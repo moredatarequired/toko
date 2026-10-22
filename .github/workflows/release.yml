@@ -26,6 +26,10 @@ jobs:
       XDG_CACHE_HOME: ${{ github.workspace }}/.cache
 
     steps:
+      # The runner image can lag the distro's ca-certificates, and checkout's git
+      # reads this store.
+      - name: Update the runner's CA store
+        run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
@@ -46,7 +50,11 @@ jobs:
           uv run --isolated --no-project --with "$(ls dist/*.whl)" sh scripts/emudhra/probe_runtime.sh > probe.txt
           sh scripts/emudhra/probe_package_managers.sh >> probe.txt
           cat probe.txt
-          if grep -E '^VULNERABLE' probe.txt; then exit 1; fi
+          # The runner image's own node and system pip are not used by this job.
+          if grep -E '^VULNERABLE' probe.txt | grep -vE '^VULNERABLE +(node|npm|python3 -m pip) '; then exit 1; fi
+          if grep -qE '^VULNERABLE +(node|npm|python3 -m pip) ' probe.txt; then
+            echo "::warning::the runner image's node or system pip trusts the compromised eMudhra intermediates"
+          fi
       # Check that basic features work and we didn't miss to include crucial files.
       # The no-extras install comes first because it is the only one that can catch a
       # dependency toko imports but never declares: [all] pulls transformers, which

@@ -26,6 +26,11 @@ jobs:
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
 
     steps:
+      # The runner image can lag the distro's ca-certificates, and checkout's git
+      # reads this store.
+      - name: Update the runner's CA store
+        run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -54,7 +59,11 @@ jobs:
           uv run sh scripts/emudhra/probe_runtime.sh > probe.txt
           sh scripts/emudhra/probe_package_managers.sh >> probe.txt
           cat probe.txt
-          if grep -E '^VULNERABLE' probe.txt; then exit 1; fi
+          # The runner image's own node and system pip are not used by this job.
+          if grep -E '^VULNERABLE' probe.txt | grep -vE '^VULNERABLE +(node|npm|python3 -m pip) '; then exit 1; fi
+          if grep -qE '^VULNERABLE +(node|npm|python3 -m pip) ' probe.txt; then
+            echo "::warning::the runner image's node or system pip trusts the compromised eMudhra intermediates"
+          fi
         env:
           UV_NO_SYNC: "1"
 

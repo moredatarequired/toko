@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # The runner image can lag the distro's ca-certificates, and checkout's git
+      # reads this store.
+      - name: Update the runner's CA store
+        run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

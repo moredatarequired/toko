@@ -11,8 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # The runner image can lag the distro's ca-certificates, and checkout's git
-      # reads this store.
+      # The runner image can lag the fixed ca-certificates; checkout's git uses it.
       - name: Update the runner's CA store
         run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
 

@@ -21,8 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    # Not imported: it is httpx's CA bundle. Releases before 2026.10.19 trust the
-    # compromised eMudhra intermediates.
+    # Not imported: httpx's CA bundle. Older releases trust the compromised eMudhra CAs.
     "certifi>=2026.10.19",
     # Upper bound because toko::price_update reuses genai-prices' private payload
     # parser; revisit the parser when relaxing this.

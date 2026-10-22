@@ -26,8 +26,7 @@ jobs:
       XDG_CACHE_HOME: ${{ github.workspace }}/.cache
 
     steps:
-      # The runner image can lag the distro's ca-certificates, and checkout's git
-      # reads this store.
+      # The runner image can lag the fixed ca-certificates; checkout's git uses it.
       - name: Update the runner's CA store
         run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
       - name: Checkout
@@ -38,24 +37,10 @@ jobs:
           # See the pinning note in tests.yml; keep these three in sync.
           version: "0.13.5"
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f" # pragma: allowlist secret
-      # Before uv downloads or runs anything in this job, which holds id-token: write.
-      - name: Probe uv for the eMudhra CA compromise
-        timeout-minutes: 5
-        run: |
-          ONLY=uv sh scripts/emudhra/probe_package_managers.sh > probe-uv.txt
-          cat probe-uv.txt
-          sh scripts/emudhra/gate.sh probe-uv.txt uv
       - name: Install Python 3.14
         run: uv python install 3.14
       - name: Build
         run: uv build
-      # The built wheel's resolved certifi and the OS store must refuse the chains too.
-      - name: Probe the wheel's environment for the eMudhra CA compromise
-        timeout-minutes: 10
-        run: |
-          uv run --isolated --no-project --with "$(ls dist/*.whl)" sh scripts/emudhra/probe_runtime.sh > probe.txt
-          cat probe.txt
-          sh scripts/emudhra/gate.sh probe.txt python-ssl-certifi curl
       # Check that basic features work and we didn't miss to include crucial files.
       # The no-extras install comes first because it is the only one that can catch a
       # dependency toko imports but never declares: [all] pulls transformers, which

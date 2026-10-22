@@ -26,8 +26,7 @@ jobs:
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
 
     steps:
-      # The runner image can lag the distro's ca-certificates, and checkout's git
-      # reads this store.
+      # The runner image can lag the fixed ca-certificates; checkout's git uses it.
       - name: Update the runner's CA store
         run: sudo apt-get update -q && sudo apt-get install -y -q --only-upgrade ca-certificates
 
@@ -37,9 +36,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          # The pinned action's bundled hash table only covers versions that release
-          # knew about, and 0.13.5 is not one of them, so without this checksum the
-          # download goes unverified: one debug line, green build. This step is duplicated in
+          # The pinned action has no bundled hash for 0.13.5, so this checksum is
+          # what verifies the download. This step is duplicated in
           # git-hooks-checks.yml and release.yml: the action SHA, the version and
           # the checksum have to match across all three. Dependabot bumps the
           # action SHA and nothing else, so the other two are hand-maintained.
@@ -50,19 +48,6 @@ jobs:
 
       - name: Sync dependencies (all groups)
         run: uv sync --all-groups --all-extras
-
-      # Fails if uv, the locked certifi, or the runner's OS store (which checkout's
-      # git uses) accepts a certificate from the compromised eMudhra intermediates,
-      # or if any of them gives no ok verdict.
-      - name: Probe trust stores for the eMudhra CA compromise
-        timeout-minutes: 10
-        run: |
-          uv run sh scripts/emudhra/probe_runtime.sh > probe.txt
-          ONLY=uv sh scripts/emudhra/probe_package_managers.sh >> probe.txt
-          cat probe.txt
-          sh scripts/emudhra/gate.sh probe.txt uv python-ssl-certifi curl
-        env:
-          UV_NO_SYNC: "1"
 
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0

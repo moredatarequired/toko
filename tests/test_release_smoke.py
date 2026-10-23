@@ -820,9 +820,12 @@ def test_the_guard_must_follow_context_too(monkeypatch):
     On the release stack the self-signed chain reaches the `ssl` error only across
     `__context__`. A `_causes` that followed `__cause__` alone would stop at httpcore,
     never see the `ssl` link `BROKEN_RUNNER_TYPES` denies, and be left with the
-    `LocalEntryNotFoundError` above it -- which excuses. A corpus whose `replay` joined
-    every link with `__cause__` could not tell the two walks apart, and the whole suite
-    would stay green while the guard let an intercepted release publish.
+    `LocalEntryNotFoundError` above it -- which excuses. The link kinds the corpus
+    records are what keep the two walks distinguishable: rebuild `replay` to join every
+    link with `__cause__` and the `ssl` link comes back within reach of the cause-only
+    walk, so the monkeypatched assertion below stops holding and this test is the only
+    failure in the suite. Flatten the corpus that way with no fence here and a `_causes`
+    that let an intercepted release publish would stop being measured.
     """
     intercepted = CAPTURES[(RELEASE, "tls-self-signed-endpoint")]
     assert not smoke_test.hub_was_unavailable(intercepted.replay())

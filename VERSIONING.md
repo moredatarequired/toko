@@ -38,8 +38,9 @@ Once 1.0 is stamped, breaking any of these requires a major bump:
 - The CLI: which commands and flags exist, and what they mean.
 - The machine-readable output: the JSON, CSV and TSV shapes.
 - Exit codes.
-- The public Python API, which is exactly the three names in `src/toko/__init__.py`'s
-  `__all__`: `count_tokens`, `TokenCount`, and `__version__`.
+- The public Python API, which is exactly the six names in `src/toko/__init__.py`'s
+  `__all__`: `count_tokens`, `TokenCount`, `Caveat`, `CaveatKind`, `Retirement`, and
+  `__version__`.
 
 Everything else is internal and can change in any release without notice. That is
 every module under `toko.` beyond those re-exports, the non-underscored names those
@@ -94,19 +95,45 @@ updated.
 
 What toko does today, in full:
 
-- A model the registry marks `retired`, which today is Anthropic, Google and xAI
-  entries, warns on stderr when you count it. The notice gives the retirement date,
-  or says the date is unpublished, and then either says the provider will reject or
-  redirect the name, or, when the registry knows the replacement, says outright that
-  the number you are reading is the replacement's count and not the one you asked
-  for.
-- The OpenAI names in `RETIRED_OPENAI_MODELS` are silent. They still tokenize
-  locally and still return a count; that list only hides them from `--list-models`.
-- `--include-retired` puts both kinds back into the `--list-models` output and does
-  nothing else, as its help text says.
-- Toko never fails a count for being retired. There is no flag that turns a retired
-  model into an error, though a provider that has dropped the name can still reject
-  the request itself.
+- The CLI refuses to count with a retired model. Naming one exits `1` before any input
+  is read, so no partial table is printed, and the error carries the retirement date
+  and the replacement when the registry knows one:
 
-Whether a retired name should fail instead, or should redirect and report that in
-the structured output rather than only on stderr, is unresolved and tracked in #28.
+  ```txt
+  Error: model 'grok-3' is retired (2026-05-15); it redirects to grok-4.3. Pass --include-retired to count with it anyway.
+  ```
+
+  A retirement whose date the provider never published reads `(date unknown)` where the
+  date would be — `toko -m grok-3-mini --text "hello world"` prints
+  `Error: model 'grok-3-mini' is retired (date unknown). Pass --include-retired to count with it anyway.`
+
+- Two sources feed that gate, and a name from either is refused the same way. Registry
+  entries marked `retired` — today Anthropic, Google and xAI names — carry a date and
+  sometimes a redirect target. The OpenAI engines in `RETIRED_OPENAI_MODELS` carry the
+  shutdown date OpenAI published and never a redirect, because a shut-down engine has
+  nothing to redirect to; `-m text-davinci-003` is refused exactly like `-m grok-3`.
+
+- Hidden from `--list-models` is not the same thing as refused, and the two OpenAI sets
+  are no longer one list. The listing filter is `UNLISTED_OPENAI_MODELS`, which is
+  `RETIRED_OPENAI_MODELS` plus live-but-unadvertised tiktoken names — `babbage-002`,
+  `davinci-002`, `gpt-35-turbo`, `gpt-3.5`, `gpt2` and `gpt-2`. The gate reads only
+  `RETIRED_OPENAI_MODELS`, so those six are kept out of the default listing and still
+  count with no flag, no warning and exit `0`.
+
+- `--include-retired` is what lets the count happen; putting the hidden names back into
+  `--list-models` is its second effect rather than its only one, as its help text now
+  says: "Count with retired models instead of failing, and list them in `--list-models`
+  output". With the flag the count runs and the retirement moves to stderr —
+  `Warning: grok-3 was retired on 2026-05-15; xai still answers for it but serves grok-4.3, so this count is grok-4.3's, not grok-3's.` —
+  and `--format json` reports it in structured output too, as a `retirement` object of
+  `model`, `date` and `redirects_to` on each count and total.
+
+- The refusal is the CLI's, not the library's. `count_tokens` counts a retired model
+  with no flag to pass, writes that same stderr warning, and reports it in
+  `TokenCount.retirement`.
+
+Whether a retired name should fail, redirect silently, or only warn was the open
+question here, and failing is the answer toko settled on: a count taken under a retired
+name is either another model's number or nothing at all, so the CLI declines to print
+it unless you ask for it by name. What remains unsettled is the warning channel — see
+the note above about plain `sys.stderr` writes, which is on #28.

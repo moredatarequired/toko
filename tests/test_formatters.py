@@ -9,17 +9,53 @@ import re
 import pytest
 
 from tests.pty_runner import HAS_PTY, PTY_SKIP_REASON, run_under_pty
-from toko.formatters import format_file_table, format_output
-from toko.result import TokenCount
+from toko.formatters import (
+    NO_REASON_RECORDED,
+    SCHEMA_VERSION,
+    format_file_table,
+    format_output,
+)
+from toko.result import Caveat, CaveatKind, Retirement, TokenCount
 
 
 def _counted(count: int, *, cost: float | None = None, model: str = "gpt-5"):
     return TokenCount(count=count, model=model, provider="openai", cost=cost)
 
 
-def test_json_matches_plain_mapping_without_costs():
+def _expected(model: str, tokens: int | None, **overrides):
+    """Build the count object every JSON document carries, keys always present."""
+    count = {
+        "model": model,
+        "tokens": tokens,
+        "approximate": False,
+        "cost": None,
+        "caveats": [],
+        "retirement": None,
+        "reason": None,
+    }
+    return count | overrides
+
+
+def _uncounted(model: str, reason: str = NO_REASON_RECORDED):
+    """Build the same keys for a model the run could not count: no count, and why.
+
+    The default is what a count with no error recorded against it says, since `reason`
+    is never null where `tokens` is.
+    """
+    return _expected(model, None, approximate=None, reason=reason)
+
+
+def _text_envelope(*counts):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "results": [{"source": {"kind": "text", "name": None}, "counts": list(counts)}],
+        "totals": list(counts),
+    }
+
+
+def test_json_wraps_a_text_run_in_the_envelope():
     payload = json.loads(format_output({"gpt-5": _counted(12)}, output_format="json"))
-    assert payload == {"gpt-5": 12}
+    assert payload == _text_envelope(_expected("gpt-5", 12))
 
 
 def test_json_includes_costs_when_requested():
@@ -30,7 +66,7 @@ def test_json_includes_costs_when_requested():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 12, "cost": 0.000015}}
+    assert payload == _text_envelope(_expected("gpt-5", 12, cost=0.000015))
 
 
 def test_json_reports_unpriced_model_as_null_cost():
@@ -41,7 +77,7 @@ def test_json_reports_unpriced_model_as_null_cost():
             show_costs=True,
         )
     )
-    assert payload == {"mystery-model": {"tokens": 3, "cost": None}}
+    assert payload == _text_envelope(_expected("mystery-model", 3))
 
 
 def test_json_costs_cover_every_model():
@@ -50,35 +86,471 @@ def test_json_costs_cover_every_model():
         "gpt-4.1": _counted(14, cost=0.0002, model="gpt-4.1"),
     }
     payload = json.loads(format_output(results, output_format="json", show_costs=True))
-    assert payload == {
-        "gpt-5": {"tokens": 12, "cost": 0.0001},
-        "gpt-4.1": {"tokens": 14, "cost": 0.0002},
+    assert payload == _text_envelope(
+        _expected("gpt-5", 12, cost=0.0001), _expected("gpt-4.1", 14, cost=0.0002)
+    )
+
+
+def _source_names(payload) -> list[str]:
+    return [result["source"]["name"] for result in payload["results"]]
+
+
+def _caveat(message: str, *, model: str = "grok-4.5") -> Caveat:
+    return Caveat(
+        kind=CaveatKind.XAI_GROK1_STANDIN,
+        model=model,
+        message=message,
+        tokenizer="Xenova/grok-1-tokenizer",
+        reason=message,
+    )
+
+
+def _expected_caveat(message: str, *, model: str = "grok-4.5"):
+    return {
+        "kind": "xai_grok1_standin",
+        "model": model,
+        "message": message,
+        "encoding": None,
+        "tokenizer": "Xenova/grok-1-tokenizer",
+        "reason": message,
     }
 
 
 def test_json_reports_a_caveat_on_an_exact_count():
     """A caveat must not need an approximate sibling to become visible."""
     counted = TokenCount(
-        count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+        count=7,
+        model="gpt-5",
+        provider="openai",
+        caveats=(_caveat("stood in for it", model="gpt-5"),),
     )
     payload = json.loads(format_output({"gpt-5": counted}, output_format="json"))
-    assert payload == {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}}
+    assert payload == _text_envelope(
+        _expected(
+            "gpt-5", 7, caveats=[_expected_caveat("stood in for it", model="gpt-5")]
+        )
+    )
 
 
-def test_file_json_keeps_one_shape_when_only_one_file_has_a_caveat():
+def test_json_reports_a_retired_model_as_an_object():
+    counted = TokenCount(
+        count=7,
+        model="grok-3",
+        provider="xai",
+        retirement=Retirement(
+            model="grok-3", date="2026-06-10", redirects_to="grok-4.3"
+        ),
+    )
+    payload = json.loads(format_output({"grok-3": counted}, output_format="json"))
+    assert payload["totals"][0]["retirement"] == {
+        "model": "grok-3",
+        "date": "2026-06-10",
+        "redirects_to": "grok-4.3",
+    }
+
+
+def test_file_json_gives_every_count_the_same_keys():
     file_results = {
         "a.txt": {
             "gpt-5": TokenCount(
-                count=7, model="gpt-5", provider="openai", caveat="retired last spring"
+                count=7,
+                model="gpt-5",
+                provider="openai",
+                caveats=(_caveat("stood in for it", model="gpt-5"),),
             )
         },
         "b.txt": {"gpt-5": _counted(4)},
     }
     payload = json.loads(format_file_table(file_results, output_format="json"))
-    assert payload == {
-        "a.txt": {"gpt-5": {"tokens": 7, "caveat": "retired last spring"}},
-        "b.txt": {"gpt-5": {"tokens": 4}},
+    assert [result["source"] for result in payload["results"]] == [
+        {"kind": "file", "name": "a.txt"},
+        {"kind": "file", "name": "b.txt"},
+    ]
+    assert [
+        set(count) for result in payload["results"] for count in result["counts"]
+    ] == [set(_expected("gpt-5", 0)), set(_expected("gpt-5", 0))]
+
+
+def test_file_json_distinguishes_a_url_from_a_path():
+    payload = json.loads(
+        format_file_table(
+            {
+                "https://example.com/a.txt": {"gpt-5": _counted(4)},
+                "a.txt": {"gpt-5": _counted(4)},
+            },
+            output_format="json",
+        )
+    )
+    assert [result["source"] for result in payload["results"]] == [
+        {"kind": "url", "name": "https://example.com/a.txt"},
+        {"kind": "file", "name": "a.txt"},
+    ]
+
+
+def _two_models() -> dict[str, dict[str, TokenCount]]:
+    return {
+        "a.txt": {
+            "gpt-5": _counted(2),
+            "gpt-4o-mini": _counted(3, model="gpt-4o-mini"),
+        },
+        "b.txt": {
+            "gpt-5": _counted(4),
+            "gpt-4o-mini": _counted(5, model="gpt-4o-mini"),
+        },
     }
+
+
+def _model_orders(payload) -> list[list[str]]:
+    arrays = [result["counts"] for result in payload["results"]]
+    arrays.append(payload["totals"])
+    return [[count["model"] for count in counts] for counts in arrays]
+
+
+def test_every_json_array_lists_its_models_in_the_same_order():
+    """One order everywhere, so no array has to be re-read against a second one.
+
+    One entry per model asked for, too: a source that could not be counted for a model
+    still lists it, with a null count. Reading by position is still the wrong habit --
+    match on `model` -- but two orders in one document would break even matching, by
+    scattering the models a reader scans for.
+    """
+    payload = json.loads(format_file_table(_two_models(), output_format="json"))
+
+    assert _model_orders(payload) == [["gpt-5", "gpt-4o-mini"]] * 3
+
+
+def _missing_from_the_first_file() -> dict[str, dict[str, TokenCount]]:
+    return {
+        "a.txt": {"gpt-4o-mini": _counted(3, model="gpt-4o-mini")},
+        "b.txt": {
+            "gpt-5": _counted(4),
+            "gpt-4o-mini": _counted(5, model="gpt-4o-mini"),
+        },
+    }
+
+
+def test_a_source_lists_its_models_in_the_document_order_not_its_own():
+    # No requested order to follow, so the document falls back to first encounter: the
+    # leading model missed the first file, and the order is not the one the second
+    # file's counts were collected in either. Every array lists both models even so;
+    # the first file's entry for the one it missed carries a null count.
+    payload = json.loads(
+        format_file_table(_missing_from_the_first_file(), output_format="json")
+    )
+
+    assert _model_orders(payload) == [["gpt-4o-mini", "gpt-5"]] * 3
+    assert payload["results"][0]["counts"][1] == _uncounted("gpt-5")
+
+
+def test_the_requested_order_holds_when_a_model_missed_the_first_file():
+    payload = json.loads(
+        format_file_table(
+            _missing_from_the_first_file(),
+            output_format="json",
+            models=["gpt-5", "gpt-4o-mini"],
+        )
+    )
+
+    assert _model_orders(payload) == [["gpt-5", "gpt-4o-mini"]] * 3
+
+
+def test_the_columns_and_the_json_arrays_share_the_requested_order():
+    """One order for the whole run, so a column and an array cannot be read apart."""
+    file_results = _missing_from_the_first_file()
+    models = ["gpt-5", "gpt-4o-mini"]
+
+    columns = _csv_rows(
+        format_file_table(file_results, output_format="csv", models=models)
+    )[0][1:]
+    payload = json.loads(
+        format_file_table(file_results, output_format="json", models=models)
+    )
+    heading = re.sub(
+        r"\s+", " ", _plain_lines(format_file_table(file_results, models=models))[0]
+    )
+
+    assert columns == [
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+        "gpt-4o-mini_tokens",
+        "gpt-4o-mini_approximate",
+    ]
+    assert heading.strip() == "File gpt-5 gpt-4o-mini"
+    assert _model_orders(payload)[-1] == models
+
+
+def test_a_requested_model_no_file_could_be_counted_for_keeps_its_column():
+    """It was asked for, so the run reports it -- as a column of empty cells.
+
+    Dropping it made the column set a function of what the counting produced, so the
+    same command against different files emitted different headers.
+    """
+    output = format_file_table(
+        _missing_from_the_first_file(),
+        output_format="csv",
+        models=["gpt-5", "claude-opus-4-5", "gpt-4o-mini"],
+    )
+
+    rows = _csv_rows(output)
+    assert rows[0] == [
+        "file",
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+        "claude-opus-4-5_tokens",
+        "claude-opus-4-5_approximate",
+        "gpt-4o-mini_tokens",
+        "gpt-4o-mini_approximate",
+    ]
+    assert [row[3:5] for row in rows[1:]] == [["", ""], ["", ""]]
+
+
+def test_a_model_named_twice_takes_one_column():
+    """The requested order is deduplicated, so a repeat cannot double a column.
+
+    `--model` is repeatable and nothing stops the same name being given twice; a header
+    with two `gpt-5_tokens` columns in it is not a header a consumer can key by name.
+    """
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}},
+        output_format="csv",
+        models=["gpt-5", "gpt-5"],
+    )
+
+    assert _csv_rows(output) == [
+        ["file", "gpt-5_tokens", "gpt-5_approximate"],
+        ["a.txt", "4", "false"],
+    ]
+
+
+def test_a_model_named_twice_takes_one_delimited_row():
+    """format_output deduplicates too, so both entry points answer a repeat alike.
+
+    format_file_table already did (test_a_model_named_twice_takes_one_column); without
+    the same dedupe here the repeat printed a second row naming the same model.
+    """
+    rows = format_output(
+        {"gpt-5": _counted(4)}, output_format="csv", models=["gpt-5", "gpt-5"]
+    )
+
+    assert _csv_rows(rows) == [
+        ["model", "tokens", "approximate"],
+        ["gpt-5", "4", "false"],
+    ]
+
+
+def test_a_model_named_twice_takes_one_json_entry():
+    """In `results[].counts` and in `totals` both, which repeat one shape.
+
+    A document with two entries for one model cannot be read the way the README says
+    to read it, by matching on `model`.
+    """
+    document = format_output(
+        {"gpt-5": _counted(4)}, output_format="json", models=["gpt-5", "gpt-5"]
+    )
+
+    assert json.loads(document) == _text_envelope(_expected("gpt-5", 4))
+
+
+def test_a_model_no_file_could_be_counted_for_keeps_its_total_cells_empty():
+    """_compute_totals has no entry for such a model; the TOTAL row still has cells."""
+    output = format_file_table(
+        _missing_from_the_first_file(),
+        output_format="csv",
+        total_only=True,
+        models=["gpt-5", "claude-opus-4-5"],
+    )
+
+    assert _csv_rows(output)[1] == ["TOTAL", "4", "false", "", ""]
+
+
+def test_the_model_table_keeps_a_row_for_a_model_that_could_not_be_counted():
+    """A model named but not counted stays on the page as N/A rather than vanishing.
+
+    The delimited formats leave the cell empty because a column read as numbers has to
+    hold numbers and blanks; the text table is read by a person, and a row that is not
+    there leaves them to notice for themselves that a model they asked for is missing.
+    """
+    output = format_output({"gpt-5": _counted(1234)}, models=["gpt-5", "gpt-6"])
+
+    assert _plain_lines(output) == ["Model  Tokens", "gpt-5   1,234", "gpt-6     N/A"]
+
+
+def test_the_model_table_says_na_in_the_cost_column_of_a_model_it_could_not_count():
+    """No count is no cost, and the cell says so with the same word the tokens cell uses."""
+    output = format_output(
+        {"gpt-5": _counted(1234, cost=0.0002)},
+        models=["gpt-5", "gpt-6"],
+        show_costs=True,
+    )
+
+    assert _plain_lines(output) == [
+        "Model  Tokens     Cost",
+        "gpt-5   1,234  $0.0002",
+        "gpt-6     N/A      N/A",
+    ]
+
+
+def test_the_file_table_says_na_for_a_model_no_file_could_be_counted_for():
+    """Every cell of that column, the TOTAL included, rather than a blank under a header.
+
+    The TOTAL is the one _compute_totals has no entry for at all, so it is the cell most
+    easily left empty -- and an empty cell under a column of N/A reads as a zero total.
+    """
+    output = format_file_table(
+        {"a.txt": {"gpt-5": _counted(4)}, "b.txt": {"gpt-5": _counted(9)}},
+        models=["gpt-5", "gpt-6"],
+    )
+
+    assert _plain_lines(output) == [
+        "File   gpt-5  gpt-6",
+        "a.txt      4    N/A",
+        "b.txt      9    N/A",
+        "TOTAL     13    N/A",
+    ]
+
+
+def test_the_file_table_says_na_in_the_cost_cells_it_has_no_count_for():
+    output = format_file_table(
+        {
+            "a.txt": {"gpt-5": _counted(4, cost=0.0002)},
+            "b.txt": {"gpt-5": _counted(9, cost=0.0003)},
+        },
+        models=["gpt-5", "gpt-6"],
+        show_costs=True,
+    )
+
+    assert _plain_lines(output)[-3:] == [
+        "a.txt       4  $0.0002     N/A    N/A",
+        "b.txt       9  $0.0003     N/A    N/A",
+        "TOTAL      13  $0.0005     N/A    N/A",
+    ]
+
+
+def _two_files_that_failed_differently() -> dict[str, dict[str, str]]:
+    return {
+        "second.txt": {"gpt-5": "second.txt could not be counted"},
+        "first.txt": {"gpt-5": "first.txt could not be counted"},
+    }
+
+
+def test_the_total_names_the_first_failure_in_file_order_not_in_errors_order():
+    """Which failure a total names is read off the inputs, not off the errors mapping.
+
+    The two files failed differently and the mapping lists them in the opposite order,
+    so a total read from the mapping -- or read from the files backwards -- names the
+    second file, and two callers holding the same failures disagree about which came
+    first.
+    """
+    payload = json.loads(
+        format_file_table(
+            {"first.txt": {}, "second.txt": {}},
+            output_format="json",
+            models=["gpt-5"],
+            errors=_two_files_that_failed_differently(),
+        )
+    )
+
+    assert payload["totals"] == [_uncounted("gpt-5", "first.txt could not be counted")]
+
+
+def test_sorting_the_rows_does_not_change_which_failure_the_total_names():
+    """--sort decides the order rows print in, and nothing else.
+
+    Reading the reasons after the sort would make the total name whichever failure the
+    ordering floated to the top, so `--sort path` and `--sort input` over one set of
+    inputs would report different reasons for the same missing total.
+    """
+    errors = {
+        "z_named_first.txt": {"gpt-5": "z_named_first.txt could not be counted"},
+        "a_sorts_first.txt": {"gpt-5": "a_sorts_first.txt could not be counted"},
+    }
+    payload = json.loads(
+        format_file_table(
+            {"z_named_first.txt": {}, "a_sorts_first.txt": {}},
+            output_format="json",
+            models=["gpt-5"],
+            errors=errors,
+            sort_order="path",
+        )
+    )
+
+    # The sort did land, so the total below is outliving a reordering and not a no-op.
+    assert [source["source"]["name"] for source in payload["results"]] == [
+        "a_sorts_first.txt",
+        "z_named_first.txt",
+    ]
+    assert payload["totals"] == [
+        _uncounted("gpt-5", "z_named_first.txt could not be counted")
+    ]
+
+
+def test_a_count_with_no_error_recorded_still_says_why_it_has_none():
+    """A null `tokens` beside a null `reason` is the one count shape the document forbids.
+
+    The CLI records an error beside every missing count, so this is unreachable through
+    it; a library caller naming a model in `models=` with nothing in `errors=` for it
+    reaches it directly, and the invariant the JSON section states has to hold there too.
+    """
+    payload = json.loads(
+        format_file_table(
+            {"a.txt": {}}, output_format="json", models=["gpt-5"], errors={}
+        )
+    )
+
+    assert payload["results"][0]["counts"] == [_uncounted("gpt-5")]
+    assert payload["totals"] == [_uncounted("gpt-5")]
+    # The same holds of a text run, which reaches the count objects by another route.
+    text_payload = json.loads(format_output({}, output_format="json", models=["gpt-5"]))
+    assert text_payload == _text_envelope(_uncounted("gpt-5"))
+
+
+def _approximate(count: int, *, model: str) -> TokenCount:
+    return TokenCount(count=count, model=model, provider="openai", approximate=True)
+
+
+@pytest.mark.parametrize("output_format", ["csv", "tsv"])
+def test_the_delimited_header_is_the_same_whatever_the_counting_produced(output_format):
+    """One command, one header -- across runs that produced quite different counts.
+
+    This is the property #20 traded away: it gave the approximate column only to runs
+    that had one to report, which made the header a function of the data. A consumer
+    could not know the shape until it had parsed a run, and the same command over two
+    directories could hand it two different shapes.
+    """
+    models = ["gpt-5", "gpt-6"]
+    headers = {
+        format_file_table(
+            file_results, output_format=output_format, models=models
+        ).splitlines()[0]
+        for file_results in (
+            {"a.txt": {"gpt-5": _counted(4), "gpt-6": _counted(2, model="gpt-6")}},
+            {"a.txt": {"gpt-5": _counted(4), "gpt-6": _approximate(2, model="gpt-6")}},
+            {"a.txt": {"gpt-5": _counted(4)}},
+            {"a.txt": {}},
+        )
+    }
+
+    assert len(headers) == 1
+
+
+def test_delimited_columns_follow_the_order_the_models_were_named():
+    output = format_file_table(_two_models(), output_format="csv")
+
+    assert _csv_rows(output)[0] == [
+        "file",
+        "gpt-5_tokens",
+        "gpt-5_approximate",
+        "gpt-4o-mini_tokens",
+        "gpt-4o-mini_approximate",
+    ]
+
+
+def test_the_text_table_columns_follow_the_order_the_models_were_named():
+    output = format_file_table(_two_models())
+
+    assert re.sub(r"\s+", " ", _plain_lines(output)[0]).strip() == (
+        "File gpt-5 gpt-4o-mini"
+    )
 
 
 def _caveated_column(count: int, caveat: str):
@@ -88,7 +560,7 @@ def _caveated_column(count: int, caveat: str):
             model="grok-4.5",
             provider="xai",
             approximate=True,
-            caveat=caveat,
+            caveats=(_caveat(caveat),),
         )
     }
 
@@ -107,16 +579,18 @@ def test_total_only_json_keeps_every_distinct_caveat():
             total_only=True,
         )
     )
-    assert payload == {
-        "grok-4.5": {
-            "tokens": 7,
-            "approximate": True,
-            "caveat": (
-                "the xAI token API was unavailable (timeout); "
-                "the xAI token API was unavailable (503)"
-            ),
-        }
-    }
+    assert payload["results"] == []
+    assert payload["totals"] == [
+        _expected(
+            "grok-4.5",
+            7,
+            approximate=True,
+            caveats=[
+                _expected_caveat("the xAI token API was unavailable (timeout)"),
+                _expected_caveat("the xAI token API was unavailable (503)"),
+            ],
+        )
+    ]
 
 
 def test_total_only_json_reports_a_column_wide_caveat_once():
@@ -131,14 +605,25 @@ def test_total_only_json_reports_a_column_wide_caveat_once():
             total_only=True,
         )
     )
-    assert payload == {"grok-4.5": {"tokens": 7, "approximate": True, "caveat": caveat}}
+    assert payload["totals"] == [
+        _expected("grok-4.5", 7, approximate=True, caveats=[_expected_caveat(caveat)])
+    ]
 
 
-def test_file_json_matches_plain_mapping_without_costs():
+def test_file_json_wraps_one_file_in_the_envelope():
     payload = json.loads(
         format_file_table({"a.txt": {"gpt-5": _counted(4)}}, output_format="json")
     )
-    assert payload == {"a.txt": {"gpt-5": 4}}
+    assert payload == {
+        "schema_version": SCHEMA_VERSION,
+        "results": [
+            {
+                "source": {"kind": "file", "name": "a.txt"},
+                "counts": [_expected("gpt-5", 4)],
+            }
+        ],
+        "totals": [_expected("gpt-5", 4)],
+    }
 
 
 def test_file_json_includes_costs_when_requested():
@@ -152,10 +637,17 @@ def test_file_json_includes_costs_when_requested():
             show_costs=True,
         )
     )
-    assert payload == {
-        "a.txt": {"gpt-5": {"tokens": 4, "cost": 0.0002}},
-        "b.txt": {"gpt-5": {"tokens": 9, "cost": None}},
-    }
+    assert payload["results"] == [
+        {
+            "source": {"kind": "file", "name": "a.txt"},
+            "counts": [_expected("gpt-5", 4, cost=0.0002)],
+        },
+        {
+            "source": {"kind": "file", "name": "b.txt"},
+            "counts": [_expected("gpt-5", 9)],
+        },
+    ]
+    assert payload["totals"] == [_expected("gpt-5", 13, cost=0.0002)]
 
 
 def test_total_only_json_reports_wholly_unpriced_model_as_null():
@@ -170,7 +662,7 @@ def test_total_only_json_reports_wholly_unpriced_model_as_null():
             show_costs=True,
         )
     )
-    assert payload == {"mystery-model": {"tokens": 13, "cost": None}}
+    assert payload["totals"] == [_expected("mystery-model", 13)]
 
 
 def test_total_only_json_sums_only_the_files_it_could_price():
@@ -185,10 +677,10 @@ def test_total_only_json_sums_only_the_files_it_could_price():
             show_costs=True,
         )
     )
-    assert payload == {"gpt-5": {"tokens": 13, "cost": 0.0002}}
+    assert payload["totals"] == [_expected("gpt-5", 13, cost=0.0002)]
 
 
-def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
+def test_total_only_csv_leaves_a_wholly_unpriced_cost_empty():
     output = format_file_table(
         {
             "a.txt": {
@@ -201,7 +693,7 @@ def test_total_only_csv_marks_a_wholly_unpriced_model_not_available():
         show_costs=True,
         include_header=False,
     )
-    assert output == "TOTAL,4,$0.0002,5,N/A"
+    assert output == "TOTAL,4,0.0002,false,5,,false"
 
 
 def _csv_rows(output: str) -> list[list[str]]:
@@ -212,27 +704,36 @@ def test_csv_quotes_a_comma_in_a_model_name():
     output = format_output(
         {"gpt-5, preview": _counted(12, model="gpt-5, preview")}, output_format="csv"
     )
-    assert output == 'model,tokens\n"gpt-5, preview",12'
-    assert _csv_rows(output)[1] == ["gpt-5, preview", "12"]
+    assert output == 'model,tokens,approximate\n"gpt-5, preview",12,false'
+    assert _csv_rows(output)[1] == ["gpt-5, preview", "12", "false"]
 
 
 def test_csv_file_rows_survive_a_comma_in_the_path():
     output = format_file_table({"a,b.txt": {"gpt-5": _counted(4)}}, output_format="csv")
-    assert _csv_rows(output) == [["file", "gpt-5"], ["a,b.txt", "4"]]
+    assert _csv_rows(output) == [
+        ["file", "gpt-5_tokens", "gpt-5_approximate"],
+        ["a,b.txt", "4", "false"],
+    ]
 
 
 def test_csv_file_rows_survive_a_quote_in_the_path():
     output = format_file_table(
         {'we"ird.txt': {"gpt-5": _counted(4)}}, output_format="csv"
     )
-    assert _csv_rows(output) == [["file", "gpt-5"], ['we"ird.txt', "4"]]
+    assert _csv_rows(output) == [
+        ["file", "gpt-5_tokens", "gpt-5_approximate"],
+        ['we"ird.txt', "4", "false"],
+    ]
 
 
 def test_csv_file_rows_survive_a_newline_in_the_path():
     output = format_file_table(
         {"two\nlines.txt": {"gpt-5": _counted(4)}}, output_format="csv"
     )
-    assert _csv_rows(output) == [["file", "gpt-5"], ["two\nlines.txt", "4"]]
+    assert _csv_rows(output) == [
+        ["file", "gpt-5_tokens", "gpt-5_approximate"],
+        ["two\nlines.txt", "4", "false"],
+    ]
 
 
 def test_csv_keeps_ordinary_rows_unquoted():
@@ -241,15 +742,19 @@ def test_csv_keeps_ordinary_rows_unquoted():
         output_format="csv",
         show_costs=True,
     )
-    assert output == ("file,gpt-5_tokens,gpt-5_cost\na.txt,4,$0.0002\nb.txt,9,N/A")
+    assert output == (
+        "file,gpt-5_tokens,gpt-5_cost,gpt-5_approximate\n"
+        "a.txt,4,0.0002,false\n"
+        "b.txt,9,,false"
+    )
 
 
 def test_tsv_leaves_a_comma_in_the_path_alone():
     output = format_file_table({"a,b.txt": {"gpt-5": _counted(4)}}, output_format="tsv")
-    assert output == "file\tgpt-5\na,b.txt\t4"
+    assert output == "file\tgpt-5_tokens\tgpt-5_approximate\na,b.txt\t4\tfalse"
 
 
-def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
+def test_total_only_tsv_matches_the_per_file_cell_for_a_missing_cost():
     file_results = {
         "a.txt": {"mystery-model": _counted(4, model="mystery-model")},
         "b.txt": {"mystery-model": _counted(9, model="mystery-model")},
@@ -264,8 +769,8 @@ def test_total_only_tsv_matches_the_per_file_marker_for_a_missing_cost():
         show_costs=True,
         include_header=False,
     )
-    assert per_file == ["a.txt\t4\tN/A", "b.txt\t9\tN/A"]
-    assert total == "TOTAL\t13\tN/A"
+    assert per_file == ["a.txt\t4\t\tfalse", "b.txt\t9\t\tfalse"]
+    assert total == "TOTAL\t13\t\tfalse"
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -384,7 +889,11 @@ def _mixed_paths() -> dict[str, dict[str, TokenCount]]:
 
 def test_rows_keep_their_input_order_by_default():
     output = format_file_table(_three_files(), output_format="csv")
-    assert _csv_rows(output)[1:] == [["a.txt", "1"], ["b.txt", "30"], ["c.txt", "7"]]
+    assert _csv_rows(output)[1:] == [
+        ["a.txt", "1", "false"],
+        ["b.txt", "30", "false"],
+        ["c.txt", "7", "false"],
+    ]
 
 
 def test_input_sort_is_the_default():
@@ -412,18 +921,22 @@ def test_path_sort_orders_rows_by_the_path_string():
     ]
 
 
-def test_path_sort_reorders_json_keys_the_same_way():
+def test_path_sort_reorders_json_results_the_same_way():
     payload = json.loads(
         format_file_table(_mixed_paths(), output_format="json", sort_order="path")
     )
-    assert list(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
+    assert _source_names(payload) == ["a.txt", "src/a.txt", "src/b.txt"]
 
 
 def test_path_sort_reorders_tsv_the_same_way():
     output = format_file_table(
         _mixed_paths(), output_format="tsv", sort_order="path", include_header=False
     )
-    assert output.splitlines() == ["a.txt\t7", "src/a.txt\t1", "src/b.txt\t30"]
+    assert output.splitlines() == [
+        "a.txt\t7\tfalse",
+        "src/a.txt\t1\tfalse",
+        "src/b.txt\t30\tfalse",
+    ]
 
 
 def test_path_sort_reorders_the_text_table_and_leaves_the_total_last():
@@ -433,14 +946,18 @@ def test_path_sort_reorders_the_text_table_and_leaves_the_total_last():
 
 def test_count_sort_puts_the_largest_file_first():
     output = format_file_table(_three_files(), output_format="csv", sort_order="count")
-    assert _csv_rows(output)[1:] == [["b.txt", "30"], ["c.txt", "7"], ["a.txt", "1"]]
+    assert _csv_rows(output)[1:] == [
+        ["b.txt", "30", "false"],
+        ["c.txt", "7", "false"],
+        ["a.txt", "1", "false"],
+    ]
 
 
-def test_count_sort_reorders_json_keys_the_same_way():
+def test_count_sort_reorders_json_results_the_same_way():
     payload = json.loads(
         format_file_table(_three_files(), output_format="json", sort_order="count")
     )
-    assert list(payload) == ["b.txt", "c.txt", "a.txt"]
+    assert _source_names(payload) == ["b.txt", "c.txt", "a.txt"]
 
 
 def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
@@ -449,39 +966,93 @@ def test_count_sort_reorders_the_text_table_and_leaves_the_total_last():
 
 
 def test_count_sort_ranks_by_the_leftmost_model_column():
-    # Columns are ordered by model name, so the leftmost one here is claude-opus-4-5,
-    # and ranking by gpt-5 instead would put b.txt first.
+    # Columns follow the order the models were named, so the leftmost one here is
+    # claude-opus-4-5, and ranking by gpt-5 instead would put b.txt first.
     file_results = {
         "a.txt": {
-            "gpt-5": _counted(1),
             "claude-opus-4-5": _counted(50, model="claude-opus-4-5"),
+            "gpt-5": _counted(1),
         },
         "b.txt": {
-            "gpt-5": _counted(90),
             "claude-opus-4-5": _counted(2, model="claude-opus-4-5"),
+            "gpt-5": _counted(90),
         },
     }
     output = format_file_table(file_results, output_format="csv", sort_order="count")
     assert _csv_rows(output) == [
-        ["file", "claude-opus-4-5", "gpt-5"],
-        ["a.txt", "50", "1"],
-        ["b.txt", "2", "90"],
+        [
+            "file",
+            "claude-opus-4-5_tokens",
+            "claude-opus-4-5_approximate",
+            "gpt-5_tokens",
+            "gpt-5_approximate",
+        ],
+        ["a.txt", "50", "false", "1", "false"],
+        ["b.txt", "2", "false", "90", "false"],
     ]
 
 
 def test_count_sort_puts_a_file_the_leading_model_missed_last():
     file_results = {
-        "missed.txt": {"gpt-5": _counted(3)},
         "counted.txt": {
             "gpt-5": _counted(4),
             "claude-opus-4-5": _counted(1, model="claude-opus-4-5"),
         },
+        "missed.txt": {"claude-opus-4-5": _counted(3, model="claude-opus-4-5")},
     }
     output = format_file_table(file_results, output_format="csv", sort_order="count")
+    # The missed cell is empty, not N/A: the tokens column holds numbers and blanks
+    # so that a consumer can read it as one.
     assert _csv_rows(output)[1:] == [
-        ["counted.txt", "1", "4"],
-        ["missed.txt", "N/A", "3"],
+        ["counted.txt", "4", "false", "1", "false"],
+        ["missed.txt", "", "", "3", "false"],
     ]
+
+
+def test_count_sort_puts_a_file_with_no_count_below_one_that_counted_zero():
+    """A missing count is not a zero count, and an empty file is what tells them apart.
+
+    Every other pair is ordered the same either way, because a real count is positive
+    and sorts above a stand-in zero regardless. Only a file that genuinely counted zero
+    ranks level with the stand-in, and then the path decides -- which is how the file
+    with no count at all would climb above the one that has one.
+    """
+    file_results = {
+        "a_missing.txt": {"gpt-4o-mini": _counted(3, model="gpt-4o-mini")},
+        "b_empty.txt": {"gpt-5": _counted(0)},
+    }
+    output = format_file_table(
+        file_results,
+        output_format="csv",
+        models=["gpt-5", "gpt-4o-mini"],
+        sort_order="count",
+    )
+
+    assert [row[0] for row in _csv_rows(output)[1:]] == ["b_empty.txt", "a_missing.txt"]
+
+
+def test_count_sort_holds_a_stable_order_when_the_leading_model_counted_nothing():
+    """No count is not a zero count: every row lands in the after-the-numbers group.
+
+    The leading column is now a model that could fail everywhere -- it used to be
+    dropped, which handed the ranking to whichever model came next -- so every file
+    ranks the same and the path is what orders them.
+    """
+    file_results = {
+        "z.txt": {"gpt-5": _counted(5)},
+        "a.txt": {"gpt-5": _counted(90)},
+        "m.txt": {"gpt-5": _counted(1)},
+    }
+    output = format_file_table(
+        file_results,
+        output_format="csv",
+        models=["claude-opus-4-5", "gpt-5"],
+        sort_order="count",
+    )
+
+    rows = _csv_rows(output)[1:]
+    assert [row[0] for row in rows] == ["a.txt", "m.txt", "z.txt"]
+    assert {tuple(row[1:3]) for row in rows} == {("", "")}
 
 
 def test_count_sort_breaks_a_tie_on_the_path():
@@ -524,10 +1095,12 @@ def test_sort_leaves_a_total_only_run_alone():
         )
     # Not vacuous: the caveats are in the order the files arrived, which is the order
     # both other values would have changed.
-    assert json.loads(unsorted)["grok-4.5"]["caveat"] == (
-        "the xAI token API was unavailable (429); "
-        "the xAI token API was unavailable (503)"
-    )
+    assert [
+        caveat["message"] for caveat in json.loads(unsorted)["totals"][0]["caveats"]
+    ] == [
+        "the xAI token API was unavailable (429)",
+        "the xAI token API was unavailable (503)",
+    ]
 
 
 def test_an_unknown_sort_order_is_rejected():

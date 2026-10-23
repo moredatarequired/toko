@@ -3,7 +3,7 @@
 import pytest
 
 import toko
-from toko import TokenCount, count_tokens
+from toko import Caveat, CaveatKind, Retirement, TokenCount, count_tokens
 
 
 def test_count_tokens_is_reachable_from_the_package_root():
@@ -14,8 +14,27 @@ def test_count_tokens_is_reachable_from_the_package_root():
 
 
 def test_the_package_exports_only_the_names_it_advertises():
-    assert set(toko.__all__) == {"TokenCount", "__version__", "count_tokens"}
+    assert set(toko.__all__) == {
+        "Caveat",
+        "CaveatKind",
+        "Retirement",
+        "TokenCount",
+        "__version__",
+        "count_tokens",
+    }
     assert count_tokens is toko.count_tokens
+
+
+def test_the_result_types_are_reachable_from_the_package_root():
+    """A caller reading `counted.caveats` needs the types to annotate what it read."""
+    counted = toko.count_tokens("hello world", model="gpt-9-turbo")
+
+    assert [caveat.kind for caveat in counted.caveats] == [
+        CaveatKind.OPENAI_ENCODING_GUESS
+    ]
+    assert isinstance(counted.caveats[0], Caveat)
+    assert counted.retirement is None
+    assert Retirement(model="grok-3").redirects_to is None
 
 
 def test_dir_lists_the_lazy_exports_without_hiding_the_module_dunders():

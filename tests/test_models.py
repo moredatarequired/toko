@@ -21,6 +21,37 @@ from toko.result import TokenCount
         ("gpt-oss-20b", "huggingface"),
         ("openai/gpt-oss-120b", "huggingface"),
         ("claude-opus-4-5", "anthropic"),
+        # google/ is a Hub organisation, so a gemma or gemini tail under it names a repo
+        # rather than Google's own model. Nothing else in the suite dies when detection
+        # stops exempting the owner: counting either of these needs Hub credentials, and
+        # under the exemption dropped they resolve as Google's models/gemma-3-1b-it and
+        # go to the Google API instead.
+        ("google/gemma-3-1b-it", "huggingface"),
+        ("google/gemini-2.5-pro", "huggingface"),
+        ("gemma-3-1b-it", "google"),
+        # Ordering, not patterns: the "/" branch runs ahead of the trailing OpenAI name
+        # pattern, so an owner segment that merely opens like an OpenAI model leaves the
+        # name a Hub repo id. Reversed, these count as unknown OpenAI models on whatever
+        # encoding the owner's prefix resolves to -- cl100k_base for gpt-4-lab/mymodel and
+        # o200k_base for o1-labs/mymodel -- instead of being fetched from the Hub. Owners
+        # whose tail is itself a tiktoken name (gpt-4-lab/gpt2, o1-labs/text-davinci-003)
+        # cannot show this -- the first loop returns OpenAI for them before either
+        # branch is reached.
+        ("gpt-4-lab/mymodel", "huggingface"),
+        ("o1-labs/mymodel", "huggingface"),
+        # "models/" is the Google API's own path prefix, not a Hub owner: huggingface.co
+        # reserves /models, so no repo can be owned by it. Google's ListModels endpoint
+        # answers with names like these, no pattern branch above matches them, and the
+        # exemption in the "/" branch is the only thing keeping them off the Hub --
+        # dropped, they resolve as huggingface and the run fails with "not found on
+        # HuggingFace. Use the full model path (org/model-name)" for a name that already
+        # is Google's full path.
+        ("models/text-bison-001", None),
+        ("models/embedding-001", None),
+        # Not the exemption's doing, despite the shared prefix: the Gemini/Gemma branch
+        # returns first, so a models/gemini-* name is google with or without it. Only the
+        # two rows above turn on the exemption.
+        ("models/gemini-2.5-pro", "google"),
         # Mistral families named after neither mistral nor mixtral. Detection is what
         # decides whether these count at all, and each of the three used to fail here.
         ("mistral-large-2411", "mistral"),

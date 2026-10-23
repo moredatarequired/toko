@@ -1,3 +1,40 @@
+## 0.4.0 (2026-09-01)
+
+### Feat
+
+- **models**: detect the devstral, magistral and voxtral families
+- **models**: advertise an exactly-counting Mistral name
+- **cli**: count files concurrently with --jobs
+- **cli**: add --sort for the per-file row order
+- **output**: drop the borders from the text tables
+
+### Fix
+
+- **models**: declare encodings for the canonical names tiktoken knew only by prefix
+- **counter**: stop taking exact OpenAI counts from tiktoken's prefix table
+- **counter**: keep warming a tokenizer from failing a run that would have worked
+- **cache**: close cache connections and load tokenizers before the pool
+- **formatters**: source the table size the way rich does
+- **formatters**: stop TERM=dumb from shrinking tables to 80 columns
+- **cost**: match Mistral release numbers in either spelling
+- **cost**: resolve dated Mistral releases to their own price entries
+- **cost**: price the Mistral families as themselves, not as mistral-small
+- **models**: detect the codestral, ministral and pixtral families
+- **hooks**: guard just scan-secrets against an empty file list
+- **hooks**: pass files to detect-secrets so the scan actually runs
+- **cli**: build each tokenizer once, and bound and settle the concurrent run
+- **cli**: keep --sort out of a --total-only run
+- **scripts**: set NO_COLOR, the variable rich actually reads
+- **scripts**: isolate every command of an example, not just the first
+- **scripts**: keep a stale example's command and reasons apart
+- **scripts**: stop blaming toko for uv's own warnings
+
+### Refactor
+
+- **models**: keep the newly declared encodings off --list-models
+- **formatters**: let rich resolve the table size itself
+- **cli**: name the default row order input and make --sort path sort
+
 ## 0.3.0 (2026-08-12)
 
 ### BREAKING CHANGE

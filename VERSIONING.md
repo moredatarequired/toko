@@ -1,8 +1,8 @@
 # Versioning Toko
 
-Toko is pre-1.0: `pyproject.toml` carries `0.3.0` and the package ships as
+Toko is pre-1.0: `pyproject.toml` carries `0.4.0` and the package ships as
 `Development Status :: 4 - Beta`. A minor bump is allowed to break you, so pin to a
-minor — `toko~=0.3.0`, or `toko>=0.3,<0.4` — and read the changelog before moving.
+minor — `toko~=0.4.0`, or `toko>=0.4,<0.5` — and read the changelog before moving.
 
 ## How the number moves today
 

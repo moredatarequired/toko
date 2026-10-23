@@ -171,7 +171,36 @@ def main(
         typer.Option("--exclude", "-e", help="Glob patterns to exclude"),
     ] = None,
     no_ignore: Annotated[
-        bool, typer.Option("--no-ignore", help="Don't respect .gitignore files")
+        bool,
+        typer.Option(
+            "--no-ignore",
+            help=(
+                "Don't respect .gitignore, .git/info/exclude, core.excludesFile, "
+                ".ignore or .rgignore"
+            ),
+        ),
+    ] = False,
+    no_ignore_dot: Annotated[
+        bool,
+        typer.Option("--no-ignore-dot", help="Don't respect .ignore/.rgignore files"),
+    ] = False,
+    hidden: Annotated[
+        bool,
+        typer.Option(
+            "--hidden",
+            help=(
+                "Count hidden files and directories too, including everything "
+                "under .git"
+            ),
+        ),
+    ] = False,
+    follow: Annotated[
+        bool,
+        typer.Option(
+            "--follow",
+            "-L",
+            help="Follow symlinks while walking directories (loops are reported)",
+        ),
     ] = False,
     no_recursive: Annotated[
         bool, typer.Option("--no-recursive", help="Don't recurse into directories")
@@ -242,6 +271,9 @@ def main(
         cost,
         header,
         list_models,
+        no_ignore_dot=no_ignore_dot,
+        hidden=hidden,
+        follow=follow,
         include_retired=include_retired,
         sort_order=sort_order,
         jobs=jobs,
@@ -275,6 +307,19 @@ class InputSelection:
     text: str | None
     files: list[tuple[str, str]]
     had_failures: bool = False
+
+
+def _read_stdin() -> str | None:
+    """Read piped input as UTF-8 whatever the locale says, or None if it is binary.
+
+    sys.stdin decodes with the locale's encoding and surrogateescape, so under a
+    non-UTF-8 locale a piped UTF-8 file arrives as lone surrogates that the tokenizers
+    then refuse to encode -- the run fails on input it should have counted.
+    """
+    try:
+        return sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _load_runtime_config() -> Config:
@@ -322,6 +367,9 @@ def _collect_inputs(
     config: Config,
     *,
     no_ignore: bool,
+    no_ignore_dot: bool,
+    hidden: bool,
+    follow: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> InputSelection:
@@ -333,6 +381,9 @@ def _collect_inputs(
             paths,
             config,
             no_ignore=no_ignore,
+            no_ignore_dot=no_ignore_dot,
+            hidden=hidden,
+            follow=follow,
             no_recursive=no_recursive,
             exclude_patterns=exclude_patterns,
         )
@@ -344,8 +395,14 @@ def _collect_inputs(
         return InputSelection(text=None, files=files, had_failures=had_failures)
 
     if not is_stdin_empty():
-        stdin_text = sys.stdin.read()
-        return InputSelection(text=stdin_text, files=[])
+        text = _read_stdin()
+        if text is None:
+            # The same UnicodeDecodeError that drops a binary file from the table.
+            # Replacing the undecodable bytes instead counted the replacements and
+            # printed a confident number for input toko had not read.
+            typer.echo("Warning: Skipping binary file <stdin>", err=True)
+            raise typer.Exit(1)
+        return InputSelection(text=text, files=[])
 
     typer.echo(
         "Error: No input provided. Use --text, provide paths, or pipe to stdin.",
@@ -359,6 +416,9 @@ def _collect_files_from_paths(
     config: Config,
     *,
     no_ignore: bool,
+    no_ignore_dot: bool,
+    hidden: bool,
+    follow: bool,
     no_recursive: bool,
     exclude_patterns: list[str] | None,
 ) -> tuple[list[tuple[str, str]], bool]:
@@ -375,6 +435,9 @@ def _collect_files_from_paths(
                 collected,
                 recursive=not no_recursive,
                 respect_gitignore=should_respect_gitignore,
+                respect_dot_ignore=not no_ignore_dot,
+                include_hidden=hidden,
+                follow_symlinks=follow,
                 exclude_patterns=exclude_patterns,
             )
         had_failures = had_failures or not ok
@@ -383,11 +446,10 @@ def _collect_files_from_paths(
 
 
 def _collect_from_url(path_str: str, collected: list[tuple[str, str]]) -> bool:
+    # No UnicodeDecodeError arm: httpx decodes the body with errors="replace", so
+    # fetch_url returns replacement characters rather than raising on bad bytes.
     try:
         content = fetch_url(path_str)
-    except UnicodeDecodeError:
-        typer.echo(f"Error: URL content is not valid UTF-8: {path_str}", err=True)
-        return False
     except Exception as e:
         typer.echo(f"Error fetching URL {path_str}: {e}", err=True)
         return False
@@ -402,20 +464,33 @@ def _collect_from_filesystem(
     *,
     recursive: bool,
     respect_gitignore: bool,
+    respect_dot_ignore: bool,
+    include_hidden: bool,
+    follow_symlinks: bool,
     exclude_patterns: list[str] | None,
 ) -> bool:
+    # Collected rather than printed as they happen, so that the run's counts are not
+    # interleaved with them; find_files reports instead of raising so one bad link
+    # cannot cost the caller every other count in the tree.
+    problems: list[str] = []
     try:
         files = find_files(
             path,
             recursive=recursive,
             respect_gitignore=respect_gitignore,
+            respect_dot_ignore=respect_dot_ignore,
+            include_hidden=include_hidden,
+            follow_symlinks=follow_symlinks,
             exclude_patterns=exclude_patterns,
+            on_error=problems.append,
         )
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
         return False
 
-    ok = True
+    for problem in problems:
+        typer.echo(f"Error: {problem}", err=True)
+    ok = not problems
     for file_path in files:
         try:
             content = read_file(file_path)
@@ -648,6 +723,9 @@ def _do_count(
     header: bool | None,
     list_models: bool,
     *,
+    no_ignore_dot: bool = False,
+    hidden: bool = False,
+    follow: bool = False,
     include_retired: bool = False,
     sort_order: SortOrder = SortOrder.INPUT,
     jobs: int = DEFAULT_JOBS,
@@ -665,6 +743,9 @@ def _do_count(
         text,
         config,
         no_ignore=no_ignore,
+        no_ignore_dot=no_ignore_dot,
+        hidden=hidden,
+        follow=follow,
         no_recursive=no_recursive,
         exclude_patterns=merged_exclude,
     )

@@ -616,8 +616,8 @@ def _load_openrouter_entries() -> tuple[dict[str, object], ...]:
     except FileNotFoundError:
         return ()
     try:
-        payload = json.loads(resource.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        payload = json.loads(resource.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         return ()
     return tuple(entry for entry in payload if isinstance(entry, dict))
 

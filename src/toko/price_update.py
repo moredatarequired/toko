@@ -48,7 +48,7 @@ def should_update_prices(max_age_seconds: int = 86400) -> bool:
         return True
 
     try:
-        last_update = float(timestamp_file.read_text().strip())
+        last_update = float(timestamp_file.read_text(encoding="utf-8").strip())
         age = time.time() - last_update
     except (ValueError, OSError):
         # If we can't read the timestamp, assume we should update

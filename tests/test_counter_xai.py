@@ -1,5 +1,7 @@
 """Tests for xAI token counting strategy."""
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -33,13 +35,18 @@ def _install_stub_tokenizer(monkeypatch):
     )
 
 
+def _stub_api(monkeypatch, post):
+    """Answer xAI's tokenize call without letting a request off the machine."""
+    monkeypatch.setattr(counter, "shared_client", lambda: SimpleNamespace(post=post))
+
+
 def test_xai_prefers_api(monkeypatch, capsys):
     monkeypatch.setenv("XAI_API_KEY", "test-key")
 
     def fake_post(*_args, **_kwargs):
         return DummyResponse({"token_count": 7})
 
-    monkeypatch.setattr(counter.httpx, "post", fake_post)
+    _stub_api(monkeypatch, fake_post)
 
     # Ensure fallback is not invoked
     monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
@@ -51,17 +58,22 @@ def test_xai_prefers_api(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_xai_falls_back_to_transformers(monkeypatch):
+def test_xai_falls_back_to_transformers(monkeypatch, capsys):
     monkeypatch.setenv("XAI_API_KEY", "test-key")
 
     def fake_post(*_args, **_kwargs):
         raise httpx.HTTPError("boom")
 
-    monkeypatch.setattr(counter.httpx, "post", fake_post)
+    _stub_api(monkeypatch, fake_post)
     _install_stub_tokenizer(monkeypatch)
 
     counted = counter.count_tokens("hi", "grok-4.5", use_cache=False)
     assert counted.count == len("hi")
+    # A request that escaped to the real endpoint would fall back just the same, on a
+    # connection error or a 404; only the stub reports the error it was told to raise.
+    assert (
+        "HTTPError contacting https://api.x.ai/v1/tokenize" in capsys.readouterr().err
+    )
 
 
 def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
@@ -70,7 +82,7 @@ def test_xai_api_failure_warns_that_count_is_approximate(monkeypatch, capsys):
     def fake_post(*_args, **_kwargs):
         raise httpx.HTTPError("boom")
 
-    monkeypatch.setattr(counter.httpx, "post", fake_post)
+    _stub_api(monkeypatch, fake_post)
     _install_stub_tokenizer(monkeypatch)
 
     counted = counter.count_tokens("hi", "grok-4.5", use_cache=False)
@@ -144,9 +156,7 @@ class TestRetirementWarningsThroughCountTokens:
         # Only exact counts are cached, so the API has to answer here; the
         # transformers fallback the class installs is deliberately bypassed.
         monkeypatch.setenv("XAI_API_KEY", "test-key")
-        monkeypatch.setattr(
-            counter.httpx, "post", lambda *_a, **_k: DummyResponse({"token_count": 2})
-        )
+        _stub_api(monkeypatch, lambda *_a, **_k: DummyResponse({"token_count": 2}))
 
         assert counter.count_tokens("hi", "grok-3").count == 2
         assert "retired" in capsys.readouterr().err
@@ -181,7 +191,7 @@ def test_xai_api_count_is_cached(monkeypatch):
     def fake_post(*_args, **_kwargs):
         return DummyResponse({"token_count": 7})
 
-    monkeypatch.setattr(counter.httpx, "post", fake_post)
+    _stub_api(monkeypatch, fake_post)
 
     # Ensure fallback is not invoked
     monkeypatch.setattr(counter, "_count_xai_via_transformers", lambda _text: 0)
